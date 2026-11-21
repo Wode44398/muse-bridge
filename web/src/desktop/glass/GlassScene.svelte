@@ -203,20 +203,31 @@
     loadSrc(src);
 
     let cssW = 0, cssH = 0, dirty = true, lastHash = '';
+    let raf = 0, lastTs = 0;
+    function startLoop() {
+      if (!raf && cssW > 0 && cssH > 0) raf = requestAnimationFrame(frame);
+    }
+    function stopLoop() {
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    }
     const ro = new ResizeObserver(() => {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       cssW = canvas.clientWidth; cssH = canvas.clientHeight;
+      // 主页隐藏（display:none）时尺寸为 0，停掉 RAF 避免在后台分页每帧空唤醒主线程
+      if (!cssW || !cssH) { stopLoop(); return; }
       canvas.width = Math.max(1, Math.round(cssW * dpr));
       canvas.height = Math.max(1, Math.round(cssH * dpr));
       // 改 width/height 会当场清空画布；等下一帧 RAF 再画，拖窗口时每次尺寸变化都闪一帧黑 → 同步补画
       dirty = true; render();
+      startLoop();
     });
     ro.observe(canvas);
 
-    let raf = 0, lastTs = 0;
     // 窗口失焦 / 不可见超过 5 秒降帧（attention.js）：动态源每帧都要重传纹理，挂在后台也满帧跑 GPU 不值；
     // 改尺寸走 ResizeObserver 直接 render()，不受这里限速
     function frame(ts) {
+      raf = 0;
+      if (!cssW || !cssH) return;
       raf = requestAnimationFrame(frame);
       const lv = frameLevel();
       if (lv === 'off' || (lv === 'low' && ts - lastTs < LOW_FRAME_MS)) return;
@@ -270,13 +281,14 @@
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
     }
-    raf = requestAnimationFrame(frame);
+    cssW = canvas.clientWidth; cssH = canvas.clientHeight;
+    startLoop();
 
     return () => {
       disposed = true;   // 下面主动 loseContext 也会派发 webglcontextlost，别当成崩溃
       loadSrc = null;
       canvas.removeEventListener('webglcontextlost', onLost);
-      cancelAnimationFrame(raf);
+      stopLoop();
       ro.disconnect();
       gl.getExtension('WEBGL_lose_context')?.loseContext();
     };

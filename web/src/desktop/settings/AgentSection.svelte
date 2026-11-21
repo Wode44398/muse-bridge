@@ -12,6 +12,7 @@
   import DSelect from '../kit/DSelect.svelte';
   import DSwitch from '../kit/DSwitch.svelte';
   import DimensioSection from './DimensioSection.svelte';
+  import { loadPage } from '../../modules/pages.js';
   import { S as CS, changed, desc as csDesc, label as csLabel, options as csOptions, resetVal, setVal, val, valueLabel, visible } from '../../lib/claudeSettingsView.js';
   import { accLabel, activateAccount, agentById, ags, apiKeyNote, hhmm, loadUsage, moveAccount, planPill, poolResetAt, poolResetIn, resetsLeft, routeLogSub, routeLogTitle, routeStrategies, routerStrategy, runningOn, setRouter, smartRouting, usageTone, whyText } from '../../lib/agentSettings.svelte.js';
   import { cs } from '../../lib/claudeSettings.svelte.js';
@@ -296,6 +297,14 @@
 {#if id === 'dimensio'}
   <!-- 管理员：开关关着 / 这台机器跑不起来时不去打 harness（原因在头图下）；成员能看到这一分区就是有权限 -->
   <DimensioSection fl={D.fl} enabled={!a || (a.switch && a.runnable)} openExt={D.openExtType} openDispatch={() => D.navigate('ag-dimensio#dispatch')} />
+{/if}
+
+{#if id === 'agy' && a}
+  {#await loadPage.agyDeskSettings() then m}
+    <m.default fl={D.fl} enabled={Boolean(a.switch && a.runnable)} />
+  {:catch}
+    <p class="note">{t('Antigravity 设置没加载出来：这台服务器可能没装 Antigravity 扩展。')}</p>
+  {/await}
 {/if}
 
 {#if !a && id !== 'claude' && id !== 'dimensio'}<p class="note">{t('只有管理员能改这里')}</p>{/if}

@@ -22,6 +22,7 @@
   import { cubicOut } from 'svelte/easing';
   import { api, setToken } from '../lib/api.js';
   import { ui, me, applyMe } from '../lib/state.svelte.js';
+  import { afterSignIn } from '../lib/account.js';
   import { pushBackLayer } from '../lib/nav.js';
   import { parsePairPayload } from '../lib/pair.js';
   import { parseConnectPayload, redeemConnect, applyConnect, connectErrorText } from '../lib/connectPair.js';
@@ -554,6 +555,7 @@
       // 手机浏览器上的本站：会话令牌当 Bearer（Set-Cookie 也已种上），刷新身份即可
       setToken(r.res.token);
       try { applyMe(await api.auth()); } catch { applyMe({ kind: r.res.kind, user: r.res.user || null }); }
+      afterSignIn();   // 桌面客户端按这次登录的账号登记设备
       ui.loginOpen = false;
       phase = 'connected'; haptic('done');
       setTimeout(close, 1400);

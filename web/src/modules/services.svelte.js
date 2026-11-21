@@ -11,7 +11,9 @@ import { agentOn } from '../lib/state.svelte.js';
 
 // 2026-11-04 起 Gemini 对话下线，原来唯一的一项（gemini → modules/vertex/api.js）随之删除；Media Studio 的页面走
 // pages.js 的 loadPage.studio，核心给它的东西经 lib/state.svelte.js 的 studioInbox 传，不需要控制器。机制留着给以后的扩展。
-const LOADERS = {};
+const LOADERS = {
+  agy: () => import('../lib/agy/file-target.js'),
+};
 
 export const mods = $state({});
 

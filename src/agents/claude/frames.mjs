@@ -24,6 +24,7 @@ import { emitTaskEvent } from './task-events.mjs';
 import { announceStart, recordPrefs, recordOrigin } from './turn-ledger.mjs';
 import { notePermMode } from './permission.mjs';
 import { onBgTasksChanged } from './bg-hold.mjs';
+import { markPluginOrigin } from './plugin-origin.mjs';
 
 // 跨会话消息插进了正在跑的这一轮（CLI 在下一个工具回合读到它，流里只有 command_lifecycle）：等 transcript 落盘后
 // 补一个插话段，直播当场看得见（不补的话要刷新才出现）。不是跨会话消息（后台任务通知之类）就什么都不做。
@@ -114,6 +115,7 @@ function onInit(run, msg) {
   recordPrefs(run);     // 新会话此刻才有 id——把本轮选择器记忆落上
   recordOrigin(run);    // 同上：这条消息的发送端
   markBridgeSession(msg.session_id); // this conversation was started from the phone
+  markPluginOrigin(run, msg.session_id);
   // 官方 Desktop 侧栏索引：会话 id 一定下来就登记（desktop-mirror.mjs），bridge 会话天生带 Desktop 索引
   if (!snap && msg.session_id) {
     run.gen.mirror = {

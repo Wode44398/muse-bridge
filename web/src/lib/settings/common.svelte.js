@@ -33,9 +33,11 @@ export function createSrvAdminProbe() {
 // 成员探的是自己的技能接口（/api/my-extensions：只有技能，见 ext/Customize 的成员模式）。
 export function createExtProbe() {
   let extOk = $state(false);
+  // 探针落定（成功或失败）：冷开直达「扩展」（插件详情）时探针还在路上，两套外壳都要等它落定、确实没过才把人撤出这一分区
+  let extSettled = $state(false);
   const extMember = me.kind === 'user';
-  api.get(extMember ? '/api/my-extensions' : '/api/extensions').then(() => { extOk = true; }).catch(() => {});
-  return { get ok() { return extOk; }, member: extMember };
+  api.get(extMember ? '/api/my-extensions' : '/api/extensions').then(() => { extOk = true; }).catch(() => {}).finally(() => { extSettled = true; });
+  return { get ok() { return extOk; }, get settled() { return extSettled; }, member: extMember };
 }
 
 // —— 模型中心那一页 / 分区出不出现：hub.ok（管理员的总览）|| cp.ok（能自定义 API 的成员自己的 Claude 服务），两样都是开设置才拉。

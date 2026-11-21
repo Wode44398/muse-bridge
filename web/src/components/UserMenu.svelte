@@ -3,6 +3,7 @@
   // 退出」；官方实测 272px 宽、圆角 12、内边距 4、行高 32 / 圆角 8 / 图标 20px、1px 描边 + 双层投影）。
   // 单 agent 模式的条目：设置、关于与更新（有新版时带标）、工作空间、扫一扫（手机）；没登录时多一条「登录」。
   // 常规模式（传了 onhome）：主页、设置、工作空间、扫一扫。
+  // 登录了且装了插件应用：扫一扫之后再一组应用（图标 + 名字），两种模式都有——单页模式没有主页，这是进应用的地方。
   // 账户不单列：从「设置」进（顶部账户卡）；退出登录 / 切换账号也都在设置 › 账户（要先确认，免误触）。
   // 由 ClaudePage 在页面级只挂一份（侧栏在中屏会同时渲染常驻列与隐藏抽屉两份，菜单不能跟着各挂一份）。
   import { onMount } from 'svelte';
@@ -12,6 +13,8 @@
   import { pushBackLayer } from '../lib/nav.js';
   import { isOffline } from '../lib/server.js';
   import { t } from '../lib/i18n.js';
+  import { pluginUi, uiIcon } from '../lib/pluginUi.svelte.js';
+  import { openApp, appIconUrl, appKey } from '../lib/pluginApps.svelte.js';
 
   // anchor：账户卡按钮的 DOMRect；onclose：点空白 / Esc / 返回键；onpick：选了某一项（侧栏抽屉跟着收起）；
   // onhome：常规模式回主页（单 agent 模式不传——没有主页）
@@ -19,6 +22,7 @@
 
   const canScan = (() => { try { return isOffline() || matchMedia('(pointer: coarse)').matches; } catch { return false; } })();
   const roleLabel = $derived(me.kind === 'admin' ? t('管理员') : me.kind === 'user' ? (me.tier === 'pro' || me.tier === 'full' ? t('完全信任用户') : t('普通用户')) : t('未登录'));
+  const apps = $derived(me.kind === 'none' ? [] : pluginUi.apps);
   const shownName = $derived(me.user || (me.kind === 'admin' ? 'admin' : ''));
 
   const W = Math.min(272, window.innerWidth - 16);
@@ -66,6 +70,19 @@
   {#if canScan && me.kind !== 'none'}
     <button class="um-i" role="menuitem" onclick={() => pick(() => { ui.pairScan = { mode: 'scan' }; })}><span class="ic svg" aria-hidden="true">{@html SCAN}</span><span class="um-l">{t('扫一扫登录网页版')}</span></button>
   {/if}
+  {#if apps.length}
+    <div class="um-sep" role="separator"></div>
+    <div class="um-apps">
+      {#each apps as a (a.key || appKey(a))}
+        {@const url = appIconUrl(a, ui.theme === 'light')}
+        <button class="um-i" role="menuitem" onclick={() => pick(() => openApp(a))}>
+          {#if url}<span class="ic img" aria-hidden="true"><img src={url} alt="" draggable="false" /></span>
+          {:else}<span class="ic svg" aria-hidden="true">{@html uiIcon(a.icon?.name)}</span>{/if}
+          <span class="um-l">{a.title || a.id}</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
   {#if me.kind === 'none'}
     <div class="um-sep" role="separator"></div>
     <button class="um-i" role="menuitem" onclick={() => pick(login)}><span class="ic" aria-hidden="true">&#xe105;</span><span class="um-l">{t('登录')}</span></button>
@@ -85,6 +102,9 @@
   .ic { width: 20px; flex: none; font-family: var(--icons); font-size: 20px; font-weight: 433; line-height: 1; color: var(--text);
     display: inline-flex; align-items: center; justify-content: center; }
   .ic.svg :global(svg) { width: 18px; height: 18px; }
+  .ic.img img { width: 18px; height: 18px; object-fit: contain; }
+  /* 应用多了别把菜单顶出屏幕：这一组自己滚 */
+  .um-apps { max-height: min(36vh, 264px); overflow-y: auto; scrollbar-width: thin; }
   .um-l { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .badge { flex: none; font-size: 11.5px; line-height: 18px; padding: 0 7px; border-radius: 999px; color: #fff; background: var(--st-accent); }
   .um-sep { height: 1px; margin: 4px 6px; background: var(--st-hair); }

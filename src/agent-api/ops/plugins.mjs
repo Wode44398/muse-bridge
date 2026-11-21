@@ -7,7 +7,8 @@ import { kernel } from '../../plugins/state.mjs';
 import { linkLocal, uninstallPlugin, reloadPlugin, PluginError } from '../../plugins/discover.mjs';
 import { installFromGithub, checkUpdate } from '../../plugins/github.mjs';
 import { marketOverview, installFromMarket, rollbackInstalled, restoreBuiltinVersion } from '../../plugins/market.mjs';
-import { scaffoldPlugin, EXAMPLES, ScaffoldError } from '../../plugins/scaffold.mjs';
+import { scaffoldPlugin, EXAMPLES, TEMPLATES, APP_TEMPLATE_IDS, ScaffoldError } from '../../plugins/scaffold.mjs';
+import { localOrigin } from '../local-origin.mjs';
 import path from 'node:path';
 import { pluginView, pluginsOverview, riskyGrants } from '../../routes/plugins.mjs';
 import { panelView, refreshStatuses, runAction } from '../../plugins/panel.mjs';
@@ -129,8 +130,8 @@ defineOp({
 
 defineOp({
   name: 'plugins.link', title: '登记一个本机插件目录',
-  desc: '把服务器上的一个插件目录（含 bridge-plugin.json 与入口 index.mjs）登记成插件并按清单启用，代码直接从那个目录加载——'
-    + '改完代码调 plugins.reload 即生效，不用打包。给用户写插件时：先在工作空间里写好目录，再用它登记。',
+  desc: '把服务器上的一个插件目录（含 bridge-plugin.json；入口 index.mjs 可选——只有页面的插件可以没有，但清单里要声明页面：ui.apps / ui.panel / ui.settings）'
+    + '登记成插件并按清单启用，代码直接从那个目录加载——改完代码调 plugins.reload 即生效，不用打包。给用户写插件时：先在工作空间里写好目录，再用它登记。',
   access: 'write', need: ['server.manage'],
   params: { path: { type: 'string', required: true, desc: '插件目录的绝对路径（服务器上的）' } },
   handler: (ctx, args) => wrap(async () => {
@@ -222,12 +223,15 @@ defineOp({
   desc: '在服务器上建好插件目录并（缺省）登记启用——给用户写插件的第一步。缺省目录 = 你工作空间下的 plugins-dev/<id>/（已存在且非空就拒）。'
     + 'from 不填：最小骨架（清单 + 接口 + Claude 工具 + agent 操作 + 状态块；panel=true 再带一个控制面板页面）；'
     + 'from 填示例名：把示例整个拷过来当起点（id 换成新的）：' + Object.entries(EXAMPLES).map(([k, v]) => `${k}（${v}）`).join('；') + '。'
-    + '建好后照手册 plugins 章改 bridge-plugin.json 与 index.mjs，改完调 plugins.reload。插件给 Claude 的工具要下一条消息才出现。',
+    + '要做「应用」（主页图标 + 全屏分页）用 template（与 from 互斥，应用 id 固定为 main、标题用 name）：' + Object.entries(TEMPLATES).map(([k, v]) => `${k}（${v}）`).join('；') + '。'
+    + '建好后照手册 plugins 章改：有服务端代码的改 bridge-plugin.json 与入口 index.mjs；纯页面插件（如从 hello-app 起步的）没有 index.mjs，改 bridge-plugin.json 与 web/ 下的页面和图标。'
+    + '改完调 plugins.reload；应用做好后用 ui.open 的 app 参数（<插件 id>:main）带用户去看。插件给 Claude 的工具要下一条消息才出现。',
   access: 'write', need: ['server.manage'],
   params: {
     id: { type: 'string', required: true, desc: '插件 id：小写字母开头，只用小写字母、数字、连字符（≤48 字）' },
     from: { type: 'string', enum: Object.keys(EXAMPLES), desc: '可选：拿哪个示例当起点' },
-    panel: { type: 'boolean', desc: '可选：最小骨架再带一个控制面板页面（from 不填时有效）' },
+    template: { type: 'string', enum: [...APP_TEMPLATE_IDS], desc: '可选：骨架模板，缺省 basic（最小骨架）；app-page 页面应用 / app-view 声明式应用 / app-chat 和 Claude 对话的应用。与 from 互斥' },
+    panel: { type: 'boolean', desc: '可选：最小骨架再带一个控制面板页面（只给 basic 骨架）' },
     name: { type: 'string', desc: '可选：显示名' },
     description: { type: 'string', desc: '可选：一句话说明' },
     dir: { type: 'string', desc: '可选：插件目录的绝对路径（服务器上的），缺省 <工作空间>/plugins-dev/<id>' },
@@ -237,12 +241,21 @@ defineOp({
   handler: (ctx, args) => wrap(async () => {
     const dir = args.dir ? String(args.dir) : path.join(ctx.cwd, 'plugins-dev', String(args.id || ''));
     let r;
-    try { r = scaffoldPlugin({ id: args.id, dir, panel: !!args.panel, from: args.from || null, name: args.name || '', description: args.description || '' }); }
+    const tpl = args.template && args.template !== 'basic' ? String(args.template) : null;
+    try { r = scaffoldPlugin({ id: args.id, dir, panel: !!args.panel, from: args.from || null, template: tpl, name: args.name || '', description: args.description || '' }); }
     catch (e) { if (e instanceof ScaffoldError) throw new OpError('bad_args', e.message); throw e; }
-    if (args.link === false) return { dir: r.dir, files: r.files, linked: false, next: '调 plugins.link {path} 登记' };
+    // 应用模板：告诉调用方应用键、本机地址和下一步（改代码 → plugins.reload → 自测 → ui.open 的 app 参数带用户去看）。
+    // 地址直接放进返回值：只读「做一个应用」这一路的 agent 不会再去调 whoami，没有它就只能扫本机端口去猜是哪个 bridge
+    const app = tpl ? String(args.id) + ':main' : null;
+    const local = localOrigin();
+    const after = tpl
+      ? (tpl === 'app-view' ? '改 index.mjs 里的 view / actions' : '改 web/app.html') + ' → 调 plugins.reload → 自测：在内置浏览器里打开 ' + local
+        + '/（这就是本机这台 bridge，别去扫端口找），主页上点这个应用的图标，先 find / read_page 拿 ref 再点 → 用 ui.open 的 app 参数（' + app + '）带用户去看'
+      : '改代码 → 调 plugins.reload → 用 curl 或内置浏览器调 ' + local + ' 上的接口自测';
+    if (args.link === false) return { dir: r.dir, files: r.files, linked: false, local, ...(app ? { app } : {}), next: '调 plugins.link {path} 登记；之后' + after };
     const p = await linkLocal(kernel, r.dir);
     changed();
-    return { dir: r.dir, files: r.files, linked: true, plugin: pluginView(p) };
+    return { dir: r.dir, files: r.files, linked: true, plugin: pluginView(p), local, ...(app ? { app } : {}), next: after };
   }),
 });
 

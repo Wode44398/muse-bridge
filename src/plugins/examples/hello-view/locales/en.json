@@ -1,0 +1,9 @@
+{
+  "name": "Ledger (declarative app example)",
+  "description": "How to write a declarative app: no page to write. index.mjs registers view and actions with ctx.ui.app, and bridge draws the screen from blocks (stats, chart, tabs, list, form, buttons) the same way on the web and in the mobile app. It shows a tiny expense log, one per user, saved with ctx.store. Copy this folder and rename it to start your own app.",
+  "ui": {
+    "app": {
+      "ledger": { "title": "Ledger" }
+    }
+  }
+}

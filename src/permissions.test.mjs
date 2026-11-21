@@ -163,6 +163,7 @@ function harness(ctx, extra = {}) {
     limitReplay: extra.limitReplay === undefined ? null : extra.limitReplay, policy: extra.policy,
     turnOrigin: extra.turnOrigin ? () => extra.turnOrigin : undefined,
     unattended: extra.unattended ? () => true : undefined,
+    planFrom: extra.planFrom ? () => extra.planFrom : undefined,
   });
   return { gate, events, interrupted: () => interrupted, activity: () => activity };
 }
@@ -369,6 +370,51 @@ test('沙箱身份：始终允许的范围强制 session；没有「允许并切
   assert.equal(req.always.persistent, false);
   answer(req.qid, { decision: 'always' });
   assert.equal((await p).updatedPermissions[0].destination, 'session');
+});
+
+test('绕过权限：一张卡都不弹——CLI 还来问的直接放行，待生效的也算，自己进的计划直接批准；沙箱围栏与用户选的计划模式照旧', async () => {
+  S._resetClaudeSettingsCache();
+  S.setClaudeSettings(admin, { allowBypass: true });
+  Q.sessionQuestions.clear();
+  // 进程就在绕过权限里：受保护路径 / ask 规则来问 → 直接放行，不发卡、不亮待回答点
+  const a = harness(admin, { sid: 'sess-bp', mode: 'bypassPermissions' });
+  const r1 = await a.gate.canUseTool('Edit', { file_path: '.claude/settings.json', old_string: 'a', new_string: 'b' }, optsFor({ decisionReasonType: 'safetyCheck', blockedPath: '.claude/settings.json' }));
+  assert.equal(r1.behavior, 'allow');
+  assert.equal(a.events.length, 0);
+  assert.equal(a.gate.pending(), 0);
+  assert.ok(!Q.sessionQuestions.has('sess-bp'));
+  // 计划卡同样不挂
+  const r2 = await a.gate.canUseTool('ExitPlanMode', { plan: 'x' }, optsFor({ toolUseID: 'toolu_bp1' }));
+  assert.equal(r2.behavior, 'allow');
+  assert.deepEqual(r2.updatedPermissions, [{ type: 'setMode', mode: 'bypassPermissions', destination: 'session' }]);
+  assert.ok(!a.events.some((e) => e.type === 'plan_request'));
+  // 干活时才选的（会话记忆 = bypass，进程还是 default）：也放行
+  setChatPrefsPermissionMode(admin, 'sess-bp2', 'bypassPermissions');
+  const b = harness(admin, { sid: 'sess-bp2', mode: 'default' });
+  assert.equal((await b.gate.canUseTool('Bash', { command: 'rm -rf build' }, optsFor())).behavior, 'allow');
+  assert.equal(b.events.length, 0);
+  // Claude 自己从绕过权限进的计划模式：出计划直接批准回绕过权限；计划模式里的写请求仍不放
+  const c = harness(admin, { sid: 'sess-bp3', mode: 'plan', planFrom: 'bypassPermissions' });
+  const r3 = await c.gate.canUseTool('ExitPlanMode', { plan: 'y' }, optsFor({ toolUseID: 'toolu_bp3' }));
+  assert.equal(r3.behavior, 'allow');
+  assert.equal(r3.updatedPermissions[0].mode, 'bypassPermissions');
+  assert.equal(chatPrefsFor(admin, 'sess-bp3').permissionMode, 'bypassPermissions');
+  // 用户自己选的计划模式（没有来路）：照旧出计划卡
+  const d = harness(admin, { sid: 'sess-bp4', mode: 'plan' });
+  const p4 = d.gate.canUseTool('ExitPlanMode', { plan: 'z' }, optsFor({ toolUseID: 'toolu_bp4' }));
+  await flush();
+  assert.equal(d.events.at(-1).type, 'plan_request');
+  answer('toolu_bp4', { decision: 'reject' });
+  await p4;
+  // 沙箱身份没有绕过权限：会话记忆里写着也不放行
+  setChatPrefsPermissionMode(user, 'sess-bp5', 'bypassPermissions');
+  const e = harness(user, { sid: 'sess-bp5', mode: 'bypassPermissions' });
+  const p5 = e.gate.canUseTool('Bash', { command: 'ls' }, optsFor());
+  await flush();
+  assert.equal(e.events.at(-1).type, 'perm_request');
+  answer(e.events.at(-1).qid, { decision: 'once' });
+  await p5;
+  Q.sessionQuestions.clear();
 });
 
 test('计划审批：可选目标模式、批准 = allow + session setMode、修改 = deny 不中断、拒绝 = 中断、子 agent 直接放行', async () => {

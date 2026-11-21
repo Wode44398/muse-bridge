@@ -43,6 +43,9 @@ export function termTouch(node, opts) {
     const t = term();
     const el = t?.element;
     if (!el || !n) return;
+    // 普通屏、程序没开鼠标上报：就是翻滚回，直接滚——快速甩动时一帧要滚好几十行，逐行派合成滚轮
+    // 每一下都要走一遍 xterm 的事件处理，手机上明显掉帧
+    if (t.buffer.active.type === 'normal' && (t.modes?.mouseTrackingMode || 'none') === 'none') { t.scrollLines(n); return; }
     const scr = el.querySelector('.xterm-screen') || el;
     const r = scr.getBoundingClientRect();
     const h = rowH();

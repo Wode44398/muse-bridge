@@ -168,6 +168,20 @@
       {@render ico('appearance')}
       <span class="r-main"><span class="r-tx">{t('外观')}</span><span class="r-d">{prefs.followSys ? t('自动') : S.dark ? t('深色') : t('明亮')}</span>{@render chev()}</span>
     </button>
+    <!-- 主页上摆哪些入口、什么顺序（只存这台设备）。单页模式没有主页，不给这一行 -->
+    {#if !S.single}
+      <button class="r" class:on={nav.cur === 'home'} type="button" onclick={() => nav.go('home')}>
+        {@render ico('home')}
+        <span class="r-main"><span class="r-tx">{t('主页')}</span>{@render chev()}</span>
+      </button>
+    {/if}
+    <!-- 插件页面拿到的权限（跟人走：主机、成员各管各的；单页模式也有） -->
+    {#if me.kind !== 'none'}
+      <button class="r" class:on={nav.cur === 'page-grants'} type="button" onclick={() => nav.go('page-grants')}>
+        {@render ico('page-grants')}
+        <span class="r-main"><span class="r-tx">{t('页面权限')}</span>{@render chev()}</span>
+      </button>
+    {/if}
     {#if !S.single && pluginOn('wallpapers')}
       <button class="r" class:on={nav.cur === 'wallpaper'} type="button" onclick={() => nav.go('wallpaper')}>
         {@render ico('wallpaper')}

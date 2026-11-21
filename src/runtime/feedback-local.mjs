@@ -41,7 +41,7 @@ export function saveLocalFeedback({ id, ctx, text = '', screen = '', attachments
   const fm = [
     '---', 'type: feedback', `date: ${date}`, `user: ${yamlStr(user)}`, `kind: ${id.kind}`, `tier: ${tier}`,
     `app: v${APP_VERSION_NAME} (code ${APP_VERSION_CODE})`, `screen: ${yamlStr(screen || '-')}`,
-    ...(via === 'claude' || via === 'dimensio' ? [`via: ${via}`, `title: ${yamlStr(title || '-')}`] : []),
+    ...(via === 'claude' || via === 'dimensio' || via === 'agy' ? [`via: ${via}`, `title: ${yamlStr(title || '-')}`] : []),
     'status: new', '---', '', '',
   ].join('\n');
   let md = fm + (text || '');

@@ -14,6 +14,7 @@
 //             type ∈ string | integer | number | boolean | object | array | any
 //   access    'read' 只读 | 'write' 会改东西 | 'danger' 删除/花钱/不可撤回——调用方应先征得用户同意
 //   need      额外要求：能力名（principal.mjs 的 can()，如 'workspace.shell'）或 'agent:<id>'（该 agent 对调用者开着）
+//   needFor   可选：(args) => need 数组。要求随参数变（sessions.* / chat.* 的 agent 参数）时用；目录与参数不合法时仍按 need 判
 //   slow      可能跑很久（等对话、生成视频）：HTTP 层会先回 200 再定期写空白保活
 //   handler   async (ctx, args, env) => 数据（普通 JSON 对象）；出错抛 OpError
 //   example   可选：一组示例参数（手册里展示）
@@ -68,7 +69,7 @@ export const allGroups = () => [...GROUPS.values()].sort((a, b) => rank(a.id) - 
 export const apiAllowed = (ctx) => !!ctx && (ctx.kind === 'admin' || ctx.kind === 'user');
 
 // 这个调用者能不能用某个操作：返回 null（能）或一句原因。
-export function whyNot(ctx, op) {
+export function whyNot(ctx, op, args = null) {
   if (!apiAllowed(ctx)) return '需要登录身份（主机或账号）';
   // 入口自带的范围限制（同机 agent 实例不给设备 / 媒体组，见 instance-auth.mjs）
   const denied = typeof ctx.opDeny === 'function' ? ctx.opDeny(op) : null;
@@ -76,7 +77,8 @@ export function whyNot(ctx, op) {
   // 操作自带的放行判定（如 media.* 看 设置 › Media Studio 让不让这个调用方生成，见 ops/media.mjs）
   const own = typeof op.deny === 'function' ? op.deny(ctx) : null;
   if (own) return own;
-  for (const n of op.need || []) {
+  const need = args && typeof op.needFor === 'function' ? op.needFor(args) : op.need;
+  for (const n of need || []) {
     if (n.startsWith('plugin:')) {
       if (!pluginOn(n.slice(7))) return '这项功能在这台服务器上关着（设置 › 扩展 › 功能扩展里可以打开）';
     } else if (n.startsWith('agent:')) {
@@ -157,9 +159,23 @@ export function validateArgs(op, raw) {
 export async function callOp(ctx, name, rawArgs, env = {}) {
   const op = getOp(name);
   if (!op) throw new OpError('not_found', `没有操作「${name}」`, { hint: '操作目录见 GET /agent；手册见 manual 操作' });
-  const why = whyNot(ctx, op);
-  if (why) throw new OpError(apiAllowed(ctx) ? 'forbidden' : 'unauthorized', why);
-  const args = validateArgs(op, rawArgs);
+  const deny = (why) => new OpError(apiAllowed(ctx) ? 'forbidden' : 'unauthorized', why);
+  let args;
+  if (typeof op.needFor === 'function') {
+    // 要求随参数变：先校验参数再按参数判；参数不合法时按原样参数先判权限，错误码与没有 needFor 时一致
+    try { args = validateArgs(op, rawArgs); } catch (e) {
+      let why;
+      try { why = whyNot(ctx, op, rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs) ? rawArgs : {}); } catch { why = whyNot(ctx, op); }
+      if (why) throw deny(why);
+      throw e;
+    }
+    const why = whyNot(ctx, op, args);
+    if (why) throw deny(why);
+  } else {
+    const why = whyNot(ctx, op);
+    if (why) throw deny(why);
+    args = validateArgs(op, rawArgs);
+  }
   const data = await op.handler(ctx, args, env);
   return data === undefined ? {} : data;
 }

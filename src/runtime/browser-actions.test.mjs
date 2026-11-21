@@ -123,3 +123,116 @@ test('console：默认只列当前文档的，之前页面 / 标签的只报个�
   handlePageMessage(s, JSON.stringify({ method: 'Page.frameNavigated', params: { frame: { id: 'f1', url: 'file:///demo/index.html' } } }));
   assert.match(say(await runBrowserAction('k', { action: 'console' }, null, { pool })), /^\(当前页面的 console 为空\)\n（另有 4 条来自之前的页面/);
 });
+
+// 给不经 MCP 的调用方（dimensio 的内部接口）的可选能力：structured 的 data、tab_switch / tab_close 缺省当前、截图的等待与元素截图。
+// 不传这些 opts 的调用方（Claude / Codex）结果形状不变。
+test('structured：eval 的值类型与异常类别挂在 data 上；不传 structured 时结果里没有 data', async () => {
+  let script = () => true;
+  const pool = stubPool(() => fakeBrowser({ async eval(js) { return script(js); } }));
+  await runBrowserAction('k', { action: 'navigate', url: 'https://example.com' }, null, { pool });
+  const plain = await runBrowserAction('k', { action: 'eval', js: 'true' }, null, { pool });
+  assert.equal('data' in plain, false, 'MCP 通道的结果形状不变');
+  const yes = await runBrowserAction('k', { action: 'eval', js: 'true' }, null, { pool, structured: true });
+  assert.deepEqual(yes.data, { eval: { threw: false, type: 'boolean', value: true } });
+  script = () => ({ a: 1 });
+  assert.deepEqual((await runBrowserAction('k', { action: 'eval', js: 'x' }, null, { pool, structured: true })).data, { eval: { threw: false, type: 'object' } });
+  script = () => { throw new Error('Error: count was 3'); };
+  const threw = await runBrowserAction('k', { action: 'eval', js: 'x' }, null, { pool, structured: true });
+  assert.equal(threw.isError, true);
+  assert.deepEqual(threw.data, { eval: { threw: true, exception: 'Error' } });
+  script = () => { throw new Error('SyntaxError: Unexpected token'); };
+  assert.equal((await runBrowserAction('k', { action: 'eval', js: 'x' }, null, { pool, structured: true })).data.eval.exception, 'SyntaxError');
+  script = () => { throw new Error('eval 30 秒没有返回，已终止。'); };
+  assert.equal((await runBrowserAction('k', { action: 'eval', js: 'x' }, null, { pool, structured: true })).data.eval.exception, '', '超时不是页面的结论');
+});
+
+test('urlDenied：eval 前也验当前页，越界先退回空白页、不跑脚本', async () => {
+  let ran = 0;
+  const pool = stubPool(() => fakeBrowser({ async eval() { ran++; return 1; } }));
+  await runBrowserAction('k', { action: 'navigate', url: 'https://example.com' }, null, { pool });
+  pool.existingBrowser('k').url = 'file:///C:/secret.txt';   // 页面自己跳过去的
+  const urlDenied = async (u) => (/^file:/.test(u) ? '只能打开你自己工作空间里的文件' : null);
+  const r = await runBrowserAction('k', { action: 'eval', js: 'document.body.innerText' }, null, { pool, urlDenied });
+  assert.equal(r.isError, true);
+  assert.match(say(r), /不允许的地址/);
+  assert.equal(ran, 0);
+  assert.equal(pool.existingBrowser('k').url, 'about:blank');
+});
+
+test('tab_switch 是 tab_select 的别名；tab_close 不给 tab：缺省报错，tabCloseCurrent 时关当前', async () => {
+  const two = () => fakeBrowser({
+    tabs: [{ id: 't1', url: 'https://a/', title: 'A', active: false }, { id: 't2', url: 'https://b/', title: 'B', active: true }],
+    async activateTab(id) { for (const t of this.tabs) t.active = t.id === id; },
+  });
+  const pool = stubPool(two);
+  await runBrowserAction('k', { action: 'navigate', url: 'https://b/' }, null, { pool });
+  const sw = await runBrowserAction('k', { action: 'tab_switch', tab: 1 }, null, { pool });
+  assert.equal(sw.isError, undefined, say(sw));
+  assert.equal(pool.existingBrowser('k').tabs[0].active, true);
+  const noTab = await runBrowserAction('k', { action: 'tab_close' }, null, { pool });
+  assert.equal(noTab.isError, true, 'Claude / Codex：不给 tab 仍是报错');
+  const cur = await runBrowserAction('k', { action: 'tab_close' }, null, { pool, tabCloseCurrent: true });
+  assert.equal(cur.isError, undefined, say(cur));
+  assert.deepEqual(pool.existingBrowser('k').tabs.map((t) => t.id), ['t2'], '关掉的是当前那个（t1）');
+});
+
+test('network structured：列表那几条带 id / 状态挂在 data 上（取响应体时不挂）', async () => {
+  const net = [
+    { id: '1', url: 'https://x/api/a', method: 'GET', status: 200, state: 'done', mime: 'application/json', size: 10, t: 1 },
+    { id: '2', url: 'https://x/api/b', method: 'POST', status: 500, state: 'done', mime: 'application/json', size: 10, t: 2 },
+    { id: '3', url: 'https://x/app.js', method: 'GET', status: null, state: 'failed', error: 'net::ERR', size: 0, t: 3 },
+  ];
+  const pool = stubPool(() => fakeBrowser({ networkEntries: () => net }));
+  await runBrowserAction('k', { action: 'navigate', url: 'https://x/' }, null, { pool });
+  const r = await runBrowserAction('k', { action: 'network', query: '/api' }, null, { pool, structured: true });
+  assert.deepEqual(r.data.network.map((e) => [e.id, e.status, e.state]), [['1', 200, 'done'], ['2', 500, 'done']]);
+  const all = await runBrowserAction('k', { action: 'network' }, null, { pool, structured: true });
+  assert.deepEqual(all.data.network.at(-1), { id: '3', url: 'https://x/app.js', method: 'GET', status: null, state: 'failed', error: 'net::ERR' });
+});
+
+test('screenshot：settle 先等动画、wait_ms:0 立刻截；element_ref / element_selector 只截那个元素', async () => {
+  const calls = [];
+  const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000002000000020806000000', 'hex');
+  const pool = stubPool(() => fakeBrowser({
+    async settleAnimations() { calls.push('settle'); return { waitedMs: 120, stillRunning: 0 }; },
+    async elementShot(t) { calls.push(['element', t]); return { buf: png, element: { css: [1, 2, 30, 40], clamped: false, width: 30, height: 40 } }; },
+    async screenshot() { calls.push('full'); return { buf: png, frame: { imgW: 1280, imgH: 900, k: 1 } }; },
+    measured: null,
+  }));
+  await runBrowserAction('k', { action: 'navigate', url: 'https://x/' }, null, { pool });
+  const plain = await runBrowserAction('k', { action: 'screenshot' }, null, { pool });
+  assert.deepEqual(calls, ['full'], '不带新参数：和以前一样立刻整屏截');
+  assert.equal(plain.content[0].type, 'image');
+  calls.length = 0;
+  const settled = await runBrowserAction('k', { action: 'screenshot', settle: true }, null, { pool, structured: true });
+  assert.deepEqual(calls, ['settle', 'full']);
+  assert.deepEqual(settled.data, { settle: { waitedMs: 120, stillRunning: 0 } });
+  calls.length = 0;
+  await runBrowserAction('k', { action: 'screenshot', settle: true, wait_ms: 0 }, null, { pool });
+  assert.deepEqual(calls, ['full'], 'wait_ms:0 = 就要这一帧');
+  calls.length = 0;
+  const el = await runBrowserAction('k', { action: 'screenshot', element_ref: 3, settle: true }, null, { pool, structured: true });
+  assert.deepEqual(calls, ['settle', ['element', { ref: 3 }]]);
+  assert.equal(el.content[0].type, 'image');
+  assert.match(say(el), /ref3 的截图 30×40/);
+  assert.deepEqual(el.data.element.css, [1, 2, 30, 40]);
+  calls.length = 0;
+  await runBrowserAction('k', { action: 'screenshot', element_selector: '.card' }, null, { pool });
+  assert.deepEqual(calls, [['element', { selector: '.card' }]]);
+});
+
+test('dprprobe 判定：停手后还在长、超 Chromium 上限、比值乘了不止一次、页面高度失控；健康的放行', async () => {
+  const { judgeCanvasProbe } = await import('./browser-dprprobe.mjs');
+  const c = (id, attrW, attrH, rectW = 400, rectH = 300) => ({ id, attrW, attrH, rectW, rectH });
+  assert.deepEqual(judgeCanvasProbe({ docH: 2000, canvases: [c('a', 800, 600)] }, { docH: 2000, canvases: [c('a', 800, 600)] }, 2), { passed: true, problems: [] });
+  assert.match(judgeCanvasProbe({ docH: 2000, canvases: [c('a', 800, 600)] }, { docH: 2000, canvases: [c('a', 1600, 1200)] }, 2).problems[0], /grew with NO input/);
+  assert.match(judgeCanvasProbe({ docH: 0, canvases: [] }, { docH: 2000, canvases: [c('a', 40000, 10)] }, 2).problems[0], /exceeds Chromium's limit/);
+  assert.match(judgeCanvasProbe({ docH: 0, canvases: [] }, { docH: 2000, canvases: [c('a', 9000, 9000, 1000, 1000)] }, 2).problems[0], /applied more than once/);
+  assert.match(judgeCanvasProbe({ docH: 2000, canvases: [] }, { docH: 3_000_000, canvases: [] }, 2).problems[0], /runaway/);
+  const pool = stubPool(() => fakeBrowser({ webBridge: { connected: true } }), { webBridge: true });
+  await runBrowserAction('k', { action: 'navigate', url: 'https://x/' }, null, { pool });
+  assert.match(say(await runBrowserAction('k', { action: 'dprprobe' }, null, { pool })), /用户自己的浏览器/);
+  const own = stubPool(() => fakeBrowser());
+  await runBrowserAction('k', { action: 'navigate', url: 'https://x/' }, null, { pool: own });
+  assert.match(say(await runBrowserAction('k', { action: 'dprprobe', dpr: 1 }, null, { pool: own })), /dpr 要大于 1/);
+});

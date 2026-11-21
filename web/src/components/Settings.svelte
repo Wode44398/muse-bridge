@@ -45,6 +45,8 @@
   import { goto } from '../lib/pageMorph.js';
   import GlassButton from './ios27/GlassButton.svelte';
   import Customize from './ext/Customize.svelte';
+  import HomeLayoutPanel from './settings/HomeLayoutPanel.svelte';   // 「主页」分区：主页入口的顺序与显隐
+  import PageGrantsPanel from './settings/PageGrantsPanel.svelte';   // 「页面权限」分区：插件页面拿到的权限，逐项撤销
   import PluginFrame from './ext/PluginFrame.svelte';
   import { pluginPanels, watchPluginPanels, openPluginStandalone, inAndroidApp, panelTitle } from '../lib/pluginPanels.svelte.js';
   import { showToast } from '../lib/toast.svelte.js';
@@ -58,7 +60,7 @@
   import { createDimensio, DM_TITLE } from './settings/ios/dimensio.svelte.js';
   import { createPhone } from './settings/ios/phone.svelte.js';
   import { createDevices, createAgentKeys } from './settings/ios/devices.svelte.js';
-  import { createAgents, createPolicy, createStudio } from './settings/ios/agents.svelte.js';
+  import { createAgents, createPolicy, createStudio, createAgy } from './settings/ios/agents.svelte.js';
   import { createAccount } from './settings/ios/account.svelte.js';
   import { createWallpaper } from './settings/ios/wallpaper.svelte.js';
   import { createUpdate, createAbout, createFeedback } from './settings/ios/about.svelte.js';
@@ -111,13 +113,14 @@
   S.pool = createClaudePool(S);
   S.pol = createPolicy();
   S.st = createStudio(S);
+  S.agy = createAgy(S);
   // —— 模型中心（2026-11-10 起是根页 agent 组里的一页 'model-hub'，正文 components/modelhub/HubHome 懒加载）——
   // 出不出现看 hub.ok（管理员的总览）|| cp.ok（能自定义 API 的成员自己的 Claude 服务），两样都是开设置才拉。
   // 直达这一页时数据多半还在路上：落定前先停在这页等，落定了确实两边都没有再退回去（见下面 deepStack 与退回的 effect）
   S.hub = createHubPresence();
   // 弹层总闸（左缘右滑 guard / 外壳 class:modal 都读它）：Claude 页的绕过权限确认、分支前缀编辑也登记在这里。
   // 模型中心的浮层（添加 / 服务详情，挂在 App 根上）开着也算弹层：设置别响应左缘右滑、顶栏去掉磨砂；调用策略子页里的浮层（dpModal）同理
-  const anyAgModal = $derived(!!S.pool.acctForm || !!S.pool.acctDel || !!S.pol.numEdit || !!S.ag.agLast || S.cl.bypassAsk || !!S.cl.prefixEdit || !!hubUi.sheet || !!S.dm.dmEdit || S.dm.dmPicking || S.st.stModal || S.dp.dpModal);
+  const anyAgModal = $derived(!!S.pool.acctForm || !!S.pool.acctDel || !!S.pol.numEdit || !!S.ag.agLast || S.cl.bypassAsk || !!S.cl.prefixEdit || !!hubUi.sheet || !!S.dm.dmEdit || S.dm.dmPicking || S.st.stModal || S.agy.agyModal || S.dp.dpModal);
   S.acc = createAccount(S);
   S.wpc = createWallpaper(S);
   S.up = createUpdate();
@@ -129,7 +132,7 @@
   // 推入 / 返回都用弹簧驱动 navX（NAV_SPRING），左缘右滑直接跟手改 navX，松手由 swipeDismiss 的弹簧续写。
   const TITLES = {
     root: () => t('设置'), general: () => t('通用'), notify: () => t('通知'), 'notify-tone': () => t('提示音'), 'notify-vibe': () => t('振动方式'), language: () => t('语言'), thinkmark: () => t('思考动画'), appearance: () => t('外观'),
-    wallpaper: () => t('壁纸'), flux: () => t('流体壁纸'), agentapi: () => t('Agent 接入'), 'model-hub': () => t('模型中心'),
+    home: () => t('主页'), 'page-grants': () => t('页面权限'), wallpaper: () => t('壁纸'), flux: () => t('流体壁纸'), agentapi: () => t('Agent 接入'), 'model-hub': () => t('模型中心'),
     phone: () => t('手机操控'), devices: () => t('设备'), 'fwd-new': () => t('新的转发'), about: () => t('关于'), history: () => t('版本历史'),
     account: () => (me.kind === 'none' ? t('登录') : t('账户')), policy: () => t('额度与注册'), extensions: () => t('扩展'),
     studio: () => 'Media Studio', 'cl-dispatch': () => t('子 agent 调用策略'), 'dm-dispatch': () => t('子 agent 调用策略'),
@@ -149,6 +152,7 @@
     if (pid.startsWith('plg-')) return panelTitle(pluginPanels.list.find((x) => 'plg-' + x.id === pid));
     if (pid.startsWith('ag-')) { const id = pid.slice(3); return agentById(id)?.label || (id === 'claude' ? 'Claude' : id); }
     if (pid.startsWith('st:')) return S.st.stTitles[pid] || '';
+    if (pid.startsWith('agy:')) return S.agy.agyTitles[pid] || '';
     if (pid.startsWith('dm:')) return DM_TITLE[pid.slice(3)]?.() || '';
     if (pid.startsWith('dp:')) { const p = ds.prefs?.items?.find((x) => x.key === pid.slice(3)); return p ? prefLabel(p) : ''; }
     if (pid.startsWith('acct:')) return accLabel(S.pool.acctById(pid.slice(5))?.label || '') || t('账号');
@@ -168,11 +172,20 @@
     if (s === 'dm-dispatch' || s === 'dimensio-dispatch') return ['root', 'ag-dimensio', 'dm-dispatch'];
     // Media Studio；Gemini 设置页 11-04 删了，指向它的老入口（gemini / vertex）一并落到这里
     if (s === 'studio' || s === 'ag-studio' || s === 'media' || s === 'gemini' || s === 'ag-gemini' || s === 'vertex') return S.ag.studioOn ? ['root', 'studio'] : ['root'];
+    if (s === 'agy') return ['root', 'ag-agy'];
     if (s.startsWith('ag-')) return ['root', s];
     if (s === 'connection' || s === 'connect') return ['root', 'about'];   // 服务器地址、线路、公网地址都在「关于」
     if (s === 'devices' || s === 'localpc') return S.dev.hasDevices ? ['root', 'devices'] : ['root'];
     if (s === 'phone') return S.phone.hasPhoneCtrl ? ['root', 'phone'] : ['root'];
     if (s === 'wallpaper') return single ? ['root'] : ['root', s];
+    // 主页入口的排序 / 显隐：单页模式没有主页，落根页（同壁纸）
+    if (s === 'home' || s === 'home-layout') return single ? ['root'] : ['root', 'home'];
+    // 页面权限：授权跟人走，单页模式也有；没登录没有授权可看
+    if (s === 'page-grants' || s === 'grants') return me.kind === 'none' ? ['root'] : ['root', 'page-grants'];
+    // 扩展：「插件详情」直达（lib/extensionsNav 的 openPluginDetail）走这里。冷开时 extOk 探针还没回来，按它判就落回根页了：
+    // 已登录就先当它在（跳得过来的只有已登录的人，插件详情只有主机），探针落定了确实没过再由下面的收尾 effect 撤掉。
+    // 桌面设置同一个思路（探针落定前「分区被收走就回通用」不判扩展）
+    if (s === 'extensions') return me.kind === 'none' ? ['root'] : ['root', 'extensions'];
     if (s === 'agentapi' || s === 'agent-api') return S.dev.hasDevices ? ['root', 'agentapi'] : ['root'];
     // 模型中心：老入口名（模型服务 / 自定义 API 的 providers、cproviders）一并指过来。数据还没拉到时先当它在
     // （mhMaybe），拉到了确实没有再由下面的收尾 effect 退回去——不然冷开设置直达这一页会先被打回首页
@@ -276,6 +289,18 @@
       stack = withHome(stack.slice(0, i));
     });
   });
+  // 扩展同理：探针落定了确实没过（不是主机 / 令牌失效），冷开直达的「扩展」页连同上面的子页撤掉；
+  // 没被消费的插件详情直达一并清掉——残留的 id 会在以后进「功能扩展」、PluginsPanel 一挂上时被消费，把人突然拽进那个插件
+  $effect(() => {
+    if (!S.ext.settled || S.ext.ok) return;
+    untrack(() => {
+      extensionsNav.id = null; extensionsNav.type = null;
+      const i = stack.indexOf('extensions');
+      if (i < 1) return;
+      navSp?.cancel(); navSp = null; navX = 0; navBusy = false;
+      stack = withHome(stack.slice(0, i));
+    });
+  });
   // 「设备」页一露面就拉设备与端口转发：根页那一行点进来、外部直达（输入框电脑芯片「管理设备…」）、
   // 从单台设备 / 新的转发页退回来都走这里（10-21 回归 R3：以前只有点根页那一行才拉，直达时端口转发列表是空的）
   $effect(() => { if (stack[stack.length - 1] === 'devices' && S.dev.hasDevices) untrack(() => { loadDevices(true); loadForwards(); }); });
@@ -326,7 +351,7 @@
 
   // 每页的滚动状态：大标题滚到顶栏下 → 顶栏小标题出现；有内容滚到顶栏下 → 滚动边缘效果显形
   let scrolled = $state({});
-  const hasHero = (pid) => pid === 'about' || pid === 'account' || pid === 'studio' || pid === 'model-hub' || pid.startsWith('ag-') || pid.startsWith('acct:') || pid.startsWith('device:');
+  const hasHero = (pid) => pid === 'about' || pid === 'account' || pid === 'studio' || pid === 'model-hub' || pid.startsWith('ag-') || pid.startsWith('acct:') || pid.startsWith('agy:acct:') || pid.startsWith('device:');
   function onPageScroll(pid, e) {
     const y = e.currentTarget.scrollTop;
     const s = y > 4 ? (y > (hasHero(pid) ? 120 : 44) ? 2 : 1) : 0;
@@ -369,7 +394,7 @@
   const TEXT_FIELD = 'textarea, input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="password"], input[type="tel"], input[type="number"], [contenteditable="true"]';
   function onKey(e) {
     if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing || closing) return;
-    if (hubUi.sheet || S.st.stModal || S.dp.dpModal || ui.serverAdminOpen) return;   // 浮层（模型中心的添加 / 编辑、调用策略子页里的选择器、服务端控制台等）自己接 Esc
+    if (hubUi.sheet || S.st.stModal || S.agy.agyModal || S.dp.dpModal || ui.serverAdminOpen) return;   // 浮层（模型中心的添加 / 编辑、调用策略子页里的选择器、服务端控制台等）自己接 Esc
     const a = document.activeElement;
     if (a && a.matches?.(TEXT_FIELD) && String(a.value ?? a.textContent ?? '').trim() && !a.closest('[role="alertdialog"]')) {
       e.preventDefault(); a.blur(); return;
@@ -406,18 +431,23 @@
   {:else if pid === 'general' || pid === 'language' || pid === 'notify' || pid === 'notify-tone' || pid === 'notify-vibe'}<PrefsPages {pid} />
   {:else if pid === 'thinkmark'}<AgentPages {pid} />
   {:else if pid === 'appearance'}<PrefsPages {pid} />
+  {:else if pid === 'home'}<HomeLayoutPanel variant="touch" />
+  {:else if pid === 'page-grants'}<PageGrantsPanel variant="touch" />
   {:else if pid === 'wallpaper' || pid === 'flux'}<WallpaperPages {pid} />
   {:else if pid === 'agentapi'}<DevicePages {pid} />
   {:else if pid === 'model-hub'}<AgentPages {pid} />
   {:else if pid === 'phone' || pid === 'devices' || pid === 'fwd-new' || pid.startsWith('device:')}<DevicePages {pid} />
   {:else if pid === 'about' || pid === 'history'}<RootPages {pid} />
   {:else if pid === 'policy'}<AgentPages {pid} />
-  {:else if pid === 'extensions'}<Customize title={false} />
+  {:else if pid === 'extensions'}
+    <!-- seq：openPluginDetail 每次自增。设置已经开在「扩展」上时 Customize 不会重挂、只在挂载时读一次 extensionsNav.type，
+         换 key 让它重挂一次，才会切到「功能扩展」、由 PluginsPanel 选中那个插件 -->
+    {#key extensionsNav.seq}<Customize title={false} />{/key}
   {:else if pid.startsWith('plg-')}
     {@const pp = pluginPanels.list.find((x) => 'plg-' + x.id === pid)}
     {#if pp}<div class="plg-host">{#key pp.id}<PluginFrame id={pp.id} page={pp.page} mode="panel" onBack={pop} />{/key}</div>
     {:else}<p class="plg-gone">{t('这个插件面板不在了（插件被关掉或卸载了）')}</p>{/if}
-  {:else if pid === 'studio' || pid.startsWith('st:') || pid === 'ag-claude' || DISPATCH_PAGES.includes(pid) || pid.startsWith('ag-') || pid.startsWith('dm:')
+  {:else if pid === 'studio' || pid.startsWith('st:') || pid.startsWith('agy:') || pid === 'ag-claude' || DISPATCH_PAGES.includes(pid) || pid.startsWith('ag-') || pid.startsWith('dm:')
     || pid.startsWith('dp:') || pid.startsWith('acct:') || CL_CHOICE[pid] || CL_GROUP[pid]}<AgentPages {pid} />
   {/if}
 {/snippet}

@@ -220,7 +220,9 @@ function wakeClock() {
 }
 
 function livePath(scope, leaf) {
-  return scope === 'codex' ? `/api/codex/${leaf}` : `/api/${leaf}`;
+  if (scope === 'codex') return `/api/codex/${leaf}`;
+  if (scope === 'agy') return `/api/agy/${leaf}`;
+  return `/api/${leaf}`;
 }
 
 async function fetchActive(signal, scope) {
@@ -253,6 +255,7 @@ async function openAttach(signal, scope, session) {
 function activeRuns(a) {
   if (!a) return [];
   if (Array.isArray(a.runs)) return a.runs;
+  if (Array.isArray(a.activeSessions)) return a.activeSessions;
   return a.active ? [a] : [];
 }
 

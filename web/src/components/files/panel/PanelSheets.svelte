@@ -134,6 +134,7 @@
       {#if P.ai.view === 'root'}
         <div class="k-card">
           {#if P.ai.caps.claude}{@render aiOpt(() => P.ai.pick('claude'), '#d97757', AI_IC.claude, '', 'Claude', t('当附件向 Claude 提问'), true)}{/if}
+          {#if P.ai.caps.agy}{@render aiOpt(() => P.ai.pick('agy'), '#101829', '', P.BASE + 'assets/icons/antigravity.svg', 'Antigravity', t('当附件向 Antigravity 提问'), true)}{/if}
           {#if P.ai.caps.studio}{@render aiOpt(() => (P.ai.view = 'studio'), STUDIO_TILE, '', P.BASE + 'assets/icons/studio-light.svg', 'Media Studio', t('生成图像 / 视频 / 配音 / 音乐'), true)}{/if}
         </div>
       {:else if P.ai.view === 'studio'}
@@ -159,7 +160,7 @@
         <div class="k-card">
           {#each P.ai.filtered as s (s.id)}
             <button class="k-row k-btnrow k-chat" onclick={() => P.ai.pickChat(s.id)}>
-              {#if P.ai.chat.target === 'claude'}<span class="ai-chat-dot {s.thinking ? 'work' : s.pending ? 'ask' : ''}"></span>{/if}
+              {#if P.ai.chat.target === 'claude' || P.ai.chat.target === 'agy'}<span class="ai-chat-dot {s.thinking ? 'work' : s.pending ? 'ask' : ''}"></span>{/if}
               <span class="k-tx k-one">{P.ai.chatTitle(s)}</span>
               {#if s.id === P.ai.cur}<span class="ai-chat-cur">{t('当前')}</span>{/if}
               {#if s.mtime}<span class="k-val">{relTime(s.mtime)}</span>{/if}

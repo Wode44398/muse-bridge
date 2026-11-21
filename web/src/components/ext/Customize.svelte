@@ -358,12 +358,13 @@
   }
 
   // ═══ 生效 Agent ═══
-  // 全服范围：成员的 Claude 与 dimensio 都加载；Codex 不支持多用户，勾选只影响管理员自己。成员面板：只有 Claude 与 dimensio
+  // 全服范围：成员的 Claude 与 dimensio 都加载；Codex 与 Antigravity 不支持多用户，勾选只影响管理员自己。成员面板：只有 Claude 与 dimensio
   const AGENTS = $derived([
     { key: 'claude', label: 'Claude Code', hint: shared ? t('所有成员下一条消息生效') : t('下一条消息生效') },
     { key: 'dimensio', label: 'dimensio', hint: shared ? t('所有成员新会话生效') : t('新会话生效') },
     { key: 'codex', label: 'Codex', hint: shared ? t('只对管理员生效 · 新会话') : t('新会话生效') },
-  ].filter((a) => (a.key === 'claude' || agentOn(a.key)) && (!member || a.key !== 'codex')));
+    { key: 'agy', label: 'Antigravity', hint: shared ? t('只对管理员生效 · 新会话') : t('新会话生效') },
+  ].filter((a) => (a.key === 'claude' || agentOn(a.key)) && (!member || (a.key !== 'codex' && a.key !== 'agy'))));
   function agentAllowed(item, key) {
     const s = support[item.type]?.[key];
     if (!s) return false;
@@ -373,6 +374,7 @@
   function agentDeniedWhy(item, key) {
     if (item.type === 'plugin') return t('仅 Claude Code 支持插件');
     if (item.type === 'connector' && key === 'codex') return t('Codex 仅支持 stdio 连接器');
+    if (item.type === 'connector' && key === 'agy') return t('Antigravity 仅支持 stdio 连接器');
     return t('该类型不支持');
   }
   async function toggleAgent(item, key) {

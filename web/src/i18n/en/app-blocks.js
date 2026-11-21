@@ -1,0 +1,60 @@
+// 英文界面文案 · 声明式应用的复杂积木：form / chart / chat
+// （components/appview/FormBlock · SchemaFields · ChartBlock · ChatBlock、lib/appChat.svelte.js；键 = 中文原文，见 lib/i18n.js）
+// 通用词（取消、提交、发送、停止、已停止、允许、去处理、加载中、网络连接失败）照别的字典的译法再写一份：
+// 「服务器返回 {code}」只用 plugin-host 那份。这几个积木的文案集中在一处好查，译法一致不算冲突。
+export default {
+  // —— 表单 ——
+  '请选择': 'Choose…',
+  '取消': 'Cancel',
+  '提交': 'Submit',
+  '有 {n} 项要改一下': { one: '{n} field needs fixing', other: '{n} fields need fixing' },
+  '这一项必填': 'This field is required',
+  '请选一项': 'Pick an option',
+  '要填一个数': 'Enter a number',
+  '要填整数': 'Enter a whole number',
+  '不能小于 {n}': 'Must be at least {n}',
+  '不能大于 {n}': 'Must be at most {n}',
+
+  // —— 图表 ——
+  '{label}（{unit}）': '{label} ({unit})',
+  '单位：{unit}': 'Unit: {unit}',
+  '图例': 'Legend',
+  '图例：{name}': 'Legend: {name}',
+  '显示这一组': 'Show this series',
+  '藏起这一组': 'Hide this series',
+  '柱状图': 'Bar chart',
+  '折线图': 'Line chart',
+  '{kind}：{series}': '{kind}: {series}',
+  '没有数据': 'No data',
+  '横轴': 'X axis',
+
+  // —— 对话 ——
+  '问 Claude…': 'Ask Claude…',
+  '接着说…': 'Reply…',
+  '发送': 'Send',
+  '停止': 'Stop',
+  '已停止': 'Stopped',
+  '允许': 'Allow',
+  '去处理': 'Review',
+  '加载中': 'Loading…',
+  '与 Claude 的对话': 'Conversation with Claude',
+  '在 Claude 里打开': 'Open in Claude',
+  '还没有消息': 'No messages yet',
+  '正在回复': 'Replying',
+  '正在连接': 'Connecting',
+  '等你批准': 'Waiting for you',
+  '正在想': 'Thinking',
+  '正在用 {name}': 'Using {name}',
+  '用了 {n} 次工具': { one: 'Used a tool {n} time', other: 'Used tools {n} times' },
+  '{n} 次出错': { one: '{n} failed', other: '{n} failed' },
+  'Claude 在等你批准': 'Claude is waiting for your approval',
+  'Claude 在等你回答': 'Claude is waiting for your answer',
+  '这个应用想和 Claude 对话，要你先允许': 'This app wants to talk to Claude. Allow it first.',
+  '这个插件没有声明对话权限（page.chat），用不了对话': 'This plugin didn’t declare the chat permission (page.chat), so chat isn’t available',
+  '这一轮出错了': 'Turn failed',
+  '这一轮没有完成': 'This turn didn’t finish',
+  '没能发出去': 'Couldn’t send',
+  '没能开始对话': 'Couldn’t start the conversation',
+  '没能停下': 'Couldn’t stop',
+  '网络连接失败': 'Network connection failed',
+};

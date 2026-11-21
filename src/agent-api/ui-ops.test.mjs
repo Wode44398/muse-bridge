@@ -1,6 +1,6 @@
 // ui.open / ui.notify 的界面回执（2026-11-08）：发 ui.cmd 前先登记回执，前端执行完 POST /api/ui/answer 回来才算确认；
 // 没回执照实报「未确认」，不报假成功。另含：视图上报记下所在手机（device）与前后台（visible）、心跳不抢「最近在用」、
-// 按手机（device）挑界面。总线订阅用假 res 截下发出去的事件，回执直接调 answerUiRequest（= /api/ui/answer 落地那一步）。
+// 按手机（device）挑界面、ui.open 打开插件应用（app）。总线订阅用假 res 截下发出去的事件，回执直接调 answerUiRequest（= /api/ui/answer 落地那一步）。
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
@@ -11,9 +11,14 @@ import path from 'node:path';
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'bridge-ui-ops-'));
 process.env.BRIDGE_DATA_ROOT = tmp;
 process.env.BRIDGE_CLAUDE_IN_CHROME = '0';
+// ui.open 的 app 参数要查插件内核：插件状态放临时目录
+process.env.BRIDGE_PLUGINS_STATE = path.join(tmp, 'plugins.json');
+process.env.BRIDGE_PLUGINS_DIR = path.join(tmp, 'plugins');
 
 const { callOp, OpError } = await import('./registry.mjs');
 await import('./ops/ui.mjs');
+const { kernel } = await import('../plugins/state.mjs');
+const { normUi } = await import('../plugins/discover.mjs');
 const { noteUiState, getUiState, answerUiRequest, waitUiAck } = await import('../runtime/ui-state.mjs');
 const { busSubscribe } = await import('../runtime/bus.mjs');
 const { registerUiStateRoutes } = await import('../routes/ui-state.mjs');
@@ -212,4 +217,74 @@ test('广播（client=all）：后台那端先回 ok:false 不算数，等到前
     assert.equal(r.opened, true);
     assert.equal(r.client, 'b');
   } finally { off(); }
+});
+
+test('ui.open app：看得到的应用发 target.app；看不到 / 没有 / 插件关着 → not_found 且不发；格式不对 → bad_args；和 page 等互斥', async () => {
+  await kernel.start();
+  const m = { id: 'demo-apps', name: '演示', ui: { apps: [
+    { id: 'board', title: '看板', page: 'web/board.html', who: 'members' },
+    { id: 'admin-only', title: '主机专用', page: 'web/a.html' },
+  ] } };
+  await kernel.register({ id: m.id, name: m.name, source: 'local', dir: tmp, pluginApi: 3, extra: { ui: normUi(m) }, load: async () => ({ apply() {} }) });
+  const ctx = newCtx();
+  noteUiState(ctx.key, 'c1', 'web', { page: 'home' }, { visible: true });
+  const got = [];
+  const off = subscribe(ctx.key, (ev) => { got.push(ev); answerUiRequest(ctx.key, ev.id, { ok: true, client: 'c1', visible: true }); });
+  try {
+    const r = await callOp(ctx, 'ui.open', { app: 'demo-apps:board' });
+    assert.deepEqual(got.at(-1).target, { app: { plugin: 'demo-apps', id: 'board' } });
+    assert.deepEqual(r.target, { app: { plugin: 'demo-apps', id: 'board' } });
+    assert.equal(r.opened, true);
+    const n = got.length;
+    const notFound = (e) => e instanceof OpError && e.code === 'not_found' && /没有这个应用/.test(e.message);
+    await assert.rejects(callOp(ctx, 'ui.open', { app: 'demo-apps:admin-only' }), notFound, '成员看不到只给主机的应用');
+    await assert.rejects(callOp(ctx, 'ui.open', { app: 'demo-apps:nope' }), notFound);
+    await assert.rejects(callOp(ctx, 'ui.open', { app: 'nope:board' }), notFound);
+    await kernel.setEnabled('demo-apps', false);
+    await assert.rejects(callOp(ctx, 'ui.open', { app: 'demo-apps:board' }), notFound, '插件关着');
+    await kernel.setEnabled('demo-apps', true);
+    assert.equal(got.length, n, '看不到的一律不发下去');
+    const badArgs = (re) => (e) => e instanceof OpError && e.code === 'bad_args' && re.test(e.message);
+    await assert.rejects(callOp(ctx, 'ui.open', { app: 'board' }), badArgs(/插件id:应用id/));
+    await assert.rejects(callOp(ctx, 'ui.open', { app: 'Demo:Board' }), badArgs(/插件id:应用id/));
+    await assert.rejects(callOp(ctx, 'ui.open', { app: 'demo-apps:board', page: 'home' }), badArgs(/要且只要给一个/));
+    await assert.rejects(callOp(ctx, 'ui.open', { app: 'demo-apps:board', file: 'a.md' }), badArgs(/要且只要给一个/));
+    // 主机看得到只给主机的应用
+    const host = { kind: 'admin', key: 'admin', agents: ['claude'] };
+    noteUiState(host.key, 'h1', 'web', { page: 'home' }, { visible: true });
+    const offH = subscribe(host.key, (ev) => { got.push(ev); answerUiRequest(host.key, ev.id, { ok: true, client: 'h1', visible: true }); });
+    try {
+      const h = await callOp(host, 'ui.open', { app: ' demo-apps:admin-only ' });
+      assert.deepEqual(h.target, { app: { plugin: 'demo-apps', id: 'admin-only' } }, '首尾空白去掉');
+    } finally { offH(); }
+  } finally { off(); await kernel.stop(); }
+});
+
+test('ui.apps：主机看到全部、成员只看到 who: members 的；顺序同主页（order 再标题）；插件关着不列；列出来的 app 原样给 ui.open 能用', async () => {
+  await kernel.start();
+  const m = { id: 'list-apps', name: '列表演示', ui: { apps: [
+    { id: 'zeta', title: '乙应用', page: 'web/z.html', who: 'members' },
+    { id: 'alpha', title: '甲应用', page: 'web/a.html' },
+    { id: 'last', title: '丙应用', page: 'web/c.html', order: 5 },
+    { id: 'first', title: '丁应用', page: 'web/d.html', order: -1 },
+  ] } };
+  await kernel.register({ id: m.id, name: m.name, source: 'local', dir: tmp, pluginApi: 3, extra: { ui: normUi(m) }, load: async () => ({ apply() {} }) });
+  try {
+    const mine = (r) => r.apps.filter((a) => a.plugin === 'list-apps');
+    const host = { kind: 'admin', key: 'admin', agents: ['claude'] };
+    const h = await callOp(host, 'ui.apps', {});
+    assert.deepEqual(mine(h).slice(1, 3), [
+      { app: 'list-apps:alpha', title: '甲应用', plugin: 'list-apps', pluginName: '列表演示', kind: 'page' },
+      { app: 'list-apps:zeta', title: '乙应用', plugin: 'list-apps', pluginName: '列表演示', kind: 'page' },
+    ], '主机都看得到；order 相同按标题排');
+    assert.deepEqual(mine(h).map((a) => a.app), ['list-apps:first', 'list-apps:alpha', 'list-apps:zeta', 'list-apps:last'], 'order 小的在前');
+    const ctx = newCtx();
+    const u = await callOp(ctx, 'ui.apps', {});
+    assert.deepEqual(mine(u).map((a) => a.app), ['list-apps:zeta'], '成员只看到对成员开放的');
+    // 列出来的 app 直接喂 ui.open：认得（没界面在线只是 delivered:false，不是 not_found）
+    const r = await callOp(ctx, 'ui.open', { app: mine(u)[0].app });
+    assert.deepEqual(r.target, { app: { plugin: 'list-apps', id: 'zeta' } });
+    await kernel.setEnabled('list-apps', false);
+    assert.deepEqual(mine(await callOp(host, 'ui.apps', {})), [], '插件关着不列');
+  } finally { await kernel.stop(); }
 });

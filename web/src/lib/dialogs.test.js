@@ -229,6 +229,75 @@ test('request：队列满了直接按取消返回，不卡住调用方', async (
   await Promise.all(ps);
 });
 
+test('request + signal：abort 等于取消并关框；结算之后再 abort 无效；已 abort 的不入队', async () => {
+  reset();
+  const ac = new AbortController();
+  const p = S.request('confirm', 'x', {}, DEF, ac.signal);
+  const r = S.activeRequest();
+  assert.equal(r.message, 'x');
+  ac.abort();
+  assert.equal(await p, false, 'abort 按取消回');
+  assert.equal(r.closing, true, '框跟着退场');
+  assert.equal(S.activeRequest(), null);
+  await sleep(S.EXIT_MS + 30);
+  assert.equal(S.dlg.queue.length, 0);
+
+  // 先点了「确定」再 abort：结果不变、不报错
+  const ac2 = new AbortController();
+  const p2 = S.request('confirm', 'y', {}, DEF, ac2.signal);
+  const r2 = S.activeRequest();
+  S.settle(r2.id, 'ok', { instant: true });
+  ac2.abort();
+  assert.equal(await p2, true);
+  assert.equal(S.dlg.queue.length, 0);
+
+  // 进来时就已经 abort：直接按取消回，队列里什么都没有
+  const ac3 = new AbortController();
+  ac3.abort();
+  assert.equal(await S.request('confirm', 'z', {}, DEF, ac3.signal), false);
+  assert.equal(S.dlg.queue.length, 0);
+});
+
+test('request + signal：排在后面的框被 abort 只摘掉自己，正显示的不动；合并的提示只退自己那一份', async () => {
+  reset();
+  const pA = S.request('confirm', 'A', {}, DEF);
+  const ac = new AbortController();
+  const pB = S.request('confirm', 'B', {}, DEF, ac.signal);
+  ac.abort();
+  assert.equal(await pB, false);
+  assert.equal(S.activeRequest().message, 'A', '正显示的那条不受影响');
+  S.settle(S.activeRequest().id, 'ok', { instant: true });
+  assert.equal(await pA, true);
+  await sleep(S.EXIT_MS + 30);
+  assert.equal(S.dlg.queue.length, 0);
+
+  const pm1 = S.request('alert', 'same', {}, DEF);
+  const acm = new AbortController();
+  const pm2 = S.request('alert', 'same', {}, DEF, acm.signal);
+  assert.equal(S.dlg.queue[0].count, 2);
+  acm.abort();
+  assert.equal(await pm2, undefined);
+  assert.equal(S.dlg.queue[0].count, 1, '×n 减掉自己');
+  assert.equal(S.dlg.queue[0].closing, false, '别人还在等：框留着');
+  S.settle(S.dlg.queue[0].id, 'ok', { instant: true });
+  assert.equal(await pm1, undefined);
+});
+
+test('uiConfirm 把 signal 交给队列：abort 后按取消回、框退场', async () => {
+  reset();
+  S.host.ready = true;   // 假装宿主已在：kick 不去加载组件，队列留给测试看
+  try {
+    const ac = new AbortController();
+    const p = D.uiConfirm('del?', { danger: true, signal: ac.signal });
+    const r = S.activeRequest();
+    assert.equal(r.message, 'del?');
+    ac.abort();
+    assert.equal(await p, false);
+    assert.equal(r.closing, true);
+  } finally { reset(); }
+  await sleep(S.EXIT_MS + 30);
+});
+
 test('兜底：组件加载失败 → window.confirm / alert，按队列顺序问完，标题与 ×n 并进正文', async () => {
   reset();
   globalThis.__box = undefined;
@@ -417,6 +486,30 @@ test('msgLayout：拆不开的长句标 long（约两行以上），短句不标
   assert.equal(S.msgLayout('删除「OpenRouter」？已经添加到各处的模型会一并移除。').long, false, '拆完前半句很短');
   assert.equal(S.msgLayout('x'.repeat(S.LONG_UNITS)).long, false);
   assert.equal(S.msgLayout('x'.repeat(S.LONG_UNITS + 1)).long, true);
+});
+
+test('labelFit：按钮字长了就上下叠——玻璃框单钮超 5 个汉字、扁平窄窗口超 7 个、宽窗口两钮合计超 18 个；alert 不算取消钮', () => {
+  const req = (ok, cancel, kind = 'confirm') => ({ kind, okLabel: ok, cancelLabel: cancel });
+  const none = { glass: false, narrow: false, wide: false };
+  assert.deepEqual(S.labelFit(req('删除', '取消')), none);
+  assert.deepEqual(S.labelFit(req('Remove all', 'Cancel')), none, '10 个西文字符玻璃框里还并排');
+  assert.deepEqual(S.labelFit(req('永久删除会话', '取消')), { glass: true, narrow: false, wide: false });
+  assert.deepEqual(S.labelFit(req('取消', '永久删除会话')), { glass: true, narrow: false, wide: false }, '取消钮长也算');
+  assert.deepEqual(S.labelFit(req('确认删除全部附件', '取消')), { glass: true, narrow: true, wide: false });
+  // 20 个汉字（插件确认框的上限）：三种外观都叠
+  const cjk20 = '确认删除这个会话里全部的附件与历史记录吧';
+  assert.equal([...cjk20].length, 20);
+  assert.deepEqual(S.labelFit(req(cjk20, '取消')), { glass: true, narrow: true, wide: true });
+  // 宽窗口看两钮合计：各自不长、加起来放不下也叠
+  assert.deepEqual(S.labelFit(req('x'.repeat(S.FLAT_NARROW_UNITS), 'y'.repeat(S.FLAT_ROW_UNITS - S.FLAT_NARROW_UNITS))).wide, false);
+  assert.deepEqual(S.labelFit(req('x'.repeat(S.FLAT_NARROW_UNITS), 'y'.repeat(S.FLAT_ROW_UNITS - S.FLAT_NARROW_UNITS + 1))).wide, true);
+  // alert 只有一个按钮：取消钮的字不算
+  assert.deepEqual(S.labelFit(req('知道了', '一个很长很长很长很长的取消', 'alert')), none);
+  assert.deepEqual(S.labelFit(null), none);
+  // 真走 makeRequest 收拾过的请求（按钮字截到 LABEL_MAX）
+  const r = S.makeRequest('confirm', '要删除吗？', { okLabel: '删'.repeat(60) }, { ok: '确定', cancel: '取消' });
+  assert.ok([...r.okLabel].length <= S.LABEL_MAX);
+  assert.deepEqual(S.labelFit(r), { glass: true, narrow: true, wide: true });
 });
 
 // —— 空闲预取与 staleGuard（C2）——

@@ -1,0 +1,9 @@
+{
+  "name": "Hello app (example)",
+  "description": "How to write an app: a page-only plugin with no server code. It adds an icon to Home that opens a full-screen page, which shows a counter (saved data), a chat with Claude, and reading and writing a file you pick. Copy this folder and rename it to start your own app.",
+  "ui": {
+    "app": {
+      "hello": { "title": "Hello app" }
+    }
+  }
+}

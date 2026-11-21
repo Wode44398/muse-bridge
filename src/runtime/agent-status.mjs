@@ -83,6 +83,13 @@ const AUTHED = {
     return (!!sa && existsSync(sa)) || existsSync(gcloudAdc());
   },
   codex: () => !!process.env.OPENAI_API_KEY || existsSync(path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json')),
+  agy: () => {
+    const fn = getModule('agy')?.agyAuthed;
+    if (typeof fn === 'function') return !!fn();
+    if (GEMINI_API_KEY || process.env.GEMINI_API_KEY) return true;
+    const dir = path.join(os.homedir(), '.gemini', 'antigravity-cli');
+    return existsSync(path.join(dir, 'acp_auth_state.json')) || existsSync(path.join(dir, 'oauth_creds.json')) || existsSync(path.join(dir, 'google_accounts.json'));
+  },
   dimensio: () => {
     const KEY_RE = /^\s*(ANTHROPIC|DEEPSEEK|ZHIPU|KIMI|MOONSHOT|QWEN|DASHSCOPE|GEMINI|OPENAI|MIMO)_API_KEY\s*=\s*\S+/m;
     if (Object.keys(process.env).some((k) => /^(ANTHROPIC|DEEPSEEK|ZHIPU|KIMI|MOONSHOT|QWEN|DASHSCOPE|GEMINI|OPENAI|MIMO)_API_KEY$/.test(k) && process.env[k])) return true;
@@ -123,6 +130,7 @@ export function enabledAgents() { return AGENT_IDS.filter(agentEnabled); }
 
 const NOT_RUNNABLE_NOTE = {
   codex: '没找到 Codex CLI',
+  agy: '没找到 Antigravity CLI',
   dimensio: '程序目录里缺 harness',
 };
 
@@ -142,6 +150,7 @@ export function agentStatusList() {
     id: a.id,
     label: a.label,
     multiUser: a.multiUser,
+    fullTrust: a.fullTrust === true,
     switch: switches[a.id] !== false,
     runnable: !!p.runnable[a.id],
     authed: !!p.authed[a.id],

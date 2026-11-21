@@ -16,6 +16,8 @@
 // 预检就失败、所有请求一起挂，新前端连旧 bridge 时正是这样。没报 = 0（M10 之前的前端）。
 // 服务端按它分流的第一处是 M9（附着改造）；在那之前只是约定好、先让新装的 apk 都带上。
 
+import { sharedBrowser, sharedTerminal } from "./bridge-runtime.ts";
+
 export const PROTOCOL = 1;
 // 0 = M10 之前、不报协议号的前端也照常服务（到今天为止的改动全是 additive）
 export const MIN_CLIENT = 0;
@@ -91,7 +93,14 @@ export const CAPABILITIES = [
   "project-mode",
 ] as const;
 
-export type Capability = (typeof CAPABILITIES)[number];
+// 按这次怎么拉起而定的能力位（不在上面的固定表里）：嵌在 bridge 里、终端 / 浏览器用 bridge 核心运行时的那一个时才报
+// （bridge-runtime.ts）。前端据此把工作区的终端 / 浏览器面板换成 bridge 的共用面板：
+//   shared-terminal：Terminal 工具操作的是 bridge 的 /api/claude/term/*?ws=<会话工作区> 那个 PTY；
+//   shared-browser：Browser / ReadPage / Eval / Network 操作的是 bridge 的 /api/claude/browser/*?ws=<会话工作区>&session=d_<会话 id>
+//   （/api/browser/state、/api/browser/isolate 转给 bridge；本地的 browser_mount 事件不再发，挂载灯看 bridge 的 browser.mount）。
+export const RUNTIME_CAPABILITIES = ["shared-terminal", "shared-browser"] as const;
+
+export type Capability = (typeof CAPABILITIES)[number] | (typeof RUNTIME_CAPABILITIES)[number];
 
 export interface ProtocolInfo {
   version: number;
@@ -100,5 +109,8 @@ export interface ProtocolInfo {
 }
 
 export function protocolInfo(): ProtocolInfo {
-  return { version: PROTOCOL, minClient: MIN_CLIENT, capabilities: [...CAPABILITIES] };
+  const runtime: Capability[] = [];
+  if (sharedTerminal()) runtime.push("shared-terminal");
+  if (sharedBrowser()) runtime.push("shared-browser");
+  return { version: PROTOCOL, minClient: MIN_CLIENT, capabilities: [...CAPABILITIES, ...runtime] };
 }

@@ -78,3 +78,11 @@ export function createStudio(S) {
   // 头图下面那一句状态：studioStatus（lib/settings/common.js）
   return { get stModal() { return stModal; }, set stModal(v) { stModal = v; }, get stTitles() { return stTitles; }, stPush };
 }
+
+export function createAgy(S) {
+  // 设置 › Antigravity（'ag-agy' 页 + 'agy:*' 子页；正文经懒加载入口挂载）
+  let agyModal = $state(false);
+  let agyTitles = $state({});
+  function agyPush(pid, title) { agyTitles[pid] = title; S.nav.push(pid); }
+  return { get agyModal() { return agyModal; }, set agyModal(v) { agyModal = v; }, get agyTitles() { return agyTitles; }, agyPush };
+}

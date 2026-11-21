@@ -16,6 +16,9 @@ import { z } from 'zod';
 import { kernel } from './state.mjs';
 
 export const CLAUDE_SLOT = 'claude.tools';
+// 插件工具 / 提示能声明给哪些 agent（spec.agents）。模型服务另有一张表（runtime/model-services.mjs MODEL_AGENTS）：
+// Antigravity 用不了插件提供的模型，但能经 bridge 的工具服务调插件工具（modules/agy 的工具中枢）。
+export const TOOL_AGENTS = Object.freeze(['claude', 'dimensio', 'agy']);
 
 // 内置 MCP 的键名（claude.mjs 与扩展中心连接器在用），插件 id 撞上就加前缀。
 const RESERVED = new Set(['snapshot', 'media', 'phone', 'phoneControl', 'browser', 'terminal', 'workspace', 'bridge', 'sessions',
@@ -105,6 +108,27 @@ export function audienceOk(who, turn) {
   return c.kind === 'admin' && !c.sandbox;
 }
 
+/** 这一轮里声明给某个非 Claude agent（dimensio / agy）的插件工具与说明：{ tools: [{ owner, spec }], prompts: [文本] }。 */
+export function agentContributions(agent, turn) {
+  const out = { tools: [], prompts: [] };
+  if (!kernel.started) return out;
+  for (const { item, owner } of kernel.slot(CLAUDE_SLOT).entries()) {
+    try {
+      if (item.kind === 'tool' && Array.isArray(item.spec.agents) && item.spec.agents.includes(agent)) {
+        checkTool(item.spec);
+        if (!audienceOk(item.spec.who || 'host', turn)) continue;
+        if (typeof item.spec.when === 'function' && !item.spec.when(turn)) continue;
+        out.tools.push({ owner, spec: item.spec });
+      } else if (item.kind === 'prompt' && Array.isArray(item.agents) && item.agents.includes(agent)) {
+        if (!audienceOk(item.who, turn)) continue;
+        const t = typeof item.text === 'function' ? item.text(turn) : item.text;
+        if (t && String(t).trim()) out.prompts.push(String(t).trim());
+      }
+    } catch (e) { console.error('[plugins] ' + owner + ' 给 ' + agent + ' 的贡献出错（跳过）：', e?.message || e); }
+  }
+  return out;
+}
+
 export function checkTool(spec) {
   if (!spec || !TOOL_NAME.test(spec.name || '')) throw new Error('工具名只能用字母、数字、下划线、连字符（≤48 字）：' + (spec && spec.name));
   if (typeof spec.handler !== 'function') throw new Error('工具 ' + spec.name + ' 缺 handler(args, turn)');
@@ -134,7 +158,7 @@ export function pluginClaudeTurn(turn, runTools = null) {
       }
       if (item.kind === 'tool') {
         const spec = item.spec;
-        if (Array.isArray(spec.agents) && !spec.agents.includes('claude')) continue;   // 只给 dimensio 的工具
+        if (Array.isArray(spec.agents) && !spec.agents.includes('claude')) continue;   // 只给别的 agent 的工具
         check(spec);
         if (!audienceOk(spec.who || 'host', turn)) continue;
         if (typeof spec.when === 'function' && !spec.when(turn)) continue;

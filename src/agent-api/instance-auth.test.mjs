@@ -108,6 +108,36 @@ test('媒体组按实例放行：打开 dimensio 后它那一项不再被设置�
   }
 });
 
+test('主机密钥自报身份限定在已知名单：自称 api / claude / 未知串一律归为 host，不能借头绕过白名单或改设置', async () => {
+  const tok = ensureHostSecret();
+  const catWith = async (agent) => (await (await fetch(base + '/agent/v1', {
+    headers: { authorization: 'Bearer ' + tok, 'x-bridge-agent': agent },
+  })).json());
+
+  // 即使 apiMedia 与 claudeMedia 默认均为 true，持主机密钥自报 'api' / 'claude' / 未知串仍归为 'host'，不能绕过
+  for (const spoofed of ['api', 'claude', 'unknown_agent']) {
+    const me = await call('whoami', {}, tok, { 'x-bridge-agent': spoofed });
+    assert.equal(me.status, 200);
+    assert.equal(me.body.data.you.kind, 'host');
+
+    const cat = await catWith(spoofed);
+    const img = cat.ops.find((o) => o.name === 'media.image');
+    assert.equal(img.available, false);
+    assert.match(img.unavailableReason, /不能生成媒体/);
+
+    // 自报 'api' 也不能绕过「同机实例不能修改 Media Studio 设置」的门禁
+    const setRes = await call('media.settings_set', { values: { claudeProactive: false } }, tok, { 'x-bridge-agent': spoofed });
+    assert.equal(setRes.status, 403);
+    assert.match(setRes.body.error.message, /同机 agent 实例不能改这组设置|没有装/);
+  }
+
+  // 已知名单内的同机实例（agy 默认开启 agyMedia，codex 默认关闭 codexMedia）各自按本实例白名单判定
+  const agyImgReason = (await catWith('agy')).ops.find((o) => o.name === 'media.image').unavailableReason || '';
+  assert.doesNotMatch(agyImgReason, /设置 › Media Studio|不能生成媒体/);
+  const codexImgReason = (await catWith('codex')).ops.find((o) => o.name === 'media.image').unavailableReason || '';
+  assert.match(codexImgReason, /设置 › Media Studio/);
+});
+
 test('bug 诊断：成员看不到服务端日志，管理员看得到', async () => {
   const m = await call('feedback.diagnose', {}, FRANK);
   assert.equal(m.body.ok, true);

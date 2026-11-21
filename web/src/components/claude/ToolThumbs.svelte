@@ -26,15 +26,42 @@
     openChatImage(toolKey(shots[i]), e.currentTarget, { items: shots.map(toolDescriptor), index: i });
   }
   $effect(() => () => clearTimeout(timer));
-  // 加载失败自愈（同 ChatMediaImage）：手机在家走局域网直连时 <img> 会整排裂图——fetch 失败会自动降回隧道，
-  // <img> 的地址却是渲染时算死的。① 局域网地址 → 隧道 ② 已是隧道就隔 1.5s 带 &r=1 再试一次（瞬时抖动）。
-  function onImgError(e) {
-    const img = e.currentTarget;
+  // 加载自愈（同 ChatMediaImage）：手机在家走局域网直连时 <img> 可能整排裂图，也可能请求一直挂着既不成功也不报错
+  // （维护者 11-21：局域网网速很好，缩略图却常年停在灰块上）。所以除了 error，还加看门狗：进入视口 8s 还没画出来就当失败。
+  // 失败处理：① 局域网地址 → 隧道 ② 已是隧道就隔 1.5s / 3s 带 &r=N 各再试一次（瞬时抖动）。
+  const STALL_MS = 8000;
+  const MAX_RETRY = 2;
+  function recover(img) {
     const next = mediaFallbackUrl(img.src);
-    if (next !== img.src) { img.src = next; return; }
-    if (img.dataset.retried) return;
-    img.dataset.retried = '1';
-    setTimeout(() => { if (img.isConnected) img.src = next + '&r=1'; }, 1500);
+    if (next !== img.src) { img.src = next; return true; }
+    const k = Number(img.dataset.retried || 0);
+    if (k >= MAX_RETRY) return false;
+    img.dataset.retried = String(k + 1);
+    const plain = next.replace(/&r=\d+$/, '');
+    setTimeout(() => { if (img.isConnected) img.src = plain + '&r=' + (k + 1); }, 1500 * (k + 1));
+    return true;
+  }
+  function selfHeal(img) {
+    let timer = 0, io = null, seen = false;
+    const painted = () => img.complete && img.naturalWidth > 0;
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { if (img.isConnected && !painted() && recover(img)) arm(); }, STALL_MS);
+    };
+    const onLoad = () => clearTimeout(timer);
+    const onError = () => { clearTimeout(timer); if (recover(img)) arm(); };
+    img.addEventListener('load', onLoad);
+    img.addEventListener('error', onError);
+    // loading=lazy 的图进视口才开始请求，看门狗也从进视口算起
+    if (typeof IntersectionObserver === 'function') {
+      io = new IntersectionObserver((es) => {
+        if (seen || !es.some((x) => x.isIntersecting)) return;
+        seen = true; io.disconnect(); io = null;
+        if (!painted()) arm();
+      });
+      io.observe(img);
+    } else if (!painted()) arm();
+    return { destroy() { clearTimeout(timer); if (io) io.disconnect(); img.removeEventListener('load', onLoad); img.removeEventListener('error', onError); } };
   }
   const label = (i) => (shots.length === 1 ? t('截图') : t('截图 {n}/{total}', { n: i + 1, total: shots.length }));
 </script>
@@ -47,10 +74,10 @@
       {@const i = offset + j}
       <button type="button" class="th" class:last={j === shown.length - 1} aria-label={label(i)}
         onpointerenter={(e) => { if (e.pointerType === 'mouse') enter(i); }} onpointerleave={leave} onclick={(e) => open(e, i)}>
-        <img src={s.thumb} alt="" loading="lazy" decoding="async" draggable="false" onerror={onImgError} />
+        <img src={s.thumb} alt="" loading="lazy" decoding="async" draggable="false" use:selfHeal />
         {#if hover === i}
           <span class="pop" role="tooltip">
-            <img src={s.thumb} alt="" onerror={onImgError} />
+            <img src={s.thumb} alt="" use:selfHeal />
             <span class="cap"><bdi class="nm">{s.caption}</bdi>{#if shots.length > 1}<span class="ct">{t('{n} / {total}', { n: i + 1, total: shots.length })}</span>{/if}</span>
           </span>
         {/if}

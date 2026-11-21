@@ -9,8 +9,9 @@
 // 第三方插件目录：
 //   bridge-plugin.json   { id, name, version, description, entry?（默认 index.mjs）, category?, requires?, restart?,
 //                          config?（配置 schema）, author?, homepage?, web?: { page: 'web/index.html' },
-//                          ui?: { panel, settings, who }（面板槽位，见 normUi）, engines?: { bridge: '>=6.70', pluginApi: 2 } }
+//                          ui?: { panel, settings, who, apps }（面板槽位与主页应用，见 normUi）, engines?: { bridge: '>=6.70', pluginApi: 2 } }
 //   index.mjs            export function apply(ctx, config) { … }   （或 export default { apply }）
+//                        清单没写 entry、目录里也没有 index.mjs = 纯页面插件：不跑服务端代码，但至少要声明一个页面（ui.apps / panel / settings）
 //   web/、README.md      可选
 // 代码里引 bridge 核心模块写 '@bridge/core/<src 下的相对路径>'（与 agent 扩展同一个解析钩子）。
 
@@ -25,6 +26,7 @@ import { BUILTIN_PLUGINS } from './catalog.mjs';
 import { MODULE_CATALOG, getModule, moduleStatus } from '../modules/registry.mjs';
 import { installCoreResolver } from '../modules/core-resolve.mjs';
 import { enginesProblem, hasUpperBound, PLUGIN_API_VERSION } from './engines.mjs';
+import { normApps } from './app-spec.mjs';
 
 export const MANIFEST = 'bridge-plugin.json';
 export const INSTALLED_PLUGINS_DIR = path.resolve(process.env.BRIDGE_PLUGINS_DIR || path.join(DATA_ROOT, 'plugins'));
@@ -50,20 +52,40 @@ export function readPluginDir(dir) {
   try { m = readJsonFile(file); } catch (e) { throw new PluginError(400, `${MANIFEST} 不是合法 JSON：${e.message}`); }
   if (!m || typeof m !== 'object') throw new PluginError(400, `${MANIFEST} 应为对象`);
   if (!ID_RE.test(m.id || '')) throw new PluginError(400, 'id 不合法（小写字母开头，只用小写字母、数字、连字符，≤48 字）');
+  const explicit = m.entry != null && m.entry !== '';
   const entry = String(m.entry || 'index.mjs');
-  const entryPath = path.resolve(dir, entry);
+  let entryPath = path.resolve(dir, entry);
   if (!entryPath.startsWith(path.resolve(dir) + path.sep)) throw new PluginError(400, 'entry 越出插件目录');
-  if (!existsSync(entryPath)) throw new PluginError(400, '缺入口文件 ' + entry);
+  if (!existsSync(entryPath)) {
+    // 清单明确写了 entry 却没这个文件：多半是写错了名字，照旧报错
+    if (explicit) throw new PluginError(400, '缺入口文件 ' + entry);
+    // 纯页面插件（只有网页、没有服务端代码）：没写 entry 也没有 index.mjs，但总得有个页面，否则装上什么也没有
+    const ui = normUi(m);
+    if (!ui.apps.length && !ui.panel && !ui.settings) {
+      throw new PluginError(400, '这个插件既没有入口文件也没有页面（缺入口文件 index.mjs；只有页面的插件要在清单 ui 里声明 apps / panel / settings）');
+    }
+    entryPath = null;
+  }
   // engines：要的 bridge 版本 / 插件接口版本这台满足不了就拒装、拒加载（engines.mjs）
   const why = enginesProblem(m);
   if (why) throw new PluginError(409, why);
   return { manifest: m, entryPath };
 }
 
-// 清单的界面声明 → { panel: { page, title, titleEn?, icon } | null, settings: 页面 | null, who: 'host' | 'members' }。
+// 入口模块的加载函数。纯页面插件（entryPath 为 null）用空 apply（同 catalog.mjs 的 gateOnly）：开关、页面、应用照常走内核。
+const pageOnly = async () => ({ apply() {} });
+function loaderOf(entryPath) {
+  if (!entryPath) return pageOnly;
+  const url = pathToFileURL(entryPath).href;
+  // rev 递增 = 重新加载：查询串让 Node 当成新模块；入口里的相对 import 由 core-resolve 的钩子带上同一个 rev。
+  return (rev) => import(url + (rev ? '?bpv=' + rev : ''));
+}
+
+// 清单的界面声明 → { panel: { page, title, titleEn?, icon } | null, settings: 页面 | null, who: 'host' | 'members', apps: [应用] }。
 // titleEn：英文界面用的标题（第三方插件没法往 bridge 的英文字典里加词；不给就照旧 tr(title)）。
 // 页面一律要在 web/ 下（由 /plugins/<id>/web/ 提供）；旧写法 web.page 等同 ui.panel.page。
-export function normUi(m) {
+// apps：主页应用（app-spec.mjs 的 normApps）；给了 dir 才查图标文件，给了 lint 数组就把丢弃的原因写进去（清单体检）。
+export function normUi(m, dir = null, lint = null) {
   const ui = m.ui && typeof m.ui === 'object' ? m.ui : {};
   const page = (v) => {
     const p = typeof v === 'string' ? v.replace(/\\/g, '/') : '';
@@ -78,7 +100,8 @@ export function normUi(m) {
     icon: /^[a-z][a-z0-9-]{0,23}$/.test(String(rawPanel.icon || '')) ? rawPanel.icon : 'puzzle',
   } : null;
   const settings = page(typeof ui.settings === 'string' ? ui.settings : ui.settings && ui.settings.page);
-  return { panel, settings, who: ui.who === 'members' ? 'members' : 'host' };
+  const apps = normApps(ui.apps, { dir, lint });
+  return { panel, settings, who: ui.who === 'members' ? 'members' : 'host', apps };
 }
 
 // ── 清单体检（不拒装，只提示）：未知字段、未知控件、能力声明、用了内部接口、英文界面 ───────────
@@ -101,8 +124,12 @@ export const PERMISSIONS = Object.freeze({
   models: '给 Claude / dimensio 提供模型服务（出现在它们的模型列表里）',
   events: '订阅 bridge 的事件（对话开始 / 结束、工具调用、登录……）',
   'claude.control': '拦截与改写 Claude 的每一步（钩子、审批策略、发出的消息、每轮参数）',
-  ui: '往 bridge 的界面里加卡片、菜单项、命令和工作台标签',
+  // ui 也管主页应用：详情页得让用户知道装了它主页会多出图标、点开是插件自己的全屏页面
+  ui: '往 bridge 的界面里加卡片、菜单项、命令、工作台标签和主页应用（图标 + 全屏页面）',
   auth: '提供外部登录方式',
+  // 页面权限。声明了也不等于能用——第一次用要使用者本人在 bridge 画的授权框里同意（plugins/page-grants.mjs）
+  'page.chat': '在应用页面里以你的身份和 Claude 对话',
+  'page.files': '读写你在选择器里选中的文件',
 });
 const MAX_SCAN_FILES = 300;
 
@@ -175,8 +202,9 @@ export function inspectManifest(m, dir, source) {
 
 function entryOf(dir, source) {
   const { manifest: m, entryPath } = readPluginDir(dir);
-  const url = pathToFileURL(entryPath).href;
   const ins = inspectManifest(m, dir, source);
+  // 应用声明的问题（丢掉的、图标不对的）并进清单体检
+  const ui = normUi(m, dir, ins.lint);
   const api = m.engines && Number.isInteger(Number(m.engines.pluginApi)) && m.engines.pluginApi != null ? Number(m.engines.pluginApi) : 2;
   return {
     id: m.id,
@@ -192,12 +220,11 @@ function entryOf(dir, source) {
     defaultEnabled: m.defaultEnabled !== false,
     config: m.config || null,
     web: m.web && typeof m.web === 'object' ? { page: typeof m.web.page === 'string' ? m.web.page : null } : null,
-    extra: { ui: normUi(m), lint: ins.lint, permissions: ins.permissions, internal: ins.internal, i18n: ins.i18n },
+    extra: { ui, lint: ins.lint, permissions: ins.permissions, internal: ins.internal, i18n: ins.i18n },
     pluginApi: api,
     source,
     dir,
-    // rev 递增 = 重新加载：查询串让 Node 当成新模块；入口里的相对 import 由 core-resolve 的钩子带上同一个 rev。
-    load: (rev) => import(url + (rev ? '?bpv=' + rev : '')),
+    load: loaderOf(entryPath),
   };
 }
 
@@ -242,8 +269,7 @@ export function overrideInfo(id) {
     if (!m || m.id !== id) throw new PluginError(400, '清单里的 id 对不上');
     if (!hasUpperBound(m.engines?.bridge)) throw new PluginError(400, 'engines.bridge 没写适用到哪一版 bridge（盖内置功能的版本必须有上界）');
     const { entryPath } = readPluginDir(dir);
-    const url = pathToFileURL(entryPath).href;
-    return { dir, version, config: m.config ?? null, ui: normUi(m), load: (rev) => import(url + (rev ? '?bpv=' + rev : '')) };
+    return { dir, version, config: m.config ?? null, ui: normUi(m, dir), load: loaderOf(entryPath) };
   } catch (e) {
     return { dir, version, error: String(e?.message || e) };
   }

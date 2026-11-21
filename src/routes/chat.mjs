@@ -25,7 +25,7 @@ import { billingUser, quotaBlock } from '../runtime/quota.mjs';
 import { noteTurnStart } from '../users.mjs';
 import { writeSseHeaders, sseWrite } from '../runtime/sse.mjs';
 import { UPLOADS, MODEL } from '../config/index.mjs';
-import { contextFor, replayHeadersOf } from '../runtime/identity.mjs';
+import { contextFor, replayHeadersOf, INTERNAL_IDENTITY } from '../runtime/identity.mjs';
 import { findExternalHolder } from '../runtime/external-holder.mjs';
 import { findGenBySession } from '../runtime/gen.mjs';
 import { setQueueReplayer, fakeRequest, fakeResponse, listQueue, enqueue, enqueueFront, removeItem, moveItem, clearQueue, drain as drainQueue } from '../runtime/claude-queue.mjs';
@@ -36,6 +36,18 @@ import { projectSourceNote } from './project-mode.mjs';
 import { registerPermissionRoutes } from '../runtime/permissions.mjs';
 import { supersedeOffer } from '../runtime/session-proposals.mjs';
 import { startTurnTiming, markTurn, handedTurn } from '../runtime/turn-timing.mjs';
+
+// 内部字段 pluginOrigin（插件应用页面开的会话，plugins/page-chat.mjs）：只认带进程内身份标记（INTERNAL_IDENTITY）的请求、
+// 只对新会话、快照轮不给。清洗：插件 id / 应用 id 照命名规则，标签一行、≤60 字。不合格 = 不打标。
+export function pluginOriginFor(req, parsed, { sessionId, isSnap } = {}) {
+  if (isSnap || sessionId || !req || !req[INTERNAL_IDENTITY]) return null;
+  const o = parsed && parsed.pluginOrigin;
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+  const plugin = String(o.plugin || '');
+  if (!/^[a-z][a-z0-9-]{0,47}$/.test(plugin)) return null;
+  const app = /^[a-z][a-z0-9-]{0,31}$/.test(String(o.app || '')) ? String(o.app) : null;
+  return { plugin, app, label: String(o.label || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 60) };
+}
 
 // 这条请求的发起客户端（请求头 + JSON 体；排队消息重放时是当初那条的）。
 export function clientOf(headers, parsed, url = '/api/chat') {
@@ -228,16 +240,16 @@ export function registerChatRoutes(router, { authOk, identify }) {
       res.writeHead(403, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: label + ' 未启用，或你的账号没有使用权限' }));
     };
-    // Antigravity 已下线：老客户端仍可能发 agent:'antigravity'，显式回 410，别落进下面「认不出的按 Claude 跑」。
-    if (parsed.agent === 'antigravity' || parsed.agent === 'agy') {
-      res.writeHead(410, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Antigravity 已下线' }));
-      return;
-    }
     // Gemini 对话 2026-11-04 下线：老 apk 仍可能发 agent:'vertex'，同样显式 410（中文说明老 apk 直接显示）。
     if (parsed.agent === 'vertex' || parsed.agent === 'gemini') {
       res.writeHead(410, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: GEMINI_RETIRED }));
+      return;
+    }
+    // 新分页走 agent:'agy'；对仍发 agent:'antigravity' 的请求显式回 410，避免静默回落进默认 Claude 分支。
+    if (parsed.agent === 'antigravity') {
+      res.writeHead(410, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Antigravity 已下线' }));
       return;
     }
     // 功能扩展的 agent（codex）：扩展没装 = 这个 agent 不可用，同样回 403。
@@ -257,7 +269,12 @@ export function registerChatRoutes(router, { authOk, identify }) {
         if (block) { writeSseHeaders(res); sseWrite(res, { type: 'error', kind: 'quota', title: block.title, message: block.message }); res.end(); return; }
         try { noteTurnStart(billTo); } catch {}
       }
-      return handler(req, res, { parsed, message, sessionId, ctx, attachments });
+      // client：这条消息从哪台客户端发来（扩展 agent 的设备工具 / 内嵌图表按它定默认设备与出图宽度）
+      const client = {
+        fromPhone: fromPhone === true, fromComputer: fromComputer || '', narrow: narrow === true,
+        origin: chatOrigin(ctx, { headers: req.headers, body: parsed, url: req.url }),
+      };
+      return handler(req, res, { parsed, message, sessionId, ctx, attachments, client });
     }
     let model = claudeModelOk(parsed.model) ? parsed.model : (MODEL || undefined);
     // 快照（公开链接）禁用 Fable 时（分群设置 fable5，覆盖整个 Fable 5.x 档），把 Fable 请求
@@ -446,6 +463,10 @@ export function registerChatRoutes(router, { authOk, identify }) {
       body: parsed,
     };
     const restartResume = isSnap || !sessionId ? 0 : Math.max(0, Math.min(9, Number(parsed.restartResume) | 0));
+    // 插件应用页面开的会话（plugins/page-chat.mjs 经 internalRequest 代发）：只认带进程内身份标记的请求——
+    // 网络上来的请求在 body 里写 pluginOrigin 一律忽略，冒充不了「某插件应用替你开的会话」（那会让插件页面能续聊它）。
+    // 只对新会话生效：续聊沿用开会话时打的标。快照轮不给。
+    const pluginOrigin = pluginOriginFor(req, parsed, { sessionId, isSnap });
     return runClaudeChat(req, res, {
       message: fromNote ? fromNote + '\n\n' + message : message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, research, suggest, compactFrac, source, fromPhone, narrow, originDevice, fromComputer, autoRetry,
       origin: isSnap ? null : chatOrigin(ctx, { headers: req.headers, body: parsed, url: req.url, family }),
@@ -454,6 +475,7 @@ export function registerChatRoutes(router, { authOk, identify }) {
       ctx: claudeCtx,
       family: isSnap ? null : family,
       permissionMode, shape,
+      ...(pluginOrigin ? { pluginOrigin } : {}),
     });
   }
 

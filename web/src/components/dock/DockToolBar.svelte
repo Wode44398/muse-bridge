@@ -9,8 +9,8 @@
   import { session } from '../../lib/state.svelte.js';
   import { toggleRail, railVisible } from '../../lib/sessionRail.svelte.js';
   import { IS_CSNAP } from '../../lib/csnap.js';
-  import { dock, toggleDockView, closeDock, ensureDockMeta, dockToolOk, dockToolLabel, dockToolIcon, DOCK_TOOLS, browserMountedNow } from '../../lib/dock.svelte.js';
-  import { workbenchKeys } from '../../lib/pluginUi.svelte.js';
+  import { dock, toggleDockView, closeDock, ensureDockMeta, claudeHost, claudeTools, dockSnapMode, browserMountedNow } from '../../lib/dock.svelte.js';
+  import { toolAllowed } from '../../lib/dock/tools.js';
   import { bgHoldNow } from '../../lib/chat.svelte.js';
   import { dockIcon } from '../../lib/dockIcons.js';
   import { t } from '../../lib/i18n.js';
@@ -20,19 +20,25 @@
   const flat = typeof matchMedia !== 'undefined' && !matchMedia('(pointer: coarse)').matches;
   const fg = !flat && (typeof location === 'undefined' || !new URLSearchParams(location.search).has('oldglass'));
 
-  const BAR = ['term', 'review', 'browser'];          // 标题栏常驻三颗（官方同款），其余收进 ⋮
+  // 工具表就是 Claude 宿主那一份（共用工具 + 任务 + 插件的工作台标签），这里只管怎么分摆：
+  // 标题栏常驻三颗（官方同款），其余收进 ⋮——先是文件 / 记忆 / 任务，后面跟插件标签和以后新登记的共用工具。
+  const BAR = ['term', 'review', 'browser'];
   const MORE = ['files', 'memory', 'tasks'];
-  const KBD = Object.fromEntries(DOCK_TOOLS.map((x) => [x.key, x.kbd]));
-  const barTools = $derived(BAR.filter(dockToolOk));
-  // ⋮ 里在内置三件之后跟插件的工作台标签（ctx.ui.workbench，'plg:<插件>:<id>'）
-  const moreTools = $derived([...MORE, ...workbenchKeys()].filter(dockToolOk));
+  const tools = $derived(claudeTools().filter((x) => toolAllowed(x, claudeHost, { snap: dockSnapMode() })));
+  const toolOf = (k) => tools.find((x) => x.key === k);
+  const pick = (order, rest) => [...order.filter(toolOf), ...(rest ? tools.map((x) => x.key).filter((k) => !BAR.includes(k) && !MORE.includes(k)) : [])];
+  const barTools = $derived(pick(BAR, false));
+  const moreTools = $derived(pick(MORE, true));
+  const dockToolLabel = (k) => toolOf(k)?.label || '';
+  const dockToolIcon = (k) => toolOf(k)?.icon || '';
+  const kbdOf = (k) => toolOf(k)?.kbd || '';
   const isOn = (k) => dock.open && dock.views.includes(k);
   // 浏览器：状态灯——这个对话的浏览器里有标签（已挂载）就亮，卡片开着也亮；关掉最后一个标签 / 浏览器被关即灭。
   // 终端动了手、本轮挂着等后台任务，而对应卡片没开：那颗开关亮呼吸点（点开即清）
   const bgLive = $derived(!!bgHoldNow());
   const live = (k) => (k === 'browser' ? browserMountedNow() : !isOn(k) && ((k === 'term' && dock.termLive) || (k === 'tasks' && bgLive)));
   const moreLive = $derived(moreTools.some(live));
-  const tip = (k) => (KBD[k] ? t('{label}（{kbd}）', { label: dockToolLabel(k), kbd: KBD[k] }) : dockToolLabel(k));
+  const tip = (k) => (kbdOf(k) ? t('{label}（{kbd}）', { label: dockToolLabel(k), kbd: kbdOf(k) }) : dockToolLabel(k));
 
   // 开关组要知道这个身份有没有 shell（终端 / 浏览器给不给）——meta 在工作台没开时也得有
   $effect(() => { if (dock.ws && !dock.meta) ensureDockMeta(); });
@@ -57,7 +63,7 @@
       window.removeEventListener('bridge-pane-away', away);
     };
   });
-  function pick(k) { moreOpen = false; toggleDockView(k); }
+  function choose(k) { moreOpen = false; toggleDockView(k); }
 </script>
 
 <div class="tbar" class:fg class:flat class:split class:docked style:top={docked ? null : top} bind:this={barEl}>
@@ -83,11 +89,11 @@
   {#if moreOpen}
     <div class="tb-menu" role="menu">
       {#each moreTools as k (k)}
-        <button class="mi" role="menuitemcheckbox" aria-checked={isOn(k)} onclick={() => pick(k)}>
+        <button class="mi" role="menuitemcheckbox" aria-checked={isOn(k)} onclick={() => choose(k)}>
           <span class="mi-ic">{@html dockToolIcon(k)}</span>
           <span class="mi-lab">{dockToolLabel(k)}</span>
           {#if live(k)}<span class="mi-live"></span>{/if}
-          {#if KBD[k]}<span class="mi-kbd">{KBD[k]}</span>{/if}
+          {#if kbdOf(k)}<span class="mi-kbd">{kbdOf(k)}</span>{/if}
           <span class="mi-ck">{#if isOn(k)}{@html dockIcon('check')}{/if}</span>
         </button>
       {/each}
@@ -106,7 +112,7 @@
   /* 贴宿主右上角。z 压过盖在正文上的工作台（overlay 32）。
      右距：宿主格的右缘；桌面壳下贴着窗口右缘的那一格还要让出系统窗控（--pane-wco-r 由宿主按格下发，
      没下发就用全局 --wco-right）。docked 时工作台子树里 --sat / --wco-right 已归零，改读工作台在自己
-     身上存下的 --dk-sat / --dk-wco-r（见 ClaudeDock）。 */
+     身上存下的 --wb-sat / --wb-wco-r（见 Workbench）。 */
   .tbar {
     position: absolute; right: 10px; z-index: 34; height: 36px; border-radius: 12px;
     display: flex; align-items: center; gap: 1px; padding: 0 4px;
@@ -116,7 +122,7 @@
     color: var(--serif);
   }
   :global(html[data-theme="light"]) .tbar { background: rgba(248, 248, 246, .5); }
-  .tbar.docked { top: calc(var(--dk-sat, 0px) + 10px); }
+  .tbar.docked { top: calc(var(--wb-sat, 0px) + 10px); }
   .tb {
     position: relative; flex: none; width: 32px; height: 28px; border-radius: 8px;
     display: flex; align-items: center; justify-content: center; color: var(--serif);
@@ -170,7 +176,7 @@
     right: calc(6px + var(--pane-wco-r, var(--wco-right, 0px)));
   }
   :global(html[data-wco="1"]) .tbar.docked, :global(html[data-wco-band="1"]) .tbar.docked {
-    right: calc(6px + var(--dk-wco-r, 0px));
+    right: calc(6px + var(--wb-wco-r, 0px));
   }
   :global(html[data-wco="1"]) .tb, :global(html[data-wco-band="1"]) .tb { height: 26px; width: 30px; border-radius: 7px; }
 

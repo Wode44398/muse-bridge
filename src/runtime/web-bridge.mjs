@@ -43,7 +43,7 @@ const TRAFFIC_LINGER_MS = 4_000;
 // 观看类方法不点亮「正在操作」
 const PASSIVE_METHODS = new Set(['Page.screencastFrameAck', 'Page.startScreencast', 'Page.stopScreencast']);
 
-export const AGENT_LABEL = { claude: 'Claude', codex: 'Codex', dimensio: 'dimensio', admin: '管理员', agent: 'Agent' };
+export const AGENT_LABEL = { claude: 'Claude', codex: 'Codex', dimensio: 'dimensio', agy: 'Antigravity', admin: '管理员', agent: 'Agent' };
 const KIND_LABEL = { edge: 'Edge', chrome: 'Chrome', chromium: 'Chromium', brave: 'Brave' };
 export const kindLabel = (k) => KIND_LABEL[k] || (k ? k[0].toUpperCase() + k.slice(1) : '浏览器');
 

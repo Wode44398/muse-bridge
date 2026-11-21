@@ -10,7 +10,7 @@
   }
 </script>
 
-<button class="sw" class:on={checked} {disabled} role="switch" aria-checked={checked} onclick={toggle}>
+<button type="button" class="sw" class:on={checked} {disabled} role="switch" aria-checked={checked} onclick={toggle}>
   <span class="knob"></span>
 </button>
 

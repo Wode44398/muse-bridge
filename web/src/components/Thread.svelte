@@ -1,6 +1,6 @@
 <script>
   import { tick } from 'svelte';
-  import { chat, answerQuestion, send, rewindToMessage, attImgFallback, openSession, retractSteer } from '../lib/chat.svelte.js';
+  import { chat, answerQuestion, send, rewindToMessage, attImgFallback, openSession, retractSteer, forceSteer } from '../lib/chat.svelte.js';
   import { IS_CSNAP } from '../lib/csnap.js';
   import { session, settings, prefs, ui } from '../lib/state.svelte.js';
   import { switchPageTheme } from '../lib/homeTheme.js';
@@ -498,8 +498,9 @@
               {/if}
               {#if seg.cancelled}<span class="steer-tag">{t('已撤回')}</span>
               {:else if steerVirtual}
-                <!-- Claude 读到之前这条是「虚」的：可撤回到输入栏（↑ / 工作中 Esc 同效） -->
-                <span class="steer-tag">{t('插话 · 等 Claude 做完这一步就读')}{#if seg.retractable}<button class="steer-undo" disabled={seg.retracting} onclick={() => retractSteer(seg.uuid)} title={t('撤回到输入栏（↑ 或 Esc）')}>{seg.retracting ? t('撤回中…') : t('撤回')}</button>{/if}</span>
+                <!-- Claude 读到之前这条是「虚」的：可撤回到输入栏（↑ / 工作中 Esc 同效），
+                     也可「立即打断」——不等这一步做完，停掉当前这一步、把这条当下一轮发出（Shift+Esc 同效） -->
+                <span class="steer-tag">{t('插话 · 等 Claude 做完这一步就读')}{#if seg.retractable}<button class="steer-undo" disabled={!!seg.retracting} onclick={() => forceSteer(seg.uuid)} title={t('不等这一步做完：停下当前这一步，马上发出这条（Shift+Esc）')}>{seg.retracting === 'force' ? t('打断中…') : t('立即打断')}</button><button class="steer-undo" disabled={!!seg.retracting} onclick={() => retractSteer(seg.uuid)} title={t('撤回到输入栏（↑ 或 Esc）')}>{seg.retracting === 'retract' ? t('撤回中…') : t('撤回')}</button>{/if}</span>
               {/if}
             </div>
           {:else if seg.kind === 'media'}

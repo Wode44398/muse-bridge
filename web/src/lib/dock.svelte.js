@@ -1,366 +1,55 @@
-// Claude 分页右侧工作台（dock）的共享状态 + 小工具。
-// 入口=每一格右上角标题栏带里的工具开关（Claude 桌面版同款；手机仍是两点键 + 底部 sheet）；
-// 六件：任务 / 审阅（worktree 概览）/ 终端（工作空间 PTY）/
-// 浏览器（agent 同款 CDP screencast）/ 文件（跳工作空间目录）/ 记忆（这个项目的 Claude 记忆导图）。
-// 面板一律按 dock.ws（当前会话工作空间绝对路径）作用域；切会话自动跟随。
+// 侧边工作区的状态入口：各 agent 分页的宿主实例与对外动作都从这里导出，实现在 ./dock/ 下——
+//   host.svelte.js  状态工厂（开关卡片、排布、meta、agent 动静提示）
+//   tools.js        共用工具登记表（新增一张，四个分页都有）
+//   claude / codex / agy.svelte.js  各分页的宿主与专属卡
+// 外壳是 components/dock/Workbench.svelte，共用面板在 components/dock/SharedPanel.svelte。
+import { hostOf } from './dock/host.svelte.js';
+import { claudeHost, claudeTools, claudeToolOk, snapMode } from './dock/claude.svelte.js';
+import { codexHost } from './dock/codex.svelte.js';
+import { agyHost } from './dock/agy.svelte.js';
 
-import { apiUrl } from './server.js';
-import { pluginOn, session } from './state.svelte.js';
-import { api, authHeaders } from './api.js';
-import { t, tc } from './i18n.js';
-import { dockIcon } from './dockIcons.js';
-import { isPluginView, workbenchByKey, openWorkbenchStandalone, uiIcon } from './pluginUi.svelte.js';
-import { inAndroidApp } from './pluginPanels.svelte.js';
+export { hostOf, registerDockHost, createDockHost } from './dock/host.svelte.js';
+export { readDockSse } from './dock/sse.js';
+export { claudeHost, claudeTools, dockContext, openTaskDetail, backToTaskList, closeTaskDetail, forgetTaskTool, useSnapDock,
+  browserMountedNow, noteBrowserMount, refreshBrowserMount } from './dock/claude.svelte.js';
+export { codexHost, codexTools } from './dock/codex.svelte.js';
+export { agyHost, agyTools, openAgyAgentsPanel, pushAgyAgentTranscript, popAgyAgentTranscript, clearAgyAgentStack } from './dock/agy.svelte.js';
 
-// snap=聊天快照页（/c/<token>）：工作台只摆 审阅/文件/只读浏览器，终端没有。
-// 快照的 ws 是服务端锁死的桶目录，前端并不知道（也不该知道）真实路径——这里放一个占位串
-// 让 ws 相关的守卫/{#key} 照常工作，后端对 snap 身份一律忽略客户端传来的 ws。
-// filesTarget = 文件视图的定位目标（产物文件夹卡/agent goto 用）：
-//   { seq, rel, ws } —— ws 非空时文件页以该目录为根（服务端 /api/files?ws= 再授权一次），
-//   rel = 初始相对路径。seq 递增让宿主 {#key} 每次都重挂 FilesPanel（初始路径是 onMount
-//   一次性消费的）。null = 默认行为：以身份文件根打开、定位到会话工作空间目录。
-// tasksFocus = 「任务」视图要定位/高亮的工具行条目（点对话里的 Workflow 卡 / Agent 行进来），{ tool, seq }；
-// tasksAgent = 压在任务列表之上的子 agent 转录视图 { tool, wf }（wf = 工作流里那条 workflow_agent 记录，
-// Agent 工具的子 agent 为 null）——官方 pushPaneView('tasks', {kind:'subagent'}) 的对应物。
-// noAuto = agent 动了浏览器/终端时【不】自动拉开工作台，只亮提示点（分屏时两格都窄、工作台默认收着）。
-// —— 卡片（Claude 桌面版同款：标题栏里一排工具开关，每个开关管一张圆角卡片）——
-// views = 此刻开着的卡片（按打开先后）；view = 最近打开/聚焦的那一张（手机 sheet、视图上报、
-// 旧调用方都只认它）。open ≡ views 非空。
-// multi = 允许几张卡同时开（宿主按形态定：主窗口单格够宽才开；分屏格 / 独立窗口 / 折叠屏 /
-// 手机 sheet 一次只放一张——窄，而且终端、浏览器各占一条常驻 SSE，本机 HTTP/1.1 每主机只有
-// 6 条连接，多窗口各开一堆会把别的请求挤到排队）。max = 放大铺满这一格的那张卡（'' = 没有）。
-const claudeState = $state({ open: false, view: 'review', views: [], multi: false, max: '', ws: '', meta: null, browserLive: '', termLive: false, snap: false, filesTarget: null, tasksFocus: null, tasksAgent: null, noAuto: false });
-const codexState = $state({ open: false, view: 'review', ws: '', meta: null, browserLive: '', termLive: false });
+// —— Claude ——
+export const dock = claudeHost.state;
+export const openDock = (view) => claudeHost.open(view);
+export const closeDock = () => claudeHost.close();
+export const closeDockView = (view) => claudeHost.closeView(view);
+export const toggleDockView = (view) => claudeHost.toggleView(view);
+export const setDockWs = (ws) => claudeHost.setWs(ws);
+export const ensureDockMeta = () => claudeHost.ensureMeta();
+export const openDockFiles = (target) => claudeHost.openFiles(target);
+export const noteAgentBrowser = (url) => claudeHost.noteBrowser(url);
+export const noteAgentTerm = () => claudeHost.noteTerm();
+export const dockSnapMode = snapMode;
+export const dockToolOk = claudeToolOk;
+const claudeTool = (key) => claudeTools().find((x) => x.key === key);
+export const dockToolLabel = (key) => claudeTool(key)?.label || '';
+export const dockToolIcon = (key) => claudeTool(key)?.icon || '';
 
-function controller(state, initialView = 'review') {
-  const open = (view = initialView) => {
-    state.view = view;
-    state.open = true;
-    if (view === 'browser') state.browserLive = '';
-    if (view === 'term') state.termLive = false;
-  };
-  // 关闭 / 换工作空间都清掉文件定位：下次打开是干净的工作空间视图，不会莫名跳回上次那个
-  // 产物文件夹（同一次打开内切工具再切回来则保留，算连续浏览）。
-  const close = () => { state.open = false; state.filesTarget = null; };
-  const menu = () => { state.view = 'menu'; };
-  const setWs = (ws) => {
-    const next = ws || '';
-    if (state.ws === next) return;
-    state.ws = next;
-    state.meta = null;
-    state.filesTarget = null;
-  };
-  const noteBrowser = (url) => {
-    state.browserLive = url || state.browserLive || 'about:blank';
-    try { if (window.innerWidth >= 1024 && !state.open && !state.noAuto) c.open('browser'); } catch {}
-  };
-  // agent 在共享终端里动了手（SSE 'term' 事件）：宽屏自动拉开终端面板同屏；
-  // 窄屏亮提示点等用户自己点开（与 noteBrowser 同款行为）。
-  const noteTerm = () => {
-    if (state.open && (state.views ? state.views.includes('term') : state.view === 'term')) return;
-    state.termLive = true;
-    try { if (window.innerWidth >= 1024 && !state.open && !state.noAuto) c.open('term'); } catch {}
-  };
-  // noteBrowser / noteTerm 走 c.open：Claude 那份会把 open/close 换成按卡片的实现（见下）
-  const c = { state, open, close, menu, setWs, noteBrowser, noteTerm };
-  return c;
-}
+// —— Codex ——
+export const codexDock = codexHost.state;
+export const openCodexDock = (view) => codexHost.open(view);
+export const closeCodexDock = () => codexHost.close();
+export const setCodexDockWs = (ws) => codexHost.setWs(ws);
+// 浏览器按会话各开一份：会话 id = Codex 的线程 id（还没有 id 的新对话 = ''，用工作空间共用那份）
+export const setCodexDockSession = (sid) => { codexHost.state.sessionId = /^[A-Za-z0-9_-]{1,80}$/.test(sid || '') ? sid : ''; };
+export const noteCodexAgentBrowser = (url) => codexHost.noteBrowser(url);
 
-const claude = controller(claudeState, 'review');
-const codex = controller(codexState, 'review');
+// —— Antigravity ——
+export const agyDock = agyHost.state;
+export const openAgyDock = (view) => agyHost.open(view);
+export const closeAgyDock = () => agyHost.close();
+export const setAgyDockWs = (ws) => agyHost.setWs(ws);
+export const setAgyDockSession = (sid) => { agyHost.state.sessionId = sid || ''; };
+export const openAgyDockFiles = (target) => agyHost.openFiles(target);
+export const noteAgyAgentBrowser = (url) => agyHost.noteBrowser(url);
+export const noteAgyAgentTerm = () => agyHost.noteTerm();
 
-// Claude 这边的开/关按卡片走（Codex 侧列仍是一次一个视图，沿用 controller 那套）。
-const TOOL_KEYS = ['tasks', 'review', 'term', 'browser', 'files', 'memory'];
-function syncOpen() {
-  claudeState.open = claudeState.views.length > 0;
-  if (!claudeState.open) { claudeState.max = ''; claudeState.filesTarget = null; }
-  else if (claudeState.max && !claudeState.views.includes(claudeState.max)) claudeState.max = '';
-}
-// view 缺省 / 'menu'（旧入口：顶栏两点键、快照页）= 上次用的那张，没有就「审阅」。
-// 插件的工作台标签（'plg:<插件>:<id>'，lib/pluginUi）也是一张卡；手机 App 里不内嵌第三方页面，改成原生干净页面打开。
-const knownView = (k) => TOOL_KEYS.includes(k) || (isPluginView(k) && !!workbenchByKey(k));
-claude.open = (view) => {
-  if (isPluginView(view)) {
-    const w = workbenchByKey(view);
-    if (!w) return;
-    if (inAndroidApp()) { openWorkbenchStandalone(w, dockContext()); return; }
-  }
-  const v = knownView(view) ? view : (knownView(claudeState.view) ? claudeState.view : 'review');
-  const has = claudeState.views.includes(v);
-  claudeState.views = claudeState.multi ? (has ? claudeState.views : [...claudeState.views, v]) : [v];
-  claudeState.view = v;
-  // 放大着别的卡时点开这一张：放大态让给它，不然新卡被藏在后面等于没开
-  if (claudeState.max && claudeState.max !== v) claudeState.max = '';
-  if (v === 'browser') claudeState.browserLive = '';
-  if (v === 'term') claudeState.termLive = false;
-  syncOpen();
-};
-claude.close = () => { claudeState.views = []; syncOpen(); };
-
-export const dock = claude.state;
-export const codexDock = codex.state;
-
-export function openDock(view) {
-  claude.open(view);
-}
-
-export function closeDock() { claude.close(); }
-
-// 关掉一张卡；关的是最后一张 = 整个工作台收起。
-export function closeDockView(view) {
-  const rest = claudeState.views.filter((v) => v !== view);
-  if (rest.length === claudeState.views.length) return;
-  claudeState.views = rest;
-  if (claudeState.view === view && rest.length) claudeState.view = rest[rest.length - 1];
-  if (view === 'files') claudeState.filesTarget = null;
-  syncOpen();
-}
-
-// 标题栏工具开关 / 快捷键：开着就关这一张，没开就开（多卡形态下是加一张，不顶掉别的）。
-export function toggleDockView(view) {
-  if (claudeState.open && claudeState.views.includes(view)) closeDockView(view);
-  else claude.open(view);
-}
-
-// 放大 / 还原一张卡（铺满这一格，对话暂时让出来；再点一次还原）。
-export function toggleDockMax(view) {
-  claudeState.max = claudeState.max === view ? '' : view;
-}
-
-// —— 卡片排布（用户拖卡片标题行排出来的顺序，跨会话 / 重启都记着）——
-// a = 左列、b = 右列（各自从上到下）；六件全在、各出现一次。这一格放不下两列时按 a 再 b 叠成一列。
-// 默认同从前写死的两列：终端 / 审阅 / 任务一列，浏览器 / 文件 / 记忆（要宽）另一列。
-const COLS_LS = 'bridge-claude-dock-cols';
-const DEFAULT_COLS = { a: ['term', 'review', 'tasks'], b: ['browser', 'files', 'memory'] };
-export function normDockCols(c) {
-  const seen = new Set();
-  const take = (arr) => (Array.isArray(arr) ? arr : []).filter((v) => TOOL_KEYS.includes(v) && !seen.has(v) && seen.add(v));
-  const a = take(c?.a), b = take(c?.b);
-  // 新加的工具（或存坏了的）按默认列补到末尾
-  for (const v of TOOL_KEYS) if (!seen.has(v)) (DEFAULT_COLS.a.includes(v) ? a : b).push(v);
-  return { a, b };
-}
-function readCols() {
-  try { const s = localStorage.getItem(COLS_LS); if (s) return normDockCols(JSON.parse(s)); } catch {}
-  return normDockCols(DEFAULT_COLS);
-}
-export const dockCols = $state(readCols());
-export function setDockCols(c) {
-  const n = normDockCols(c);
-  dockCols.a = n.a; dockCols.b = n.b;
-  try { localStorage.setItem(COLS_LS, JSON.stringify(n)); } catch {}
-}
-// 别的窗口改了顺序（主窗口 + 拖出的对话窗共用一份偏好）：跟上
-try {
-  window.addEventListener('storage', (e) => {
-    if (e.key !== COLS_LS || !e.newValue) return;
-    try { const n = normDockCols(JSON.parse(e.newValue)); dockCols.a = n.a; dockCols.b = n.b; } catch {}
-  });
-} catch {}
-
-// 宿主形态变了（进分屏 / 窗口缩窄）：不许多卡时只留最近那张。
-export function setDockMulti(on) {
-  on = !!on;
-  if (claudeState.multi === on) return;
-  claudeState.multi = on;
-  if (!on && claudeState.views.length > 1) {
-    claudeState.views = [claudeState.views.includes(claudeState.view) ? claudeState.view : claudeState.views[claudeState.views.length - 1]];
-    syncOpen();
-  }
-}
-
-// 这个身份 / 这个工作空间能用哪些工具（标题栏开关、手机 sheet 的 chip 条共用一张表）。
-// 任务 = 官方 Tasks 侧栏（只读数据，快照访客也给）；终端只给有 shell 的身份、快照没有；
-// 浏览器快照访客给【只读直播】。meta 没到之前按「有 shell」乐观摆，别让开关闪一下再消失。
-export const DOCK_TOOLS = [
-  { key: 'term', label: t('终端'), kbd: 'Ctrl+`' },
-  { key: 'review', label: t('审阅'), kbd: 'Ctrl+Shift+G' },
-  { key: 'browser', label: t('浏览器'), kbd: 'Ctrl+Shift+B' },
-  { key: 'files', label: tc('claude', '文件'), kbd: 'Ctrl+Shift+E' },
-  { key: 'tasks', label: tc('claude', '任务'), kbd: '' },
-  { key: 'memory', label: tc('claude', '记忆'), kbd: '' },
-];
-export function dockSnapMode() { return claudeState.snap || claudeState.meta?.snap === true; }
-export function dockToolOk(key) {
-  const shell = !claudeState.meta || claudeState.meta.shell !== false;
-  const snap = dockSnapMode();
-  // 插件的工作台标签：快照访客不给（插件页面要插件票据 / 宿主代发，访客没有）
-  if (isPluginView(key)) return !snap && !!workbenchByKey(key);
-  // 终端 / 浏览器是可关的内置功能（插件 terminal / browser）
-  if (key === 'term') return shell && !snap && pluginOn('terminal');
-  if (key === 'browser') return (shell || snap) && pluginOn('browser');
-  // 记忆：快照访客不给（服务端 403）
-  if (key === 'memory') return !snap;
-  return TOOL_KEYS.includes(key);
-}
-
-// 工作台卡片 / 开关的名字与图标：内置六件查表，插件标签用它自己的标题与图标
-export function dockToolLabel(key) {
-  if (isPluginView(key)) return workbenchByKey(key)?.title || '';
-  return DOCK_TOOLS.find((x) => x.key === key)?.label || '';
-}
-export function dockToolIcon(key) {
-  if (isPluginView(key)) return uiIcon(workbenchByKey(key)?.icon);
-  return dockIcon(key);
-}
-// 插件工作台页面拿到的当前上下文（SDK 的 bridge.context()）：会话、工作目录、哪个 agent
-export function dockContext() {
-  return { sessionId: session.id || null, cwd: claudeState.ws || null, agent: 'claude' };
-}
-
-// 在工作台的「文件」视图里打开一个目录：产物文件夹/文件卡点开、agent 的 wsx goto 都走这里。
-// target = { rel, ws?, open? }（服务端算好的定位；ws 非空＝文件页以该目录为根；
-// open 非空＝列表加载后自动打开该文件的面板内预览——文件产物「点链接进工作区」走它）。
-let filesSeq = 0;
-export function openDockFiles(target = {}) {
-  claudeState.filesTarget = { seq: ++filesSeq, rel: target.rel || '', ws: target.ws || '', open: target.open || '' };
-  claude.open('files');
-}
-
-// —— 「任务」视图（官方 Tasks 侧栏）——
-// openTaskDetail(tool)：打开工作台的任务视图并定位到这条工具行（Workflow 卡 → 详细卡滚到可见；
-// Agent 行 → 直接压上它的子转录视图，官方点 Agent 行就是开转录）。opts.agent 传工作流里的一条
-// workflow_agent 记录时，压上的是那个 agent 的转录（磁盘 jsonl 轮询）。
-let taskSeq = 0;
-export function openTaskDetail(tool, opts = {}) {
-  if (!tool) return;
-  claudeState.tasksFocus = { tool, seq: ++taskSeq };
-  const wantAgent = opts.agent !== undefined ? opts.agent : (tool.name === 'Agent' || tool.name === 'Task' ? null : undefined);
-  claudeState.tasksAgent = wantAgent === undefined ? null : { tool, wf: wantAgent };
-  claude.open('tasks');
-}
-export function backToTaskList() { claudeState.tasksAgent = null; }
-export function closeTaskDetail() { claudeState.tasksFocus = null; claudeState.tasksAgent = null; }
-// 某条工具行从视图里被撤掉（对账整段替换 / 撤回）：别让面板盯着一个已不在列表里的旧 proxy
-export function forgetTaskTool(tool) {
-  if (claudeState.tasksFocus && claudeState.tasksFocus.tool === tool) claudeState.tasksFocus = null;
-  if (claudeState.tasksAgent && claudeState.tasksAgent.tool === tool) claudeState.tasksAgent = null;
-}
-
-// 会话切换/项目变化时由 ClaudePage 同步进来；ws 变化时面板经 {#key} 整体重建。
-export function setDockWs(ws) {
-  claude.setWs(ws);
-}
-
-// dock.meta 的唯一拉取口：工作台展开要它（rel/shell/snap），输入框上方的归属状态栏芯片
-// 也要它（branch/worktree），而后者在工作台没展开时就得有值。放这里做「每个 ws 只拉一次 +
-// 并发去重」，两边随便谁先要都行，不会打两遍。setWs 已把 meta 清空，换 ws 自然重拉。
-let metaWs = '';
-let metaInflight = null;
-export function ensureDockMeta() {
-  const ws = claudeState.ws;
-  if (!ws) return Promise.resolve(null);
-  if (claudeState.meta && metaWs === ws) return Promise.resolve(claudeState.meta);
-  if (metaInflight && metaWs === ws) return metaInflight;
-  metaWs = ws;
-  metaInflight = (async () => {
-    let m;
-    // 必须走 api.get 而不是裸 fetch：网络层失败要 noteNetFail/noteServerUnreachable
-    // 把 LAN 直连切回隧道并亮离线态，成功要 noteServerReachable 熄灭它。
-    // gone = 服务端 404（工作空间目录已不在盘上）：工作台据此如实说「文件夹不存在」，
-    // 别再落进「在云端文件区之外」那句——那句只对 rel==null 的库外目录成立。
-    let gone = false;
-    try { m = await api.get(`/api/claude/dock/meta?ws=${encodeURIComponent(ws)}`); } catch (e) { m = null; gone = e?.status === 404; }
-    if (!m) m = { rel: null, git: false, branch: null, worktree: false, shell: false, gone };
-    // 拉取期间可能已切走工作空间——晚到的结果不许盖到新 ws 头上
-    if (claudeState.ws === ws) claudeState.meta = m;
-    metaInflight = null;
-    return m;
-  })();
-  return metaInflight;
-}
-
-// 快照页（SnapPage）挂载时调一次：标记快照模式 + 给 ws 一个占位（真实桶路径在服务端）。
-export function useSnapDock() {
-  claudeState.snap = true;
-  claude.setWs('snap');
-}
-
-// agent 用了浏览器工具（SSE 'browser' 事件）：宽屏且人在 claude 页 → 自动拉开浏览器面板
-// （dimensio 同款行为）；否则只记 URL 亮提示点，等用户自己点开。
-export function noteAgentBrowser(url) {
-  claude.noteBrowser(url);
-}
-
-// agent 用了共享终端（SSE 'term' 事件）——行为对齐 noteAgentBrowser。
-export function noteAgentTerm() {
-  claude.noteTerm();
-}
-
-export const openCodexDock = (view = 'review') => codex.open(view);
-export const closeCodexDock = () => codex.close();
-export const setCodexDockWs = (ws) => codex.setWs(ws);
-export const noteCodexAgentBrowser = (url) => codex.noteBrowser(url);
-
-// —— 浏览器按会话（2026-11-08）——
-// Claude 页的浏览器一个对话一份（服务端 runtime/claude-browser.mjs）：面板的每个请求都带上这个对话的 id。
-// Codex 侧（codexDock）和还没发出第一条消息的新对话不带，仍是整个工作空间共用那一份。
-export const browserSessionOf = (state) => (state === claudeState && !claudeState.snap ? (session.id || '') : '');
-
-// 挂载状态灯：这个对话的浏览器里有没有标签（工具开关上的绿灯只看它）。
-// 来源三个：切会话 / 总线重连时拉一次 /browser/state；总线 browser.mount 事件；面板直播流的 tabs 事件。
-const mountBySession = $state({});
-export function browserMountedNow() {
-  const id = browserSessionOf(claudeState);
-  return !!(id && mountBySession[id]);
-}
-export function noteBrowserMount(sessionId, mounted) {
-  if (!sessionId) return;
-  if (mounted) mountBySession[sessionId] = true;
-  else delete mountBySession[sessionId];
-}
-export async function refreshBrowserMount() {
-  const id = browserSessionOf(claudeState);
-  const ws = claudeState.ws;
-  if (!id || !ws) return;
-  try {
-    const r = await api.get(`/api/claude/browser/state?ws=${encodeURIComponent(ws)}&session=${encodeURIComponent(id)}`);
-    noteBrowserMount(id, !!(r?.alive && Array.isArray(r.tabs) && r.tabs.length));
-  } catch { /* 没有浏览器权限 / 离线：灯保持原样 */ }
-}
-// 切会话、切工作空间时拉一次（module 级 effect：顶栏 / 工具开关 / 工作台哪个先挂都行）
-$effect.root(() => {
-  $effect(() => {
-    void session.id; void claudeState.ws;
-    if (claudeState.snap) return;
-    refreshBrowserMount();   // 没有浏览器权限的身份服务端回 403，静默忽略
-  });
-});
-
-// —— fetch 版 SSE 读取器（EventSource 带不了 Authorization 头；沿用 sse.js 的帧解析思路）——
-// onEvent 收 JSON 对象；返回 abort 函数。断流不自动重连——重连策略由各面板自己定。
-export function readDockSse(path, onEvent, { onDead, onClose } = {}) {
-  const ctrl = new AbortController();
-  (async () => {
-    let res;
-    try {
-      res = await fetch(apiUrl(path), { headers: authHeaders(), credentials: 'same-origin', signal: ctrl.signal });
-    } catch { if (!ctrl.signal.aborted) onClose?.(); return; }
-    // 第二个参数：服务端回的 JSON（{error}），面板据此给出具体原因（如设备离线、客户端太老）
-    if (!res.ok || !res.body) { onDead?.(res?.status || 0, res ? await res.json().catch(() => null) : null); return; }
-    const dec = new TextDecoder();
-    const reader = res.body.getReader();
-    let buf = '';
-    const drain = (chunk) => {
-      buf += chunk;
-      let idx;
-      while ((idx = buf.indexOf('\n\n')) >= 0) {
-        const frame = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        for (const line of frame.split('\n')) {
-          if (!line.startsWith('data:')) continue;
-          try { onEvent(JSON.parse(line.slice(5).trim())); } catch { /* malformed frame */ }
-        }
-      }
-    };
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        drain(dec.decode(value, { stream: true }));
-      }
-    } catch { /* aborted / network */ }
-    if (!ctrl.signal.aborted) onClose?.();
-  })();
-  return () => ctrl.abort();
-}
+// 浏览器按会话各开一份：面板只拿到自己的 state，回头问宿主这一份该带哪个会话 id（'' = 工作空间共用那份）
+export const browserSessionOf = (state) => hostOf(state)?.browserSession() || '';

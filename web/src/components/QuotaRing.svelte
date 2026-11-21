@@ -118,6 +118,19 @@
     if (ctxRow) return ctxSummary(ctxRow.used, ctxRow.total);
     return null;
   });
+  // 实时填充比分布新时，计量条与「距自动压缩」也跟着它走（11-20：标题 948k/95% 而条和提示还停在上份分布的
+  // 107k、写着「还有 860k」）：差额记到 Messages 类、从 Free 里扣，其余类别照旧。
+  const liveUsage = $derived.by(() => {
+    if (!usage || !ctxRow || !ctxRow.at || ctxRow.at <= (usage.at || 0)) return usage;
+    const used = Number(ctxRow.used) || 0, delta = used - (Number(usage.total) || 0);
+    if (!used || !delta) return usage;
+    const cats = (usage.categories || []).map((c) => {
+      if (/^messages$/i.test(String(c.name || ''))) return { ...c, tokens: Math.max(0, (c.tokens || 0) + delta) };
+      if (c.kind === 'free') return { ...c, tokens: Math.max(0, (c.tokens || 0) - delta) };
+      return c;
+    });
+    return { ...usage, categories: cats, total: used, pct: usage.max ? Math.round(used / usage.max * 100) : usage.pct };
+  });
   const hasCtx = $derived(!!ctx);
   const tightest = $derived(rows.filter((r) => r.pct != null).sort((a, b) => b.pct - a.pct)[0] || null);
   const planPeak = $derived(tightest ? Math.round(tightest.pct) : null);
@@ -163,7 +176,7 @@
     if (dragFrac != null) return isDefault(dragFrac) ? t('默认在 {tokens} 自动压缩', { tokens: fmtCompact(defaultAt) }) : t('到 {tokens} 自动压缩', { tokens: fmtCompact(compactAt) });
     const at = canTune ? compactAt : defaultAt;
     if (!at) return '';
-    const left = at - (Number(usage.total) || 0);
+    const left = at - (Number(liveUsage.total) || 0);
     if (left <= 0) return t('下一条消息前自动压缩');
     if (left < 30_000) return t('即将自动压缩');
     const n = Math.floor(left), step = 10 ** Math.max(0, String(n).length - 2);
@@ -209,7 +222,7 @@
 
   <!-- 弹层：上半权限模式（PermissionModePicker 自己的行），下半是这里的用量小节 -->
   <PermissionModePicker {open} {dir} ontoggle={toggle} onclose={() => (open = false)}>
-    {#snippet usage()}
+    {#snippet usageSection()}
       <!-- Context window：只认「正看的这个会话」自己的数据；greeting 空态不摆底噪。
            官方：有分布时计量条常显，展开（›）只是多出图例与小节；没分布只有粗填充时是一根 4px 条。 -->
       <div class="qb-sec">
@@ -223,7 +236,7 @@
             <div class="qb-note">{t('发一条消息后显示上下文用量')}</div>
           {:else if usage}
             <div class="qb-meter">
-              <ContextBreakdown {usage} compact={true} legend={expanded} />
+              <ContextBreakdown usage={liveUsage} compact={true} legend={expanded} />
               {#if canTune}
                 <!-- 原生 range 管拖动/键盘/读屏；它只铺在计量条的 [最小值, 100%] 那段上，左右再各外扩半个滑块宽
                     （7px），滑块中心才与计量条上的百分比位置对齐。看得见的手柄是下面那根竖条，range 本身全透明 -->

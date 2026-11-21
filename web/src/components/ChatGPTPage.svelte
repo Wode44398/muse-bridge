@@ -11,7 +11,7 @@
   import { ui, me, caps } from '../lib/state.svelte.js';
   import { closePage } from '../lib/pageMorph.js';
   import { codexCapabilities } from '../lib/caps.js';
-  import { codexDock, openCodexDock, closeCodexDock, setCodexDockWs, noteCodexAgentBrowser } from '../lib/dock.svelte.js';
+  import { codexDock, openCodexDock, closeCodexDock, setCodexDockWs, setCodexDockSession, noteCodexAgentBrowser } from '../lib/dock.svelte.js';
   import { noteFsChange } from '../lib/fsSync.svelte.js';
   import CodexWorkspace from './dock/CodexWorkspace.svelte';
   import ProjectPicker from './ProjectPicker.svelte';
@@ -50,7 +50,6 @@
   let pickOpen = $state(false);   // 新建项目选择器（远程端）
   // 工作区以【侧列】形态摆的门槛＝layout.side（折叠屏展开 ~750px 也算），不再是 1024。
   const wide = $derived(layout.side);
-  let workspaceName = $state('');
   let activeRun = null;
   let answer = '';
   let presentedAnswer = '';
@@ -479,12 +478,12 @@
       } else if (d.type === 'back') {
         closePage('chatgpt');   // 收回主页上的入口（与其它分页同一套返回）
       } else if (d.type === 'workspace-toggle') {
-        if (codexDock.open) closeCodexDock(); else openCodexDock(codexDock.view || 'review');
+        if (codexDock.open) closeCodexDock(); else openCodexDock();
       } else if (d.type === 'workspace-open') {
         if (['files', 'review'].includes(d.view)) openCodexDock(d.view);
       } else if (d.type === 'workspace-context') {
-        workspaceName = String(d.projectName || '');
         setCodexDockWs(String(d.path || ''));
+        setCodexDockSession(String(d.sessionId || ''));
       } else if (d.type === 'send') {
         beginTurn(d);
       } else if (d.type === 'stop') {
@@ -573,7 +572,7 @@
       </div>
     {:else if frameArmed}<iframe bind:this={frame} class:shown={frameShown} src={frameSrc} title="ChatGPT" allow="clipboard-write"></iframe>{/if}
   </div>
-  <CodexWorkspace {wide} {workspaceName} />
+  <CodexWorkspace {wide} />
   <!-- 新建项目选择器（远程端）：工作空间文件管理器 + 底部「拖入选为工作空间」栏 -->
   {#if pickOpen}
     <ProjectPicker preferPath={codexDock.ws || ''} onPick={createProjectAt} onClose={() => (pickOpen = false)} />

@@ -77,6 +77,15 @@ function hardStop(run) {
 // 权限通道、封顶计时都原样延续。返回 false = 不接（这一轮并没在挂起），调用方照旧顶掉重开。
 async function handoff(run, { res: nres, message: nmsg, attachments: natts, pin: npin, source: nsrc, model: nmodel, chatPrefs: nprefs, origin: norigin, family: nfam, permMode: nmode, permPolicy: npolicy, limitReplay: nreplay, auto: nauto }) {
   const { ctx, permPolicy, modelFor, billTo, turnInput } = run.plan;
+  // 软停止刚打断这一轮、result 还没回（停止键 / 插话「立即打断」之后紧跟着发来的这条）：等它定局——
+  // 转入挂起就照常接力（后台任务照跑），收尾了就回 false 走普通新一轮。以前这里直接回 false，
+  // 调用方见上一轮没收尾就 abort，连后台任务一起杀掉。interruptTimer 10s 没 result 会 abort，这里多等一点。
+  if (run.softStopping && !run.heldResult && !run.doneEmitted && !run.bgFinalized && !run.abort.signal.aborted) {
+    const until = Date.now() + 11_000;
+    while (run.softStopping && !run.heldResult && !run.doneEmitted && !run.bgFinalized && !run.abort.signal.aborted && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
   if (!run.heldResult || run.doneEmitted || run.bgFinalized || run.turnClosed || run.abort.signal.aborted) return false;
   // 权限策略不同不接（管理台代聊 = 宿主放行 / 用户自己发 = 弹卡）：停放复用靠 warmSig 分开，接力不过签名，要在这里拦。
   // 混用的后果：用户的这一轮全程宿主放行；或代聊把用户的会话模式改成 default、弹出控制台看不到的卡。

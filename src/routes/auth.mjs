@@ -71,6 +71,7 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
       canSnapshot: !!ctx?.canSnapshot && pluginOn('chat-snapshot'),
       service: !!ctx?.service,
       allowCodex: !!ctx?.allowCodex,
+      allowAgy: !!ctx?.allowAgy,
       allowDimensio: !!ctx?.allowDimensio,
     }));
   });
@@ -166,6 +167,12 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
     if (id.kind === 'admin') {
       const adm = adminCredential(req);
       if (adm && adm.via === 'session' && adm.token === bt) return send(200, { ok: true, kind: 'admin' }, [authCookie(req, bt), clearUserCookie(req)]);
+      // 页面带的是主令牌（旧版登录存下的）：cookie 里不放主令牌，换发一张管理员登录令牌（和 /api/login 同一步），
+      // 回给页面换上、cookie 也设成它——不然 cookie 还是上一个号的，桌面客户端按 cookie 认人就会把电脑登记到那个号名下。
+      if (adm && adm.via === 'master' && adm.token === bt) {
+        const tok = users.createAdminSession({ gen: adminGen, label: describeClient(req.headers['user-agent']), ip: clientIp(req) });
+        return send(200, { ok: true, kind: 'admin', token: tok }, [authCookie(req, tok), clearUserCookie(req)]);
+      }
       return send(200, { ok: true, kind: 'admin' });
     }
     send(401, { error: '这个账号的登录已失效，请重新登录' });

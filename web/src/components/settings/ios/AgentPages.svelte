@@ -23,7 +23,7 @@
 
   let { pid } = $props();
   const S = useSettings();
-  const { ag, cl, dm, dp, gen, nav, pol, pool, st } = S;
+  const { ag, agy, cl, dm, dp, gen, nav, pol, pool, st } = S;
 </script>
 {#snippet chev()}<Sym name="chevron.right" weight={600} size={13} class="chev" />{/snippet}
 {#snippet check()}<Sym name="checkmark" weight={600} size={15} class="ck" />{/snippet}
@@ -595,7 +595,18 @@
 {#snippet pAgent(id)}
   {@render agSwitch(id)}
   {#if id === 'dimensio'}{@render pDimensio()}
+  {:else if id === 'agy' && agentById('agy')}{@render pAgy('ag-agy')}
   {:else if !agentById(id)}{@render gfoot(t('只有管理员能改这里'))}{/if}
+{/snippet}
+
+{#snippet pAgy(pageId)}
+  {@const a = agentById('agy')}
+  {#await loadPage.agyIosSettings() then m}
+    {@const AgyBody = m.default}
+    <AgyBody pid={pageId} enabled={Boolean(a && a.switch && a.runnable)} push={agy.agyPush} pop={() => nav.pop()} onModal={(v) => { agy.agyModal = Boolean(v); }} />
+  {:catch}
+    {@render gfoot(t('Antigravity 设置没加载出来：这台服务器可能没装 Antigravity 扩展。'))}
+  {/await}
 {/snippet}
 
 <!-- ─────────────── Media Studio 页（2026-11-04 接替 Gemini 页）───────────────
@@ -682,6 +693,7 @@
 {:else if pid === 'model-hub'}{@render pModelHub()}
 {:else if pid === 'policy'}{@render pPolicy()}
 {:else if pid === 'studio' || pid.startsWith('st:')}{@render pStudio(pid)}
+{:else if pid.startsWith('agy:')}{@render pAgy(pid)}
 {:else if pid === 'ag-claude'}{@render pClaude()}
 {:else if DISPATCH_PAGES.includes(pid)}{@render pDispatch()}
 {:else if pid.startsWith('ag-')}{@render pAgent(pid.slice(3))}

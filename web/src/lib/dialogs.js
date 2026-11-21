@@ -7,7 +7,8 @@
 //
 // 签名与返回值保持不变（全站十几处在用）：
 //   uiAlert(message, { type, detail, title, danger, okLabel })                       → Promise<void>
-//   uiConfirm(message, { detail, okLabel, cancelLabel, type, danger, title })        → Promise<boolean>
+//   uiConfirm(message, { detail, okLabel, cancelLabel, type, danger, title, signal }) → Promise<boolean>
+//   （signal：AbortSignal，abort 等于点「取消」并关掉框；已结算再 abort 不起作用）
 // 新增的可选参数：danger（缺省 = type==='warning'，确认钮变红、默认焦点落到「取消」）、title（小标题）。
 //
 // 挂载：第一次调用时动态 import DialogHost 并 mount 到 document.body（SoloPage / SharePage / QuickAsk
@@ -43,10 +44,11 @@ export function uiConfirm(message, opts) {
   const o = opts && typeof opts === 'object' ? opts : {};
   // 没有 DOM（不该发生，留着防 SSR / 测试环境误调）：按取消处理，绝不默认放行危险操作
   if (!hasDom()) return Promise.resolve(false);
+  // signal：abort 等于点了「取消」、框当场退场（PluginFrame 替插件页面弹的框：页面走了就收掉）
   const p = request('confirm', message, {
     type: o.type ?? 'question', detail: o.detail, title: o.title, danger: o.danger,
     okLabel: o.okLabel, cancelLabel: o.cancelLabel,
-  }, defaults());
+  }, defaults(), o.signal || null);
   kick();
   return p;
 }

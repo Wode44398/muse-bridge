@@ -1,8 +1,10 @@
 // Shared media-tool factory for both MCP deployments:
 //   - phone bridge (in-process MEDIA_MCP, via @anthropic-ai/claude-agent-sdk)
 //   - desktop Claude Code (standalone stdio in mcp-media.mjs, via @modelcontextprotocol/sdk)
-// Both expose the same 4 tools (generate_image/video/speech/music) with the same
-// schemas and the same per-model clamps. The two flavors differ ONLY in:
+// Both expose the same tools (generate_image/video/speech/music + list_media_models) with the same
+// schemas and the same per-model clamps. 2026-11-18 起生成工具另收 params（卡上任意参数）/ negative / inputs（素材），
+// 手机版生图另有 continueFrom（续改链）；Claude 中断时任务跟着取消。
+// The two flavors differ ONLY in:
 //   - desktop schemas include `outputPath` (write to a user-chosen abs path)
 //   - phone emits gen_media_* SSE events so the page renders artifacts inline;
 //     desktop is silent
@@ -32,11 +34,13 @@ import {
 const IMG_TOOL_MODEL_DEFAULT = 'gemini-3.1-flash-image';
 
 // '<服务 id>/<模型 id>'：交给 Studio 按服务解析，参数按模型卡规范化（这里只把 Claude 给的常用参数原样带过去）
-const isKey = (m) => typeof m === 'string' && /^p-[0-9a-f]{6,12}\//.test(m);
-// 设置里选的默认模型（defaults(kind) → { key, label, bare? }）：bare = 它就是内置 Google 模型，照旧按裸 id 规范化
+// 设置里选的默认模型（defaults(kind) → { key, label, bare? }）：bare = 它就是内置 Google 模型，照旧按裸 id 规范化。
+// 给了 model 但不是内置裸 id（服务键 '<服务>/<模型>'，或别的写法）：原样交给 Studio 解析，找不到就照实报错——
+// 以前不认识的 model 会悄悄换成默认模型，Claude 以为用上了别的模型。
 const pickModel = (args, kind, known, fallback, defaults) => {
-  if (isKey(args.model)) return { key: args.model };
-  if (known.has(args.model)) return { bare: args.model };
+  const m = typeof args.model === 'string' ? args.model.trim() : '';
+  if (m && known.has(m)) return { bare: m };
+  if (m) return { key: m };
   const d = defaults && defaults(kind);
   if (d) return d.bare ? { bare: d.bare, key: d.key } : { key: d.key };
   return { bare: fallback };
@@ -94,11 +98,13 @@ function normVideo(args, defaults) {
 }
 
 function normSpeech(args, defaults) {
+  const pick = pickModel(args, 'speech', TTS_MODELS, TTS_MODEL_DEFAULT, defaults);
+  // 非内置 Google 配音模型（ElevenLabs、MiniMax…）的音色表各家不同：给了就原样传，不给用卡上的默认
+  if (!pick.bare) return { key: pick.key, model: pick.key, voice: args.voice || '', params: args.voice ? { voice: args.voice } : {} };
   const voice = TTS_VOICES.has(args.voice) ? args.voice : TTS_VOICE_DEFAULT;
-  const d = defaults && defaults('speech');
-  if (d && !d.bare) return { key: d.key, model: d.key, voice: args.voice || '', params: args.voice ? { voice: args.voice } : {} };
-  const model = d && d.bare && TTS_MODELS.has(d.bare) ? d.bare : TTS_MODEL_DEFAULT;
-  return { key: (d && d.key) || model, model, voice, params: { voice } };
+  // 设置里选的默认是 Google 模型但不在内置表里（新出的 TTS）：按键走，音色照内置表夹紧（Gemini TTS 各代音色同一套）
+  const model = TTS_MODELS.has(pick.bare) ? pick.bare : TTS_MODEL_DEFAULT;
+  return { key: pick.key || model, model, voice, params: { voice } };
 }
 
 function normMusic(args, defaults) {
@@ -125,6 +131,26 @@ const DESC = {
     generate_speech: 'Text-to-speech with Gemini TTS (Vertex AI). Returns the absolute path to the saved .wav. Voices include Kore (steady), Puck (upbeat), Zephyr (bright), Charon (deep), Fenrir, Aoede, Leda, Orus, Enceladus (breathy), Algieba. You can embed emotion tags inline in the text like [laughs], [whispers], [sighs].',
     generate_music: 'Generate a music clip or song with Google Lyria. SLOW (~1-2 min). Returns the absolute path to the saved audio. Prompting: describe genre + instruments + mood + tempo (bpm); English works best, e.g. "calm lo-fi hip hop, mellow piano, vinyl crackle, 80 bpm". Default lyria-002 (~30s WAV); lyria-3.5 makes a full ~1 min+ song and can sing (put lyrics with [Verse]/[Chorus] tags in the prompt); lyria-3-pro-preview can do up to 3 min (lyria-3* need the Gemini key).',
   },
+};
+
+// 素材、卡上参数、续改、查模型（2026-11-18）：接在各工具描述末尾（在默认模型的换句之后拼，不动 DEFAULT_SWAP 的锚句）
+const MORE = {
+  phone: {
+    generate_image: ' 改图 / 参考图：inputs 给素材（role edit = 改这张，ref = 参考主体或风格；path 写文件路径——工作空间、上传目录里的文件，或之前生成的作品回执里那个路径），接着改上一张用 continueFrom:作品 id（回执里有）。模型卡上的其它参数（张数、种子、画质、格式、透明背景等）放 params，不要的东西放 negative；用非默认模型、传素材或高级参数前，先用 list_media_models 查它收哪些素材和参数，别凭空猜键名。',
+    generate_video: ' 首帧 / 尾帧 / 参考图：inputs 给素材（role first / last / ref，path 写法同生图）。卡上的其它参数（生成音频、种子、条数、提示词增强等）放 params、负面词放 negative，键名与取值先用 list_media_models 查。',
+    generate_speech: ' 换配音模型传 model（服务键，list_media_models 查可用的模型与音色）；双人对白、语气等卡上的其它参数放 params。',
+    generate_music: ' 换模型传 model；卡上的其它参数放 params、不要的元素放 negative，部分模型收参考音频（inputs role audio）——先用 list_media_models 查。',
+  },
+  desktop: {
+    generate_image: ' To edit or use reference images pass inputs ([{ role: "edit" | "ref", path: <absolute path> }]). Other model-card params (count, seed, quality, format, transparent background…) go in params, unwanted content in negative. Before using a non-default model, inputs or advanced params, call list_media_models to see what that model accepts — do not guess param keys.',
+    generate_video: ' First / last frame or reference images: inputs [{ role: "first" | "last" | "ref", path: <absolute path> }]. Other params (generate audio, seed, count, prompt enhancement…) go in params, unwanted content in negative; check keys with list_media_models.',
+    generate_speech: ' Pass model (a service key from list_media_models) to use another TTS model; other card params (two-speaker dialogue, style…) go in params.',
+    generate_music: ' Pass model to switch models; other card params go in params, unwanted elements in negative; some models take a reference audio (inputs role "audio"). Check with list_media_models.',
+  },
+};
+const LIST_DESC = {
+  phone: '列出你能用的媒体模型——Media Studio 里的全部服务（含用户自己接的 fal / Replicate / OpenRouter / ElevenLabs 等）：模型键、能收的素材、参数键、默认模型。带 key 查某个模型全部参数的取值、默认值和生效条件（配音模型带音色）；q 按名字搜（含没列出的备选模型）。只读、不花钱。用非默认模型、传素材或高级参数前先查。',
+  desktop: 'List the media models available in Media Studio (all configured services, incl. fal / Replicate / OpenRouter / ElevenLabs): model keys, accepted inputs, param keys, defaults. Pass key to get one model\'s full param spec (values, defaults, conditions; voices for TTS models); q searches by name (incl. unlisted shelf models). Read-only, free. Call before using a non-default model, inputs or advanced params.',
 };
 
 // 描述里写死内置默认模型的句子：Studio 设置里选了默认模型（d = { key, label }）时就地换成它，不再只在末尾补一句——
@@ -202,6 +228,32 @@ const SCHEMA_SWAP = {
 // 换句用函数替换，免得 label / key 里的 $ 被当成替换模式
 const swapIn = (text, from, to) => text.replace(from, () => to);
 
+// 卡上参数 / 负面词 / 素材 / 续改（两种版本都有；素材的写法按版本不同：手机版收工作空间路径与作品 id，桌面版收绝对路径）
+const ROLES = ['edit', 'ref', 'first', 'last', 'audio', 'video'];
+const PARAMS_FIELD = z.record(z.string(), z.any()).optional().describe('模型卡上的其它参数，键名照 list_media_models 查到的写（如 { "count": 2, "seed": 7, "quality": "high" }）；原样交给 Studio 按卡规范化（越界的夹紧、不认识的丢掉），和上面同名的字段同时给时以这里为准。');
+const NEGATIVE_FIELD = z.string().optional().describe('负面提示词（不要出现什么），只在模型卡收 negative 时生效。');
+const inputsField = (flavor) => z.array(z.object({
+  role: z.enum(ROLES).describe('edit = 改这张图；ref = 参考图（主体 / 风格）；first / last = 视频首帧 / 尾帧；audio / video = 参考音频 / 视频'),
+  path: z.string().optional().describe(flavor === 'desktop'
+    ? 'absolute file path'
+    : '文件路径：工作空间里的（相对或绝对）、上传目录里的，或之前生成的作品回执里那个绝对路径'),
+  ...(flavor === 'desktop' ? {} : { asset: z.string().optional().describe('媒体库作品 id（和 path 二选一）') }),
+})).optional().describe('素材；哪些角色、几张按模型卡（list_media_models 查），不合就报错。');
+const SPEECH_MODEL_FIELD = z.string().optional().describe('可选配音模型键（服务 id/模型 id，list_media_models 查），不传 = Media Studio 设置里的默认配音模型。');
+const CONTINUE_FIELD = z.string().optional().describe('接着改哪张图：作品 id（生图回执里有）。会带上这条续改链的上下文；不支持多轮的模型拿上一张当参考图。');
+// 模块级建好、每次复用同一批 zod 对象（工具集每条消息重建，字段对象不变 = 序列化出的 schema 不变）
+const EXTRA_SCHEMAS = Object.fromEntries(['phone', 'desktop'].map((flavor) => {
+  const inputs = inputsField(flavor);
+  const media = { params: PARAMS_FIELD, negative: NEGATIVE_FIELD, inputs };
+  return [flavor, {
+    generate_image: { ...media, ...(flavor === 'desktop' ? {} : { continueFrom: CONTINUE_FIELD }) },
+    generate_video: media,
+    generate_speech: { model: SPEECH_MODEL_FIELD, params: PARAMS_FIELD },
+    generate_music: media,
+  }];
+}));
+const extraSchema = (flavor, key) => (EXTRA_SCHEMAS[flavor] || EXTRA_SCHEMAS.phone)[key] || {};
+
 const OUTPUT_PATH_FIELD = {
   outputPath: z.string().optional().describe('absolute path to write the file to (e.g. D:\\proj\\assets\\hero.png)'),
 };
@@ -209,7 +261,9 @@ const OUTPUT_PATH_FIELD = {
 // ---- Factory -----------------------------------------------------------
 // adapter: {
 //   newId: () => string,
-//   generate: (kind, body, { id, outputPath, onProgress }) => Promise<{ id, file, model?, width?, height?, params? }>
+//   generate: (kind, body, { id, outputPath, signal, onProgress }) => Promise<{ id, file, model?, width?, height?, params?, more?: [{ id, file }] }>
+//       body = { kind, key, prompt, params, negative?, inputs?: [{ role, path?, asset? }], continueFrom? }；signal abort = 取消任务；more = 同一次多出的几件
+//   models?: ({ kind?, key?, q? }) => Promise<string>,       // 有它才出 list_media_models
 //       走 Studio：phone = 任务执行器（作品落调用者的媒体库，id 就是作品 id）；desktop = 直接跑、写到 outputPath / genmedia
 //       图片可带回实际像素 width / height；params = 真正下发的参数（卡规范化之后），有它才查降档
 //   emit: (event) => void,                                  // phone: SSE gen_media_*; desktop: no-op
@@ -238,36 +292,51 @@ export function buildMediaTools({ flavor = 'phone', adapter, defaults = null }) 
       s = { ...s };
       for (const [f, [from, to]] of Object.entries(SCHEMA_SWAP[key])) s[f] = s[f].describe(swapIn(s[f].description, from, to(d)));
     }
+    s = { ...s, ...extraSchema(flavor, key) };
     return includeOutputPath ? { ...s, ...OUTPUT_PATH_FIELD } : s;
   };
   // 设了默认模型：描述里写死内置默认的句子就地换掉；没写死的工具在末尾补一句（都只在改过设置时出现）
   const describe = (name) => {
     const d = defaultOf(name);
-    if (!d) return desc[name];
-    if (swaps[name]) return swaps[name].reduce((t, [from, to]) => swapIn(t, from, to(d)), desc[name]);
+    const more = (MORE[flavor] || MORE.phone)[name] || '';
+    if (!d) return desc[name] + more;
+    if (swaps[name]) return swaps[name].reduce((t, [from, to]) => swapIn(t, from, to(d)), desc[name]) + more;
     return desc[name] + (flavor === 'desktop'
       ? ` Current default model (set in Media Studio settings): ${d.label} — omit model to use it, or pass model:"${d.key}".`
-      : ` 当前默认模型（Media Studio 设置里选的）：${d.label}，不传 model 就用它；也可传 model:"${d.key}"。`);
+      : ` 当前默认模型（Media Studio 设置里选的）：${d.label}，不传 model 就用它；也可传 model:"${d.key}"。`) + more;
   };
   const evKind = (kind) => (kind === 'speech' ? 'audio' : kind);
-  const gen = (kind, args, p, id) => adapter.generate(kind, {
-    kind, key: p.key, prompt: String((kind === 'speech' ? args.text : args.prompt) || ''), params: p.params,
-  }, { id, outputPath: args.outputPath, onProgress: (s) => adapter.emit({ type: 'gen_media_progress', id, kind: evKind(kind), elapsed: s }) });
+  const isObj = (o) => !!o && typeof o === 'object' && !Array.isArray(o);
+  const gen = (kind, args, p, id, signal) => adapter.generate(kind, {
+    kind, key: p.key, prompt: String((kind === 'speech' ? args.text : args.prompt) || ''),
+    // 卡上参数压在工具字段规范化的结果上面（同名以 params 为准），最终取值由 Studio 按卡再规范化一遍
+    params: isObj(args.params) ? { ...p.params, ...args.params } : p.params,
+    ...(typeof args.negative === 'string' && args.negative.trim() ? { negative: args.negative.trim() } : {}),
+    ...(Array.isArray(args.inputs) && args.inputs.length ? { inputs: args.inputs } : {}),
+    ...(typeof args.continueFrom === 'string' && args.continueFrom.trim() ? { continueFrom: args.continueFrom.trim() } : {}),
+  }, { id, outputPath: args.outputPath, signal, onProgress: (s) => adapter.emit({ type: 'gen_media_progress', id, kind: evKind(kind), elapsed: s }) });
 
   const tool = (name, kind, norm, promptOf) => ({
     name,
     description: describe(name),
     schema: schemaOf(name),
-    handler: async (args) => {
+    // extra.signal：Claude 这一轮被中断（用户点停）时 MCP 会 abort——交给适配器取消 Studio 任务，别在后台接着花钱
+    handler: async (args, extra) => {
       const id = adapter.newId();
-      const p = norm(args, defaults);
       adapter.emit({ type: 'gen_media_start', id, kind: evKind(kind) });
       try {
-        const r = await gen(kind, args, p, id);
+        const p = norm(args, defaults);
+        const r = await gen(kind, args, p, id, extra && extra.signal);
         // ext：存盘扩展名（前端下载名按它补，Nano Banana 2.1 出 jpg、语音出 wav）
         const ext = (/\.([a-z0-9]{2,5})$/i.exec(String(r.file || '')) || [])[1];
         adapter.emit({ type: 'gen_media', id: r.id, kind: evKind(kind), prompt: promptOf(args), ...(ext ? { ext: ext.toLowerCase() } : {}) });
-        const info = { ...p, model: r.model || p.model, prompt: promptOf(args), file: r.file, id: r.id };
+        // 一次出多件（params 里的张数 / 条数）：其余几件各推一段，回执里逐个列路径
+        for (const x of r.more || []) {
+          const e2 = (/\.([a-z0-9]{2,5})$/i.exec(String(x.file || '')) || [])[1];
+          adapter.emit({ type: 'gen_media_start', id: x.id, kind: evKind(kind) });
+          adapter.emit({ type: 'gen_media', id: x.id, kind: evKind(kind), prompt: promptOf(args), ...(e2 ? { ext: e2.toLowerCase() } : {}) });
+        }
+        const info = { ...p, model: r.model || p.model, prompt: promptOf(args), file: r.file, id: r.id, ...(r.more && r.more.length ? { more: r.more } : {}) };
         // 图片：回执报实际像素，不只回显请求档位。有真正下发的参数就按它的尺寸档（卡不收 imageSize 就没有，不报也不判）查降档
         if (r.width > 0 && r.height > 0) {
           Object.assign(info, { width: r.width, height: r.height });
@@ -281,10 +350,24 @@ export function buildMediaTools({ flavor = 'phone', adapter, defaults = null }) 
     },
   });
 
+  const list = typeof adapter.models === 'function' ? [{
+    name: 'list_media_models',
+    description: LIST_DESC[flavor] || LIST_DESC.phone,
+    schema: {
+      kind: z.enum(['image', 'video', 'speech', 'music']).optional().describe('只列这一种'),
+      key: z.string().optional().describe('模型键（服务 id/模型 id）：给了就回这个模型的完整参数说明'),
+      q: z.string().optional().describe('按名字 / 键搜，含没列出的备选模型'),
+    },
+    handler: async (args) => {
+      try { return { content: [{ type: 'text', text: await adapter.models(args || {}) }] }; }
+      catch (e) { return { isError: true, content: [{ type: 'text', text: '查模型失败：' + String(e?.message ?? e).slice(0, 200) }] }; }
+    },
+  }] : [];
   return [
     tool('generate_image', 'image', normImage, (a) => a.prompt),
     tool('generate_video', 'video', normVideo, (a) => a.prompt),
     tool('generate_speech', 'speech', normSpeech, (a) => a.text),
     tool('generate_music', 'music', normMusic, (a) => a.prompt),
+    ...list,
   ];
 }

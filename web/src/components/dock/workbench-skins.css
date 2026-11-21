@@ -1,0 +1,61 @@
+/* 侧边工作区的皮：四个分页共用同一份外壳（Workbench.svelte），各自只在这里给一套令牌。
+   --wb-*   = 外壳自己的（页面底、卡片色、卡片描边、圆角、带高、强调色、提示点、手机层级）
+   其余     = 共用面板（终端 / 浏览器 / 审阅 / 文件 / 记忆）认的通用令牌：--bg --text --muted --serif（次级文字色）
+              --hover --hover-strong --card --divider --coral（强调）--ok --card-shadow。
+   Claude 分页的通用令牌就是全站那套，不用再给。 */
+
+/* —— Claude：卡片比页面底亮一档 + 一圈细线 —— */
+.skin-claude { --wb-card: #262625; --wb-line: rgba(255, 255, 255, .085); }
+html[data-theme="light"] .skin-claude { --wb-card: #ffffff; --wb-line: rgba(0, 0, 0, .09); }
+
+/* —— Antigravity：页面底就是对话列的底，卡片亮一档；强调色用它自己的蓝 —— */
+.skin-agy {
+  --bg: var(--ag-bg); --text: var(--ag-on); --muted: var(--ag-on-dim); --serif: var(--ag-on);
+  --hover: var(--ag-hover); --hover-strong: var(--ag-active); --card: var(--ag-surface-1); --divider: var(--ag-divider);
+  --coral: var(--ag-accent); --ok: var(--ag-ok); --card-shadow: var(--ag-elev-shadow);
+  --wb-bg: var(--ag-bg); --wb-card: var(--ag-surface-1); --wb-line: rgba(255, 255, 255, .075);
+  --wb-band-h: var(--ag-top-h, 44px); --wb-accent: var(--ag-accent); --wb-on: var(--ag-accent); --wb-live: var(--ag-accent);
+  --wb-title: var(--ag-on); --wb-title-w: 540; --wb-head-ic: inline-flex; --wb-mobile-z: 55;
+  color: var(--ag-on);
+}
+.agy-root.light .skin-agy { --wb-card: #ffffff; --wb-line: rgba(0, 0, 0, .085); }
+.skin-agy .wb-card-t { font-size: 13px; }
+/* Antigravity 的图标规范：开着 / 选中的那一颗由线稿变实心（它的符号字靠 --ag-ico-fill 切填充） */
+.skin-agy [aria-pressed="true"] .msr4, .skin-agy [aria-selected="true"] .msr4 { --ag-ico-fill: 1; }
+
+/* —— Codex：ChatGPT 的中性灰与绿 —— */
+.skin-codex {
+  --bg: #171717; --text: #ececec; --muted: #a8a8a8; --serif: #ececec; --hover: #2f2f2f; --hover-strong: #383838;
+  --card: #2f2f2f; --divider: #383838; --coral: #10a37f; --ok: #10a37f; --card-shadow: none;
+  --wb-bg: #171717; --wb-card: #212121; --wb-line: rgba(255, 255, 255, .08);
+  --wb-accent: #10a37f; --wb-on: #10a37f; --wb-live: #10a37f; --wb-title: #ececec; --wb-title-w: 600;
+  --wb-head-ic: inline-flex; --wb-mobile-z: 74;
+  color: var(--text); font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.light .skin-codex {
+  --bg: #f7f7f8; --text: #0d0d0d; --muted: #6b6b6b; --serif: #0d0d0d; --hover: #ececec; --hover-strong: #e3e3e3;
+  --card: #ffffff; --divider: #e5e5e5;
+  --wb-bg: #f7f7f8; --wb-card: #ffffff; --wb-line: rgba(0, 0, 0, .09); --wb-title: #0d0d0d;
+}
+/* 手机整页没有卡片：面板直接铺在页面上，页面底用卡片那一档 */
+.skin-codex.wb-page { --bg: #212121; --wb-bg: #212121; }
+.light .skin-codex.wb-page { --bg: #ffffff; --wb-bg: #ffffff; }
+
+/* —— dimensio：外壳嵌在它的页面里（.hxroot），页面底、文字色就是它自己那套；这里把共用面板认的令牌映射过去 ——
+   卡片 = 浮起的面：更白的纸 + 一圈细线 + 上沿一道高光 + 暖墨投影；标题行与面板之间一根细线。 */
+.skin-dimensio {
+  --muted: var(--text3); --serif: var(--text2); --divider: var(--border); --crit: var(--err);
+  --hover: color-mix(in srgb, var(--text) 5%, transparent); --hover-strong: color-mix(in srgb, var(--text) 9%, transparent);
+  --card: var(--surface); --card-shadow: var(--shadow-1); --coral: var(--accent);
+  --q-card: var(--surface); --q-shadow: 0 0 0 1px var(--border);
+  --wb-bg: var(--bg); --wb-card: var(--surface); --wb-line: var(--border); --wb-radius: 14px; --wb-sheet: var(--surface);
+  --wb-band-h: var(--hx-band, 44px); --wb-accent: var(--accent); --wb-on: var(--text); --wb-live: var(--live);
+  --wb-title: var(--text); --wb-title-w: 500; --wb-head-ic: inline-flex; --wb-mobile-z: 55;
+  --wb-card-shadow: inset 0 1px 0 var(--sheen), var(--shadow-1);
+}
+/* 卡里「在这张纸上再浮起一层」的面（浏览器当前标签）退回页面底色；手机抽屉里反过来 */
+.skin-dimensio .wb-card { --dk-bg: var(--surface); --dk-card: var(--rail); }
+.skin-dimensio .wb-sheet { --bg: var(--surface); --dk-bg: var(--surface); --dk-card: var(--bg); border-radius: 22px 22px 0 0; }
+.skin-dimensio .wb-card-body { border-top: 1px solid var(--border); }
+.skin-dimensio .wb-card.flt .wb-card-body { border-top: 0; }
+.skin-dimensio .wb-card-t { font-size: var(--fs-md, 13.5px); }

@@ -1,0 +1,15 @@
+{
+  "id": "hello-view",
+  "name": "记一笔（声明式应用示例）",
+  "version": "1.0.0",
+  "description": "声明式应用写法示例：不写页面，index.mjs 里用 ctx.ui.app 登记 view 和 actions，bridge 按积木自己画界面（统计、图表、标签页、列表、表单、按钮），网页和手机 App 一个样。演示一个小记账本，每个使用者一份，数据存 ctx.store。复制这个目录改名就是你的应用起点。",
+  "author": "claude-bridge",
+  "category": "third-party",
+  "entry": "index.mjs",
+  "engines": {
+    "pluginApi": 3
+  },
+  "permissions": [
+    "ui"
+  ]
+}

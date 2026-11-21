@@ -20,7 +20,8 @@ export { ownerKey, parseOwnerKey } from './principal.mjs';
 
 // 这个身份能用哪些 agent：全局开关（agent-status 的 enabled）∩ 身份名单。
 //   admin：全部已启用的。
-//   user ：管理员给这个人勾的名单（没勾过 = 默认 Claude + Media Studio），且只留支持多用户的 agent。
+//   user ：管理员给这个人勾的名单（没勾过 = 默认 Claude + Media Studio），且只留支持多用户的 agent；
+//          标了 fullTrust 的 agent 另要这个人是完全信任档（tier 不是 'user'）。
 //   snap ：只有 Claude（QQ 群快照就是个 Claude 对话框）。share：一个都没有。
 export function agentsFor(identity) {
   const on = enabledAgents();
@@ -29,7 +30,8 @@ export function agentsFor(identity) {
   if (kind === 'snap') return on.filter((id) => id === 'claude');
   if (kind !== 'user') return on;
   const granted = Array.isArray(identity.agents) ? normAgentList(identity.agents) : [...USER_DEFAULT_AGENTS];
-  return on.filter((id) => granted.includes(id) && AGENT_BY_ID[id].multiUser);
+  const fullTrust = identity.tier !== 'user';
+  return on.filter((id) => granted.includes(id) && AGENT_BY_ID[id].multiUser && (!AGENT_BY_ID[id].fullTrust || fullTrust));
 }
 
 function agentFlags(identity) {
@@ -39,6 +41,7 @@ function agentFlags(identity) {
     allowClaude: agents.includes('claude'),
     allowStudio: agents.includes('studio'),
     allowCodex: agents.includes('codex'),
+    allowAgy: agents.includes('agy'),
     allowDimensio: agents.includes('dimensio'),
   };
 }
@@ -178,6 +181,8 @@ function contextBase(identity) {
       vertexHist: path.join(sys, 'vertex-history'),
       codexHist: path.join(sys, 'codex-history'),
       codexProjects: path.join(sys, 'codex-projects.json'),
+      agyDir: path.join(sys, 'agy'),
+      agyProjects: path.join(sys, 'agy-projects.json'),
       claudeProjects: path.join(sys, 'claude-projects.json'),
     };
   }
@@ -200,6 +205,8 @@ function contextBase(identity) {
       vertexHist: path.join(sys, 'vertex-history'),
       codexHist: path.join(sys, 'codex-history'),
       codexProjects: path.join(sys, 'codex-projects.json'),
+      agyDir: path.join(sys, 'agy'),
+      agyProjects: path.join(sys, 'agy-projects.json'),
       claudeProjects: path.join(sys, 'claude-projects.json'),
     };
   }
@@ -216,6 +223,8 @@ function contextBase(identity) {
       vertexHist: path.join(ROOT, 'vertex-history'),
       codexHist: path.join(ROOT, 'codex-history'),
       codexProjects: path.join(ROOT, 'codex-projects.json'),
+      agyDir: path.join(ROOT, 'agy'),
+      agyProjects: path.join(ROOT, 'agy-projects.json'),
       claudeProjects: path.join(ROOT, 'claude-projects.json'),
     };
   }
@@ -244,6 +253,8 @@ function contextBase(identity) {
     vertexHist: path.join(sys, 'vertex-history'),
     codexHist: path.join(sys, 'codex-history'),
     codexProjects: path.join(sys, 'codex-projects.json'),
+    agyDir: path.join(sys, 'agy'),
+    agyProjects: path.join(sys, 'agy-projects.json'),
     claudeProjects: path.join(sys, 'claude-projects.json'),
   };
 }

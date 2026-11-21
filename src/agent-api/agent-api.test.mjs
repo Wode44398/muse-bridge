@@ -76,6 +76,7 @@ test('入口与手册不用登录；操作要密钥，且只认请求头不认 c
   const ok = await call('whoami', {}, { key: k.token });
   assert.equal(ok.body.ok, true);
   assert.equal(ok.body.data.you.kind, 'host');
+  assert.match(ok.body.data.server.local, /^http:\/\/[^/]+:\d+$/, '本机监听地址：同机的 agent 自测用');
   const viaHeader = await call('whoami', {}, { headers: { 'x-bridge-key': k.token } });
   assert.equal(viaHeader.body.ok, true, 'X-Bridge-Key 也认');
   const pre = await fetch(base + '/agent/v1/whoami', { method: 'OPTIONS', headers: { origin: 'https://elsewhere.example', 'access-control-request-method': 'POST' } });

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "commit": "d471171139bbd75960cd700559e649ed4e1adfd7",
+  "commit": "18c24bce93cd62e4dc9897b74f5222ecabb4fca1",
   "files": {
     "web/src/visuals/assets/icons/workspace.png": "8c5b79e540afa594dee7e089d7649ff95f3d33e88f5eb2422c1c5a03056dab1c",
     "web/src/visuals/assets/mascot/claude-小人-举旗.svg": "08235c2cff5779633adbe2d23ca6fa5817de8989afd0431abdfd2b8247518e63",
@@ -30,6 +30,7 @@
     "web/src/visuals/figma-glass/tb-orb44-dark.png": "7c7636c450c6e3783d66c613eba6d63c710f1e3d0b55a2651e6b545f4a527080",
     "web/src/visuals/figma-glass/tb-orb44-light.png": "b20867a947cf8399ac2ae380b0b6390b1a3802dbf86311b6a4629c9b723c1db5",
     "web/src/visuals/fonts.css": "b9434cf4ffb29a0145a41f2a34ae19f44ffa552a906d65e0db3ddf68ea8b6823",
+    "web/src/visuals/fonts/agy/material-symbols-rounded-agy.woff2": "cd960ea2336e177cacb296b2a959d43e34a75ba1aa0e51d0beaa61d93be669c5",
     "web/src/visuals/fonts/anthropic-mono.woff2": "733058e04b14288752355e2095676b645d0db7f252e575ef0f085c81572c43bf",
     "web/src/visuals/fonts/anthropic-sans.woff2": "1c98b0a3e14b9e57436d3a2bcc9c6f0c9483d30ec7356a5368ab6f0828e424b3",
     "web/src/visuals/fonts/anthropic-serif.woff2": "55ac354a8885bfc60bc6fb71690c8dd9fcaa319ef40e0733d173e0fa38f35cca",
@@ -115,7 +116,7 @@
     "web/src/visuals/modules/sprite-mark.js": "8fac122936af17497ecc569ddc35e519af169fede9a70a2890574b504c3c57d8",
     "web/src/visuals/wallpapers/depth/dolomites.png": "83c88963a09c2e985652d14bd893b4dee19327cec1aafbea730d943f45ae1945",
     "web/src/visuals/wallpapers/dolomites.jpg": "f53c4457b2fafb1415b0b440f7d9e25371d6ee7d6c7157305a87f51a004b0064",
-    "web/public/chatgpt/app.js": "8680585f2a4317fd60819f9559825f606e8b055a4c91b227abcdeaeeab5ab5cd",
+    "web/public/chatgpt/app.js": "90b9c47c097d806d94ab0ab6f98948d6885a8998e83f6f9d17b0ef9a1f38b439",
     "web/public/chatgpt/assets/code-block-dop2czwo.css": "852341d35bf62ba8b5e0efcf97a1afbc06debe75c1ce99e39016ee1a7d2fb238",
     "web/public/chatgpt/assets/conversation-small-mnbvrkag.css": "d63320d8eca65605636b00aa345d77d3184574b790c081846d7afa4e7b443892",
     "web/public/chatgpt/assets/cot-message-mbvpc7rn.css": "7e1acead4c780cc78ac9ec1033d16470fec88dbed882dd50fb149f9472cbe1a7",
@@ -138,7 +139,7 @@
     "web/public/chatgpt/assets/sprites-interaction-4e54fd96.svg": "4837e3798009e0e288ad637a2d23c18b030befcc891c12ae325ea611ba2b5c5f",
     "web/public/chatgpt/assets/sprites-shell-f705d3e2.svg": "eae53e3e3a122c5caffd8538c792fad058c555562505783c02cfc4b20cc0bebc",
     "web/public/chatgpt/clone.css": "dfcee6969812da39a0a699c6311614a82e870737e0a95e8ccf7cc5acfb5d79d7",
-    "web/public/chatgpt/index.html": "2af3b4cd87ab3970b4911bfc6433cceb8fa12d46056b3c772f6cf3faa1fae4da",
+    "web/public/chatgpt/index.html": "5af478120a399714e6d5e4c92f4e61e38dbf8416ea23520c26688ce996c2b3c9",
     "web/public/chatgpt/work-picker.official.css": "0df51bbff900120048f81199770263192bb2ffd2a3d527aa1198facb70827194",
     "web/public/chatgpt/work-picker.runtime.js": "fa98e798c5657c5c4c9ce3b327aebd615deaa0998951cb959488b336dbc6fca6",
     "web/public/chatgpt/work-slider.official.css": "9abdd3fa28a61ff1e58dc47688ded86d41bd4f93aed4c79963c833b0064ad266"

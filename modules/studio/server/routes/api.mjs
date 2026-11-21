@@ -17,7 +17,8 @@
 // 目录  GET  /api/studio/catalog                       → { ok, kinds, rev }（group.shelf = 备选模型的轻条目；上次巡检超过 6 小时的后台补一次）
 //       GET  /api/studio/models/resolve?key=           → { ok, model: ResolvedModel }（备选模型的完整条目，按需取 schema）
 //       GET  /api/studio/voices?key=<服务>/<模型>       → { ok, voices: [{ id, label, note? }] }
-// 任务  POST /api/studio/jobs  { kind, key, prompt, negative?, params, inputs, thread?, parent? } → { ok, job }
+// 任务  POST /api/studio/jobs  { kind, key, prompt, negative?, params, inputs, thread?, parent?, source? } → { ok, job }
+//                                                       （source:'api' 只认进程内请求，即 agent 接口的 studio.generate：不自动存进工作空间）
 //       GET  /api/studio/jobs?active=1                 → { ok, jobs, active? }
 //       GET  /api/studio/jobs/<id>                     → { ok, job }
 //       POST /api/studio/jobs/<id>/cancel              → { ok, job }
@@ -29,7 +30,7 @@
 //       POST /api/studio/settings { scope: 'host'|'mine', values: { 键: 值|null } } → 同 GET；变更推 { type:'studio.settings' }
 
 import { readBody } from '@bridge/core/runtime/body.mjs';
-import { contextFor } from '@bridge/core/runtime/identity.mjs';
+import { contextFor, INTERNAL_IDENTITY } from '@bridge/core/runtime/identity.mjs';
 import { busPublish } from '@bridge/core/runtime/bus.mjs';
 import { FEATURES } from '@bridge/core/config/index.mjs';
 import { assertPublicUrl, publicDispatcher } from '@bridge/core/runtime/public-net.mjs';
@@ -255,7 +256,10 @@ export function registerStudioApi(router, { identify }) {
   router.on('POST', '/api/studio/jobs', async (req, res) => {
     const g = guard(req, res); if (!g) return;
     const b = await body(req, res, 256 * 1024); if (!b) return;
-    run(res, () => ({ job: startJob(g.ctx, b, { source: 'studio' }).job }));
+    // agent 接口（studio.generate）发起的标 source:'api'，不自动存进工作空间（放哪由 agent 的 saveTo 决定）。
+    // 只认进程内请求：身份挂在 Symbol 上，网络请求伪造不了；外面带 source 一律按 Studio 自己发起的算
+    const source = req[INTERNAL_IDENTITY] && b.source === 'api' ? 'api' : 'studio';
+    run(res, () => ({ job: startJob(g.ctx, b, { source }).job }));
   });
   router.on('GET', '/api/studio/jobs', async (req, res, url) => {
     const g = guard(req, res); if (!g) return;

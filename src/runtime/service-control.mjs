@@ -31,6 +31,18 @@ export function supervisor() {
 
 const liveTurns = () => listGens().filter((g) => !g.done);
 
+// gen 表外的在跑轮（dimensio 的轮跑在 harness 子进程里，Claude / Codex / agy 都登记在 gen 表）：由 server.mjs 接上
+// modules/registry.mjs 的 moduleBusyRuns。异步探针 → 这里缓存最近一次的数；没接（测试、基础版）就恒为 0。
+let extProbe = null;
+let extLive = 0;
+export function setExtraLiveProbe(fn) { extProbe = typeof fn === 'function' ? fn : null; if (!extProbe) extLive = 0; }
+export async function refreshExtraLive() {
+  if (!extProbe) { extLive = 0; return 0; }
+  try { extLive = Math.max(0, Number(await extProbe()) || 0); } catch {}
+  return extLive;
+}
+const liveCount = () => liveTurns().length + extLive;
+
 function disk(dir) {
   try {
     const s = statfsSync(dir);
@@ -127,8 +139,9 @@ export function serviceInfo({ dataRoot, harnessCount = 0 } = {}) {
     loadavg: os.loadavg(), cpus: os.cpus().length,
     memTotal: os.totalmem(), memFree: os.freemem(),
     disk: dataRoot ? disk(dataRoot) : null,
-    liveTurns: turns.length,
+    liveTurns: turns.length + extLive,
     liveKeys: [...new Set(turns.map((g) => g.key))].length,
+    extLiveTurns: extLive,
     harnessInstances: harnessCount,
     restart: restartState(),
     update: updateState(),
@@ -139,6 +152,8 @@ let idleTimer = null;
 let idleSince = 0;
 let going = false;
 let lastLive = 0;
+let checking = false;   // 「空闲时重启」正现问 gen 表外的在跑轮（见 requestRestart）
+let checkSeq = 0;
 // 这次挂起 / 动手的原因：'restart'（控制台重启、扩展装卸后重启）| 'update'（装更新：git 部署拉完新代码、桌面客户端要装新版）
 let pendingReason = 'restart';
 let pendingVersion = '';   // 'update' 时要换成的版本（桌面客户端的版本号 / git 提交），只用于提示
@@ -157,7 +172,7 @@ export function restartState() {
     reason: active ? pendingReason : '',
     version: active ? pendingVersion : '',
     deadline: pending ? idleSince + IDLE_WAIT_MAX : 0,
-    live: pending ? liveTurns().length : 0,
+    live: pending ? liveCount() : 0,
   };
 }
 
@@ -183,6 +198,7 @@ export function requestRestart(mode, { drain = null, exit = (c) => process.exit(
   if (pub) publish = pub;
   if (mode === 'cancel') {
     if (idleTimer) console.log('[service] 已取消等待' + (pendingReason === 'update' ? '更新' : '重启'));
+    checkSeq++; checking = false;
     clearIdle('cancelled');
     return { ok: true, restart: restartState() };
   }
@@ -200,22 +216,47 @@ export function requestRestart(mode, { drain = null, exit = (c) => process.exit(
       exit(RESTART_EXIT_CODE);
     }, 600);
   };
-  const live = liveTurns().length;
-  if (mode === 'idle' && live) {
+  const wait = (live) => {
     if (!idleTimer) {
       idleSince = Date.now();
       lastLive = live;
       console.log(`[service] 还有 ${live} 轮在跑，等跑完再${pendingReason === 'update' ? '更新' : '重启'}（最多等 30 分钟）`);
-      idleTimer = setInterval(() => {
-        const n = liveTurns().length;
+      let ticking = false;
+      const check = () => {
+        const n = liveCount();
         if (!n) go();
         else if (Date.now() - idleSince > IDLE_WAIT_MAX) { console.log('[service] 等空闲' + (pendingReason === 'update' ? '更新' : '重启') + '超过 30 分钟，已放弃'); clearIdle('expired'); }
         else if (n !== lastLive) { lastLive = n; emit('pending', { live: n, since: idleSince, deadline: idleSince + IDLE_WAIT_MAX }); }
+      };
+      const timer = setInterval(() => {
+        if (!extProbe) return check();
+        if (ticking) return;
+        ticking = true;
+        // 先现问 gen 表外的轮（dimensio），问完还在等（没被取消 / 没动手）才判
+        refreshExtraLive().then(() => { if (idleTimer === timer) check(); }).finally(() => { ticking = false; });
       }, 5000);
+      idleTimer = timer;
       idleTimer.unref?.();
     }
     emit('pending', { live, since: idleSince, deadline: idleSince + IDLE_WAIT_MAX });
+  };
+  const live = liveCount();
+  if (mode === 'idle' && live) {
+    wait(live);
     return { ok: true, restart: restartState(), live };
+  }
+  // gen 表里没有在跑的轮，但 gen 表外的（dimensio）可能还有：先现问一遍再定，别拿缓存的旧数就动手
+  if (mode === 'idle' && extProbe) {
+    if (checking) return { ok: true, restart: restartState(), checking: true };
+    checking = true;
+    const seq = ++checkSeq;
+    refreshExtraLive().then(() => {
+      checking = false;
+      if (seq !== checkSeq || going) return;   // 期间被取消
+      const n = liveCount();
+      if (n) wait(n); else if (!idleTimer) go();
+    });
+    return { ok: true, restart: restartState(), checking: true };
   }
   go();
   return { ok: true, restart: restartState() };

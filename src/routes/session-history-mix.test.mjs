@@ -163,3 +163,21 @@ test('sdkAnswerInput 收不下的入参退回 deny：模型预填了保留字段
   assert.deepEqual(splitAnswerList(s), ['说 "好"', '普通']);
   assert.equal(splitAnswerList('a, '), null);
 });
+
+test('停止 / 回答提问后 CLI 补写的合成回答（model <synthetic>，「No response requested.」）不进历史：不接在被打断的正文后，也不单成一条', async () => {
+  const file = path.join(tmp, 'synthetic.jsonl');
+  const lines = [];
+  let n = 0, prev = null;
+  const push = (o) => { o.uuid = 's' + (++n); o.parentUuid = prev; prev = o.uuid; o.timestamp = new Date(Date.UTC(2026, 10, 19, 9, 0, n)).toISOString(); lines.push(JSON.stringify(o)); };
+  push({ type: 'user', message: { role: 'user', content: '数到 100' } });
+  push({ type: 'assistant', message: { role: 'assistant', model: 'claude-opus-4-1', content: [{ type: 'text', text: '1 2 … 48' }] } });
+  push({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } });
+  push({ type: 'assistant', message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'No response requested.' }] } });
+  push({ type: 'user', message: { role: 'user', content: '接着来' } });
+  push({ type: 'assistant', message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'No response requested.' }] } });
+  push({ type: 'assistant', message: { role: 'assistant', model: 'claude-opus-4-1', content: [{ type: 'text', text: '49 50' }] } });
+  writeFileSync(file, lines.join('\n') + '\n');
+  const msgs = await readSessionMessages(file);
+  const flat = msgs.map((m) => [m.role, m.role === 'user' ? m.text : (m.segments || []).filter((s) => s.kind === 'text').map((s) => s.md).join('')]);
+  assert.deepEqual(flat, [['user', '数到 100'], ['assistant', '1 2 … 48'], ['user', '接着来'], ['assistant', '49 50']]);
+});

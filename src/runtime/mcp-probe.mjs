@@ -135,6 +135,19 @@ export function updateCreds(ctx, fn) {
   renameSync(tmp, f);
 }
 
+/**
+ * 只读取 CLI 给某个远程连接器存的 OAuth 令牌（别的 agent 经 bridge 代理连它时用）：{ accessToken, expiresAt } 或 null。
+ * 不续期、不写回——续期是 CLI 的事，这边写一份会和 CLI 抢同一个刷新令牌。expiresAt 为 0 = 没记过期时间。
+ */
+export function readMcpToken(ctx, server, config) {
+  try {
+    const { data } = readCreds(ctx);
+    const e = data && data.mcpOAuth && typeof data.mcpOAuth === 'object' ? data.mcpOAuth[mcpTokenKey(server, config)] : null;
+    if (!e || !e.accessToken) return null;
+    return { accessToken: String(e.accessToken), expiresAt: Number(e.expiresAt) || 0 };
+  } catch { return null; }
+}
+
 export const hasMcpTokens = (ctx, server) => tokenKeys(ctx).some((k) => k === server || k.startsWith(server + '|'));
 
 // 删掉某个服务名的全部 OAuth 令牌。返回删了几条（0 = 本来就没有，或令牌不在这个文件里——macOS 存钥匙串）。

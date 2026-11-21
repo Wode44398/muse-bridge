@@ -14,10 +14,11 @@
 
   let { toast = () => {}, confirm = async () => true } = $props();
 
-  // 三个扩展的展示信息（顺序同服务端目录；状态以 /api/modules 为准）
+  // 功能扩展的展示信息（顺序同服务端目录；状态以 /api/modules 为准）
   const INFO = {
     studio: { c: '#1d1b18', desc: t('Media Studio 分页：图像 / 视频 / 配音 / 音乐，接自己的服务与 Key；以及 Claude 的媒体工具') },
     codex: { c: '#10a37f', desc: t('ChatGPT · Codex 分页（本机常驻 Codex，含 Codex 程序）') },
+    agy: { c: '#4d8dff', desc: t('Antigravity 分页（Google 官方 CLI 常驻 ACP 接入，含多模型对话与侧边工作区）') },
     dimensio: { c: '#ff9f0a', desc: t('dimensio 分页（独立的多模型 agent 底座）') },
   };
   const GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 4.5 7.3v9.4L12 20.5l7.5-3.8V7.3z"/><path d="m4.5 7.3 7.5 3.8 7.5-3.8M12 11.1v9.4"/></svg>';

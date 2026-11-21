@@ -16,7 +16,7 @@
   import './ios27/ink.css';
   import {
     dlg, host, hooks, settle, activeRequest, defaultRole, escRole, cycleIndex,
-    eventTime, pressTooSoon, strayClick, msgLayout,
+    eventTime, pressTooSoon, strayClick, msgLayout, labelFit,
   } from '../lib/dialogState.svelte.js';
   import { pushBackLayer } from '../lib/nav.js';
   import { pushNativeOverlay } from '../lib/nativeDesktop.js';
@@ -225,6 +225,7 @@
     if (r.kind !== 'confirm') return [ok];
     return [ok, { label: r.cancelLabel, role: 'cancel', act: 'cancel', onclick: () => settle(r.id, 'cancel') }];
   }
+  // 按钮字太长时上下叠：labelFit（dialogState）按字长判，三种外观各一个开关，样式见下面 .stack / .stack-n
   const countText = (r) => (r.count > 1 ? ` ×${r.count}` : '');
   // 玻璃框的文字：有小标题时它是粗体标题、正文整段常规字；没有时粗体标题 = 拆出来的问句，正文 = 拆下来的说明
   function glassText(r, L) {
@@ -263,9 +264,10 @@
     {#each shown as r (r.id)}
       {@const L = msgLayout(r.message, r.detail)}
       {@const sub = L.rest || r.detail}
+      {@const F = labelFit(r)}
       {#if coarse}
         {@const g = glassText(r, L)}
-        <div class="dh-glass" class:long={!r.title && L.long} data-dlg-id={r.id} inert={r.closing}>
+        <div class="dh-glass" class:long={!r.title && L.long} class:stack={F.glass} data-dlg-id={r.id} inert={r.closing}>
           <Alert
             dim={false}
             closing={r.closing}
@@ -294,7 +296,7 @@
             <!-- 调用方给的 detail，或从一整段 message 里拆下来的说明（两者不会同时有） -->
             {#if sub}<p class="dh-detail sel-text" id="{uid}-d{r.id}">{sub}</p>{/if}
           </div>
-          <div class="dh-acts">
+          <div class="dh-acts" class:stack={F.wide} class:stack-n={F.narrow}>
             {#if r.kind === 'confirm'}
               <button type="button" class="dh-btn" data-act="cancel" use:pressable onclick={(e) => act(e, r, 'cancel')}>{r.cancelLabel}</button>
             {/if}
@@ -384,7 +386,9 @@
   .dh-acts { flex-shrink: 0; display: flex; justify-content: flex-end; gap: 8px; padding: 18px 22px 20px; }
   .dh-btn {
     min-width: 76px; height: 34px; padding: 0 16px; border: 0; border-radius: 10px; cursor: pointer;
-    font: inherit; font-size: 14px; line-height: 20px; font-weight: 500; white-space: nowrap;
+    font: inherit; font-size: 14px; line-height: 20px; font-weight: 500;
+    /* 并排时一律单行，放不下的尾巴省略（按字长判的上下叠见 labelFit；这里是估错时的兜底，字不出按钮） */
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     color: var(--text); background: var(--st-seg);
     transform: scale(var(--press-s, 1));
     transition: background-color var(--mo-micro) var(--ea-fade), opacity var(--mo-micro) var(--ea-fade);
@@ -395,6 +399,12 @@
   .dh-btn.primary:hover { opacity: .9; }
   /* 全局 :focus-visible 是珊瑚色，弹窗里换成墨色（契约：墨是唯一强调色） */
   .dh-btn:focus-visible { outline: 2px solid color-mix(in srgb, var(--text) 55%, transparent); outline-offset: 2px; }
+  /* 按钮字太长（labelFit）：上下叠、占满整行，主操作在上；还放不下就折行，按钮跟着长高（不截行，理由见 labelFit） */
+  .dh-acts.stack { flex-direction: column-reverse; align-items: stretch; }
+  .dh-acts.stack .dh-btn {
+    height: auto; min-height: 34px; padding: 7px 16px;
+    white-space: normal; overflow-wrap: anywhere; text-wrap: balance;
+  }
 
   /* 窄窗口（鼠标但窗口窄，或平板横竖屏切换）：按钮铺满、加高到可点区 44 */
   @media (max-width: 699px) {
@@ -402,6 +412,11 @@
     .dh-body { padding: 20px 20px 4px; }
     .dh-acts { padding: 16px 20px 20px; }
     .dh-btn { flex: 1 1 0; min-width: 0; height: 44px; border-radius: 12px; font-size: 15px; }
+    .dh-acts.stack-n { flex-direction: column-reverse; align-items: stretch; }
+    .dh-acts.stack .dh-btn, .dh-acts.stack-n .dh-btn {
+      flex: none; height: auto; min-height: 44px; padding: 12px 16px;
+      white-space: normal; overflow-wrap: anywhere; text-wrap: balance;
+    }
   }
 
   /* —— 玻璃外观：Alert 自带 fixed 根与动画，这一层只是给查找按钮用的容器 —— */
@@ -410,6 +425,15 @@
   .dh-glass :global(.al-tm h3) { text-wrap: balance; }
   .dh-glass :global(.al-tm p) { text-wrap: pretty; }
   .dh-glass.long :global(.al-tm h3) { font-weight: 500; text-wrap: pretty; }
+  /* 按钮：并排时一律单行、放不下省略（估错时的兜底，字不出药丸）；字太长（labelFit）就上下叠——Alert 本来的竖排，
+     主操作在上、取消在下——占满整行，还放不下就折行，药丸跟着长高（不截行）。改在这里不动 Alert：设置页等别的用法不受影响 */
+  .dh-glass :global(.al-btn) { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .dh-glass.stack :global(.al-acts.side) { flex-direction: column; }
+  .dh-glass.stack :global(.al-acts.side .al-btn) { flex: none; }
+  .dh-glass.stack :global(.al-btn) {
+    height: auto; min-height: 48px; padding: 13px 18px;
+    white-space: normal; overflow-wrap: anywhere; text-wrap: balance;
+  }
   /* 焦点圈：触屏（hover: none）上程序落的默认焦点也会命中 :focus-visible，画一圈像「被选中」的主按钮——
      只在有悬停的设备（手机接鼠标、平板接触控板）上画，或者这串弹窗里按过 Tab / 方向键之后（平板只接了键盘）。
      颜色换成墨色，不用全局的珊瑚色。 */

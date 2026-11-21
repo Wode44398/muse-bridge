@@ -414,9 +414,14 @@ test('Claude 工具：设置全默认时描述与 schema 逐字不变；选了�
     const nulls = buildMediaTools({ flavor, adapter: ad, defaults: () => null });
     assert.deepEqual(plain.map((t) => t.description), nulls.map((t) => t.description));
     plain.forEach((t, i) => { for (const f of Object.keys(t.schema)) assert.equal(nulls[i].schema[f], t.schema[f], `${flavor} ${t.name}.${f}`); });
-    // 工具没有图片输入参数，描述不许说能改图（2026-11-07 反馈）
-    assert.doesNotMatch(plain[0].description, /改图|pass image/i);
+    // 2026-11-18 起：素材走 inputs、卡上参数走 params、负面词 negative；语音能选模型；续改只有手机版；查模型工具在末尾
     assert.ok(!('image' in plain[0].schema) && !('images' in plain[0].schema));
+    for (const t of plain.slice(0, 4)) assert.ok('params' in t.schema, t.name);
+    for (const i of [0, 1, 3]) assert.ok('inputs' in plain[i].schema && 'negative' in plain[i].schema);
+    assert.ok('model' in plain[2].schema && !('inputs' in plain[2].schema));
+    assert.equal('continueFrom' in plain[0].schema, flavor === 'phone');
+    assert.equal(plain.length, 4);   // 适配器没有 models() 就不出 list_media_models
+    assert.match(plain[0].description, /list_media_models/);
 
     const withDef = buildMediaTools({ flavor, adapter: ad, defaults: (k) => DEF[k] || null });
     const [img, vid, sp, mu] = withDef;
@@ -434,10 +439,13 @@ test('Claude 工具：设置全默认时描述与 schema 逐字不变；选了�
     assert.equal(count(vid.description, '某视频'), 1);
     assert.match(vid.schema.model.description, /当前默认 某视频/);
     // 语音描述没写死默认模型：照旧末尾补一句
-    assert.ok(sp.description.startsWith(plain[2].description) && sp.description.includes('某语音'));
+    // （末尾那段素材 / 参数说明 2026-11-18 起接在最后：默认模型那句插在它前面）
+    const split = (s, tail) => { const i = s.indexOf(tail); assert.ok(i > 0, tail); return [s.slice(0, i), s.slice(i)]; };
+    const [spHead, spTail] = split(plain[2].description, flavor === 'phone' ? ' 换配音模型' : ' Pass model (a service key');
+    assert.ok(sp.description.startsWith(spHead) && sp.description.endsWith(spTail) && sp.description.includes('某语音'));
     // 音乐：桌面版写了「Default lyria-002」就换，手机版没写就补一句；字段说明两边都换
     if (flavor === 'desktop') assert.ok(!mu.description.includes('Default lyria-002') && count(mu.description, '某音乐') === 1);
-    else assert.ok(mu.description.startsWith(plain[3].description) && mu.description.includes('某音乐'));
+    else { const [h, t] = split(plain[3].description, ' 换模型传 model'); assert.ok(mu.description.startsWith(h) && mu.description.endsWith(t) && mu.description.includes('某音乐')); }
     assert.match(mu.schema.model.description, /当前默认 某音乐/);
     if (flavor === 'desktop') assert.ok('outputPath' in img.schema);
   }
@@ -472,7 +480,7 @@ test('Claude 工具：图片回执报实际像素；明显低于下发档位时�
   assert.doesNotMatch(t, /请求|注意/);
   // 量不到像素（侧车没宽高）：照旧只报请求档位
   t = await run({ model: 'gemini-3-pro-image' }, pro);
-  assert.match(t, /（gemini-3-pro-image · 4K · 9:16）。绝对文件路径/);
+  assert.match(t, /（gemini-3-pro-image · 4K · 9:16）。作品 id 0bab0dac-1111-4222-8333-444455556666（接着改这张传 continueFrom）。绝对文件路径/);
 
   // 门槛按总像素：Gemini 1K 的超宽 / 超长图（长边过 1400）也认得出；GPT Image 本档的最小尺寸不误报
   assert.equal(belowSize('2K', 1584, 672), true);    // Gemini 1K 21:9
@@ -482,4 +490,86 @@ test('Claude 工具：图片回执报实际像素；明显低于下发档位时�
   assert.equal(belowSize('4K', 3840, 1632), false);  // GPT Image 4K 21:9
   assert.equal(belowSize('1K', 512, 512), false);    // 1K 不判
   assert.equal(belowSize(undefined, 512, 512), false);
+});
+
+test('Claude 工具（2026-11-18）：卡上参数 / 负面词 / 素材 / 续改 / 一次多件 / 中断即取消 / 查模型；不认识的模型照实报错', async () => {
+  const { makeAdapter, studioInput, unitsOfArgs } = await import('./mcp/media-phone.mjs');
+  const ad = makeAdapter({ ctx: admin, genKey: 'admin', getGen: () => null });
+  const tools = buildMediaTools({ flavor: 'phone', adapter: ad, defaults: null });
+  const img = tools[0];
+  const list = tools.find((t) => t.name === 'list_media_models');
+  assert.ok(list, '适配器有 models() 就出查模型工具');
+  const d = catalogMod.catalog('admin').kinds.image.defaults;
+  const k = d.provider + '/' + d.model;
+  const text = (r) => r.content[0].text;
+
+  // 素材路径分流：工作空间 → 相对 path；媒体库作品文件 → asset；上传目录 → upload；别处：管理员拷进上传目录、成员拒
+  writeFileSync(path.join(admin.cwd, 'b.png'), PNG);
+  assert.deepEqual(studioInput(admin, { role: 'ref', path: path.join(admin.cwd, 'b.png') }), { role: 'ref', path: 'b.png' });
+  assert.deepEqual(studioInput(admin, { role: 'ref', path: 'b.png' }), { role: 'ref', path: 'b.png' });
+  const pid = media.newId();
+  media.save(pid, PNG, 'png', { kind: 'image', prompt: 'parent' });
+  assert.deepEqual(studioInput(admin, { role: 'edit', path: media.fileFor(pid) }), { role: 'edit', asset: pid });
+  if (process.platform === 'win32') assert.deepEqual(studioInput(admin, { role: 'edit', path: media.fileFor(pid).toUpperCase().replace(/\.PNG$/, '.png') }), { role: 'edit', asset: pid }, '盘符 / 大小写不敏感');
+  const outside = path.join(tmp, 'outside.png');
+  writeFileSync(outside, PNG);
+  const up = studioInput(admin, { role: 'ref', path: outside });
+  assert.ok(up.upload && existsSync(up.upload) && up.upload.startsWith(admin.uploads));
+  assert.throws(() => studioInput({ kind: 'user', cwd: admin.cwd, uploads: admin.uploads, media: admin.media }, { role: 'ref', path: outside }), /先把它复制进工作空间/);
+
+  // params 压在工具字段上面、negative / inputs 原样到上游
+  let r = await img.handler({ prompt: '纸船', model: k, imageSize: '2K', params: { quality: 'low', imageSize: '1K' }, negative: ' 水印 ', inputs: [{ role: 'edit', path: media.fileFor(pid) }] });
+  assert.ok(!r.isError, text(r));
+  assert.equal(lastReq.params.quality, 'low'); assert.equal(lastReq.params.imageSize, '1K');
+  assert.equal(lastReq.negative, '水印');
+  assert.equal(lastReq.inputs[0].role, 'edit');
+  const id1 = /作品 id ([0-9a-f-]{36})/.exec(text(r))[1];
+  assert.deepEqual(media.get(id1).parents, [pid]);
+
+  // 续改：接回这张的链（第一张自成一条 = 它自己的 id），parent 记血缘
+  r = await img.handler({ prompt: '再红一点', model: k, continueFrom: id1 });
+  assert.ok(!r.isError, text(r));
+  const id2 = /作品 id ([0-9a-f-]{36})/.exec(text(r))[1];
+  assert.equal(media.get(id2).sessionId, id1);
+  assert.ok(media.get(id2).parents.includes(id1));
+  assert.match(text(await img.handler({ prompt: 'x', model: k, continueFrom: media.newId() })), /continueFrom 指的作品不存在/);
+
+  // 不认识的 model：以前悄悄换成默认，现在照实报错
+  r = await img.handler({ prompt: 'x', model: 'no-such-model' });
+  assert.ok(r.isError); assert.match(text(r), /找不到可用的模型/);
+
+  // 一次出多件：回执逐个列路径（转录还原按路径里的 id 一件一段）
+  const run1 = OR.run;
+  OR.run = async () => ({ assets: [{ bytes: PNG, mime: 'image/png' }, { bytes: PNG, mime: 'image/png' }] });
+  try {
+    r = await img.handler({ prompt: '两张', model: k, params: { count: 2 } });
+    assert.match(text(r), /同一次另外生成的 1 件/);
+    assert.equal(new Set(text(r).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.png/g)).size, 2);
+  } finally { OR.run = run1; }
+
+  // Claude 这一轮被中断：Studio 任务跟着取消
+  delay = 400;
+  try {
+    const ac = new AbortController();
+    const p = img.handler({ prompt: '慢慢画', model: k }, { signal: ac.signal });
+    await wait(60);
+    ac.abort();
+    r = await p;
+    assert.ok(r.isError);
+    const j = jobs.listJobs('admin').jobs.find((x) => x.prompt === '慢慢画');
+    assert.equal(j.state, 'canceled');
+  } finally { delay = 0; }
+
+  // 查模型：总览含默认与键；带 key 出完整参数；找不到给人话；q 搜
+  let s = text(await list.handler({}));
+  assert.match(s, /【图像】默认 /); assert.ok(s.includes(k));
+  s = text(await list.handler({ key: k }));
+  assert.match(s, /^- quality/m); assert.match(s, /素材（inputs 的 role）：/);
+  assert.match(text(await list.handler({ key: 'p-00000000/x' })), /找不到这个模型/);
+  assert.match(text(await list.handler({ q: 'zzz-none' })), /没有名字或键里含/);
+
+  // 额度按件计
+  assert.equal(unitsOfArgs({ params: { count: 4 } }), 4);
+  assert.equal(unitsOfArgs({ params: { n: 99 } }), 16);
+  assert.equal(unitsOfArgs({}), 1);
 });

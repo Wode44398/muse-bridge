@@ -338,6 +338,8 @@ export function createFdOps(P) {
 
   return {
     get addLocation() { return addLocation; },
+    get aiMaterial() { return aiMaterial; },
+    get aiTextContent() { return aiTextContent; },
     get canCompress() { return canCompress; },
     get commitRename() { return commitRename; },
     get copyText() { return copyText; },

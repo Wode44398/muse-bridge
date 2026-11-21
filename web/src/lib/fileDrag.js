@@ -18,6 +18,7 @@ import { cloudFileUrl } from './preview.svelte.js';
 import { dropToast } from './dragdrop.svelte.js';
 import { nativeLocLocalOnly } from './nativeDesktop.js';
 import { pcLocalMaterial } from './pcLocal.js';
+import { ensureModule } from '../modules/services.svelte.js';
 import { t, tr } from './i18n.js';
 
 export const WS_FILE = 'ws-file';
@@ -78,12 +79,16 @@ export function folderDropZone({ key, name, ctx, rel, onDone, disabled = false, 
 
 // —— 落点②：某个 agent 的对话（挂进它的输入栏）——
 // 语义刻意不是「移动」而是「发送」：文件留在工作空间原地，只是这次对话多了一份附件。
-const AGENT_LABEL = { claude: 'Claude' };
+const AGENT_LABEL = { claude: 'Claude', agy: 'Antigravity' };
 
-function pushAttachment(target, att) {
-  if (target === 'claude') compose.attachments.push(att);
-  else return false;
-  return true;
+async function pushAttachment(target, att) {
+  if (!att) return false;
+  if (target === 'claude') { compose.attachments.push(att); return true; }
+  if (target === 'agy') {
+    const m = await ensureModule('agy');
+    return Boolean(m?.agyFileTarget?.attach(att));
+  }
+  return false;
 }
 
 // —— 落点③：Media Studio（主页方块、工作空间「发到 Media Studio」）——
@@ -133,11 +138,11 @@ export async function filesToStudio(payload, page = '') {
 export async function attachToAgent(payload, target) {
   if (!payload?.materials) return false;
   dropToast(t('正在准备…'));
-  const atts = await payload.materials(true);
+  const atts = await payload.materials(target === 'claude');
   const want = payload.count || 1;
   if (!atts?.length) { dropToast(want > 1 ? t('准备失败') : (payload.isDir && payload.ctx?.origin === 'local' ? t('手机本地文件夹没有可发送的形态') : t('准备失败'))); return false; }
   let ok = 0;
-  for (const att of atts) if (pushAttachment(target, att)) ok++;
+  for (const att of atts) if (await pushAttachment(target, att)) ok++;
   if (!ok) return false;
   const who = AGENT_LABEL[target] || t('对话');
   dropToast(ok < want ? t('{ok}/{n} 项已挂进 {agent} 的输入栏', { ok, n: want, agent: who }) : (ok > 1 ? t('已挂 {n} 项进 {agent} 的输入栏', { n: ok, agent: who }) : t('已挂进 {agent} 的输入栏', { agent: who })));
@@ -182,13 +187,13 @@ export async function attachDescriptorToAgent(desc, target) {
     try {
       // 服务端不认识的原生位置（这台电脑 / 额外授权位置）：按 rel 去服务端取会取错，现读现传
       if (nativeLocLocalOnly(desc.locationId)) {
-        const att = await pcLocalMaterial({ rel, name, isDir: Boolean(desc.dirs?.[i]), locationId: desc.locationId, forClaude: true });
-        if (pushAttachment(target, att)) ok++;
+        const att = await pcLocalMaterial({ rel, name, isDir: Boolean(desc.dirs?.[i]), locationId: desc.locationId, forClaude: target === 'claude' });
+        if (await pushAttachment(target, att)) ok++;
         continue;
       }
-      const up = await api.fileToUpload(rel, false, desc.ws || '');
+      const up = await api.fileToUpload(rel, target !== 'claude', desc.ws || '');
       const att = { path: up.path, name: up.name, kind: isImg ? 'image' : 'file', url: isImg ? cloudFileUrl(rel, { ws: desc.ws || '' }) : null };
-      if (pushAttachment(target, att)) ok++;
+      if (await pushAttachment(target, att)) ok++;
     } catch {}
   }
   dropToast(ok ? t('已挂进 {agent} 的输入栏', { agent: AGENT_LABEL[target] || t('对话') }) : t('准备失败'));

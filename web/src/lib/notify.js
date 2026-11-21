@@ -22,7 +22,7 @@
 import { ui } from './state.svelte.js';
 import { t } from './i18n.js';
 import { cs } from './claudeSettings.svelte.js';
-import { noticesLive } from './notices.svelte.js';
+import { noticesLive, noticesLiveFor } from './notices.svelte.js';
 
 let active = 0;       // JS 路径在跑的轮数（浏览器 Claude；原生 Claude 不计入）
 let lastProg = 0;     // JS 进度更新节流时间戳
@@ -34,11 +34,16 @@ const KIND_KEY = { permission: 'notifyPermission', question: 'notifyQuestion', d
 // 总开关开着、且这一类没被单独关掉
 function kindOn(kind) { const k = KIND_KEY[kind]; return notifOn() && (!k || cs.device?.[k] !== false); }
 const clip = (s, n = 80) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, n);
+// 这个 agent 的「完成 / 出错 / 在等你」由服务端按会话发通知（notices.svelte.js 出横幅 / 系统通知、手机原生服务轮询着弹）：
+// Claude 一直是；Antigravity 在服务端支持时也是（hello 的 noticeAgents）。是 → 这里不再自己弹，只管启停原生跟踪和主页举旗。
+const serverNotified = (label) => (label === 'Claude' ? noticesLive() : label === 'Antigravity' ? noticesLiveFor('agy') : false);
+// 原生后台服务跟不跟这个 agent：Claude 一直跟；Antigravity 要服务端的 /api/active 报它的轮（ext），否则服务看不到它在跑、起了也白起
+const nativeTracked = (label) => label === 'Claude' || (label === 'Antigravity' && noticesLiveFor('agy'));
 
 // 一轮开始。
 export function agentStart(label) {
   // Claude + 原生前台服务：交给 Service（后台可靠）。通知关了就不启服务。
-  if (label === 'Claude') {
+  if (nativeTracked(label)) {
     const a = nativeWatch();
     // 原生服务在后台按会话弹「提问 / 完成 / 出错」：这几类全关了就不起它
     if (a) { if (['done', 'error', 'question', 'permission'].some(kindOn)) { try { a.startAgentWatch(); } catch {} } return; }
@@ -51,7 +56,7 @@ export function agentStart(label) {
 
 // 回复中：节流更新快照（仅 JS 路径；原生 Claude 由 Service 自己更新）。
 export function agentStream(label, snippet) {
-  if (label === 'Claude' && nativeWatch()) return;
+  if (nativeTracked(label) && nativeWatch()) return;
   if (!active || !notifOn()) return;
   const now = Date.now();
   if (now - lastProg < 1200) return;
@@ -66,7 +71,7 @@ export function agentEnd(label, body, opts = {}) {
   if (!watching) ui.taskDone = true;                         // 主页小人举旗：有完成未查看
   // Claude + 原生服务：前台收尾就停服（不重复弹完成）；后台时 JS 已冻结、走不到这里，
   // 由 Service 自己的轮询发现完成并弹通知。
-  if (label === 'Claude') {
+  if (nativeTracked(label)) {
     const a = nativeWatch();
     if (a) { try { a.stopAgentWatch(); } catch {} return; }
   }
@@ -76,7 +81,7 @@ export function agentEnd(label, body, opts = {}) {
   if (active > 0) return;                                     // 还有别的轮在跑：先不弹完成
   if (watching) return;                                       // 正在看：举旗足够
   if (!document.hidden) return;                               // 前台但在别的页：举旗足够
-  if (noticesLive()) return;                                  // 服务端会话消息通知接手（按会话、带铃声）
+  if (serverNotified(label)) return;                          // 由服务端会话消息通知接手；其余 agent 走本机 JS 通知
   if (!kindOn(opts.error ? 'error' : 'done')) return;
   const title = opts.error ? t('{label} · 出错', { label: label || 'Claude' }) : t('{label} · 完成', { label: label || 'Claude' });
   const text = clip(body) || (opts.error ? t('出错了') : t('回复已生成'));

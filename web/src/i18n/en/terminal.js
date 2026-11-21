@@ -11,6 +11,8 @@ export default {
   '缩小字号（Ctrl+−）': 'Smaller text (Ctrl+−)',
   '放大字号（Ctrl+=）': 'Larger text (Ctrl+=)',
   '回到底部': 'Jump to bottom',
+  '适配面板': 'Fit panel',
+  'Claude 把终端调成了 {cols}×{rows} 方便它读屏；点这里改回按面板大小显示': 'Claude set the terminal to {cols}×{rows} so it can read the screen. Tap to fit it to this panel again',
   '先选中要复制的文字': 'Select some text to copy first',
   '读不到剪贴板，请按 Ctrl+V 粘贴': 'Can’t read the clipboard — press Ctrl+V to paste',
   '读不到剪贴板：在输入行里长按，选「粘贴」': 'Can’t read the clipboard — long-press the input line and choose Paste',

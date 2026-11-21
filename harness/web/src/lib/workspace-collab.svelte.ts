@@ -6,7 +6,6 @@ import { WIDE_MQ } from "./breakpoints.ts";
 // ② 事件入站（state.svelte.ts 的 handleEvent 转来）：workspace.preview 把文件弹到用户眼前、workspace.draft 交回
 //    编辑器里未保存的草稿；terminal = agent 动了共享终端（宽屏工作区关着就展开终端，否则标签上亮小点）。
 //    重连会重放这一轮的事件：按 id 去重、超过 60 秒的旧事件不执行。
-import type { Snippet } from "svelte";
 import { untrack } from "svelte";
 import * as api from "./api.ts";
 import { clientId } from "./client-id.ts";
@@ -23,8 +22,6 @@ export interface WorkspaceHost {
   draft?: () => Record<string, unknown> | null;
   // 用宿主的查看器打开工作空间里的文件（ws 绝对路径 + 相对路径）
   preview?: (ws: string, rel: string) => void;
-  // 工作区「记忆」工具的视图（bridge 的记忆卡，看 dimensio 的记忆）
-  memoryView?: Snippet<[{ ws: string }]> | null;
 }
 export const wsHost = $state<{ h: WorkspaceHost | null }>({ h: null });
 export function setWorkspaceHost(h: WorkspaceHost | null): void {

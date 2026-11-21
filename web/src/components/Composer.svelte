@@ -2,7 +2,7 @@
   import { uiAlert } from '../lib/dialogs.js';
   import { dragOut, attDragSrc } from '../lib/dragOut.js';
   import { session, settings, caps, compose, status, prefs, ui } from '../lib/state.svelte.js';
-  import { send, stop, bgHoldNow, steer, queueSend, queuedItems, editLastQueued, retractableSteers, retractLastSteer, prewarmNewChat, chat, requestSync } from '../lib/chat.svelte.js';
+  import { send, stop, bgHoldNow, steer, queueSend, queuedItems, editLastQueued, retractableSteers, retractLastSteer, forceSteer, prewarmNewChat, chat, requestSync } from '../lib/chat.svelte.js';
   import SlashMenu from './SlashMenu.svelte';
   import { loadCommands, filterCommands } from '../lib/slashCommands.js';
   import { pluginUi, filterPluginCommands, matchPluginAction, runPluginUi } from '../lib/pluginUi.svelte.js';   // 插件的「/」命令与「＋」菜单项（ctx.ui.*）
@@ -11,6 +11,7 @@
   import EffortPanel from './EffortPanel.svelte';
   import QuotaRing from './QuotaRing.svelte';
   import AddMenu from './AddMenu.svelte';
+  import SendKey from './claude/SendKey.svelte';
   import { menuIcon } from '../lib/menuIcons.svelte.js';
   import { IS_CSNAP } from '../lib/csnap.js';
   import { claudeDefaultModel, claudeEffortFallback } from '../lib/caps.js';
@@ -230,9 +231,11 @@
     for (const f of [...(fileList || [])]) {
       if (!f) continue;
       const isImgFile = (f.type || '').startsWith('image/');
+      // 视频：留一个本地 blob 地址（vurl，不进 url——url 只给图片用，发出去的气泡也只认图片的 url），瓦片用 <video> 定格首帧当封面、点开直接播
+      const vurl = !isImgFile && isVideoFile(f) ? URL.createObjectURL(f) : '';
       const localPath = isImgFile ? '' : nativePathForFile(f);
       if (localPath) {
-        compose.attachments.push({ path: localPath, name: f.name || localPath.split(/[\\/]/).pop(), kind: 'file', url: null, pending: false, local: true });
+        compose.attachments.push({ path: localPath, name: f.name || localPath.split(/[\\/]/).pop(), kind: 'file', url: null, pending: false, local: true, ...(vurl ? { vurl } : {}) });
         continue;
       }
       if (f.size > 20_000_000) { uiAlert(f.name ? t('{name}：超过 20MB，暂不支持', { name: f.name }) : t('文件：超过 20MB，暂不支持')); continue; }
@@ -240,24 +243,46 @@
       const isImg = (f.type || '').startsWith('image/');
       const name = f.name || (isImg ? 'image.png' : 'file');   // 粘贴的截图常无文件名，兜底
       await uploadAttachment(compose.attachments, f, {
-        draft: { path: null, name, kind: isImg ? 'image' : 'file', url: isImg ? URL.createObjectURL(f) : null, pending: true },
+        draft: { path: null, name, kind: isImg ? 'image' : 'file', url: isImg ? URL.createObjectURL(f) : null, pending: true, ...(vurl ? { vurl } : {}) },
         upload: async (file) => api.upload(name, await fileToBase64(file)),
-        onError: () => uiAlert(t('上传失败：{name}', { name })),
+        onError: () => { if (vurl) { try { URL.revokeObjectURL(vurl); } catch {} } uiAlert(t('上传失败：{name}', { name })); },
       });
     }
   }
   // e.target.files 是活的 FileList——必须先浅拷贝再清 value，否则 value='' 原地清空列表，
   // addFiles 永远拿到空（选文件通路全灭，手机端唯一入口就是它；粘贴/拖拽传真数组不受影响）。
   async function onFiles(e) { await addFiles(filesFromInput(e)); }
-  function removeAtt(a) { removeAttachment(compose.attachments, a); }
-  // 点输入栏里的图片缩略图：统一查看器，在已附的几张图之间左右切（还没发出去，不进会话画廊）。
-  // 用本地 blob: 预览地址，零网络；量缩略图位置给开场动画。
-  function openAttImage(a, el) {
-    const imgs = compose.attachments.filter((x) => x.kind === 'image' && x.url);
-    const i = imgs.indexOf(a);
+  function removeAtt(a) {
+    if (a.vurl) { try { URL.revokeObjectURL(a.vurl); } catch {} }
+    removeAttachment(compose.attachments, a);
+  }
+  // —— 视频附件：和图片一样显示成方形瓦片（封面 + 播放标），点开进统一查看器播 ——
+  // 封面依次试：本地 blob 用 <video> 定格首帧（本机引用 / 上传中 / 刚传完都有）→ 已传上去的走服务端抽帧（/api/upload/raw?thumb=1，
+  // 刷新后恢复的草稿只剩这条）；浏览器解不了的编码（HEVC 之类）两条都不通时落回原来的文件名卡。
+  const VIDEO_RE = /\.(mp4|webm|mov|m4v|mkv|avi|3gp)$/i;
+  const isVideoFile = (f) => (f.type || '').startsWith('video/') || VIDEO_RE.test(f.name || '');
+  const uploadedFile = (a) => (!a.pending && !a.local && a.path ? (UPLOAD_FILE_RE.exec(a.path) || [])[1] || '' : '');
+  function vidCover(a) {
+    if (a.kind === 'image' || a.kind === 'folder' || a.kind === 'chat') return null;
+    if (!a.vurl && !VIDEO_RE.test(a.name || a.path || '')) return null;
+    if (a.vurl && !a.vdead) return { video: a.vurl };
+    if (uploadedFile(a) && !a.tdead) return { img: uploadThumbUrl(a.path, '1') };
+    return null;
+  }
+  // 点输入栏里的图片 / 视频瓦片：统一查看器，在已附的几项之间左右切（还没发出去，不进会话画廊）。
+  // 图片用本地 blob: 预览地址，零网络；视频传完了走 uploads 原件（服务端 Range 流），还没传完 / 本机引用就播本地 blob。量瓦片位置给开场动画。
+  function openAttMedia(a, el) {
+    const list = compose.attachments.filter((x) => (x.kind === 'image' && x.url) || vidCover(x));
+    const i = list.indexOf(a);
     if (i < 0) return;
     const r = rectOf(el);
-    openPreview(imgs.map((x, j) => ({ origin: 'url', key: 'cmp:' + (x.path || x.url), url: x.url, name: x.name, kind: 'image', ...(j === i && r ? { originRect: r } : {}) })), i);
+    openPreview(list.map((x, j) => {
+      const geo = j === i && r ? { originRect: r } : {};
+      if (x.kind === 'image') return { origin: 'url', key: 'cmp:' + (x.path || x.url), url: x.url, name: x.name, kind: 'image', ...geo };
+      const file = uploadedFile(x);
+      if (file) return { origin: 'upload', key: 'att:' + file, file, name: x.name, kind: 'video', ...geo };
+      return { origin: 'url', key: 'cmp:' + (x.path || x.vurl), url: x.vurl, name: x.name, kind: 'video', ...geo };
+    }), i);
   }
   // 已传上去的文件附件（pdf / 文档 / 音视频…）点名字预览 uploads 里的原件；本机引用、上传中的不给点
   const UPLOAD_FILE_RE = /[\\/]uploads[\\/]([^\\/]+)$/;
@@ -267,6 +292,14 @@
     return file ? { origin: 'upload', key: 'att:' + file, file, name: a.name } : null;
   }
   const uploading = $derived(compose.attachments.some((a) => a.pending));
+  // 发送键上的墨位：在传的附件里有进度的（文件夹）取平均；都没有进度（单个文件一次传完）给 -1，键自己慢慢爬到一半等着
+  const uploadProg = $derived.by(() => {
+    const pend = compose.attachments.filter((a) => a.pending);
+    if (!pend.length) return null;
+    const known = pend.filter((a) => typeof a.prog === 'number');
+    return known.length ? known.reduce((n, a) => n + a.prog, 0) / known.length : -1;
+  });
+  let sendKey = $state();   // 右下角那颗键（components/claude/SendKey）：真的发出去时叫它演一下
 
   // —— 挂载文件夹（Claude Design 那种「挂上去，按需读」）——
   // 整个目录树原样传进本人 uploads/<时间戳>-<名字>/，只把【文件夹绝对路径】作为一条附件带走；
@@ -416,7 +449,7 @@
   // Ctrl/Cmd+Enter = 稍后发送（排进队列，这一轮结束后合并发出）；空闲时两者都是普通发送。
   // 快照访客没有插话/排队（服务端也不给）：运行中照旧只有停止键。
   const canSteer = $derived(!IS_CSNAP && !!session.id);
-  function submit(mode = 'send') {
+  function submit(mode = 'send', viaKey = false) {
     if (uploading) return;   // 附件还在上传——发送按钮已是禁用态，等传完再发
     const txt = fieldText();
     if (!txt && !compose.attachments.length) return;
@@ -430,21 +463,22 @@
     if (verifying) { requestSync('send-wait'); return; }   // 文字留在输入框里，确认后再按一次
     if (busyNow) {
       if (!canSteer) return;
+      sendKey?.fx(mode === 'queue' ? 'queue' : 'steer', viaKey);
       clearField();
       (mode === 'queue' ? queueSend(txt) : steer(txt)).then((ok) => { if (!ok) refill(txt); });
       return;
     }
     // 挂起等后台任务时 Ctrl+Enter 也排队（官方：在跑就排）；回车照旧接力进同一个进程
     if (mode === 'queue' && holding && canSteer) {
+      sendKey?.fx('queue', viaKey);
       clearField();
       queueSend(txt).then((ok) => { if (!ok) refill(txt); });
       return;
     }
+    sendKey?.fx('send', viaKey);
     clearField();
     send(txt);
   }
-  let splitOpen = $state(false);
-  $effect(() => { if (!busyNow || empty) splitOpen = false; });
   // 触屏（手机软键盘没有 Shift）：Enter = 换行，发送靠按钮——与 claude.ai 移动端一致。
   // 桌面保持 Enter 发送 / Shift+Enter 换行。
   const touchUI = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
@@ -462,18 +496,27 @@
       if (e.key === 'Escape') { e.preventDefault(); dismissSuggestion(); return; }
     }
     // Ctrl/Cmd+Enter：工作中 = 稍后发送；空闲 = 普通发送（触屏也认外接键盘）
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit('queue'); return; }
-    if (e.key === 'Enter' && !e.shiftKey && !touchUI) { e.preventDefault(); submit(); return; }
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit('queue', true); return; }
+    if (e.key === 'Enter' && !e.shiftKey && !touchUI) { e.preventDefault(); submit('send', true); return; }
     // 输入框空着按 ↑：取回最后一条排队消息编辑（官方 handleDequeueLastQueued）
     if (e.key === 'ArrowUp' && empty && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && queuedItems(session.id).length) {
       e.preventDefault(); editLastQueued(); return;
+    }
+    // 工作中 Shift+Esc：最后一条还没读到的插话「立即打断」——停下当前这一步、马上发出它（不碰输入框里的字）
+    if (e.key === 'Escape' && e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && session.busy && retractableSteers().length) {
+      e.preventDefault(); forceSteer(retractableSteers()[0].uuid); return;
     }
     // 没有排队消息时，↑ / 工作中 Esc 撤回最后一条 Claude 还没读到的插话（它还是虚的）
     if ((e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey || e.key === 'Escape' && session.busy) && empty && !queuedItems(session.id).length && retractableSteers().length) {
       e.preventDefault(); retractLastSteer(); return;
     }
     // 工作中按 Esc：先把最后一条排队消息召回输入框（官方 onEscapeRecall）
-    if (e.key === 'Escape' && empty && session.busy && queuedItems(session.id).length) { e.preventDefault(); editLastQueued(); }
+    if (e.key === 'Escape' && empty && session.busy && queuedItems(session.id).length) { e.preventDefault(); editLastQueued(); return; }
+    // 工作中按 Esc：停下（和终端里一样）。上面几条——收菜单、撤回插话、召回排队消息——先接手；模型 / 档位 / ＋ 菜单开着时 Esc 归它们；
+    // 组字中的 Esc 是取消候选，不算。屏幕上的停止键跟着按一下。
+    if (e.key === 'Escape' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing && busyNow && !pickerOpen && !effortOpen && !menuOpen) {
+      e.preventDefault(); sendKey?.stopViaKey();
+    }
   }
   // 官方整卡 cursor-text：点卡片空白处（内边距、工具条空档）等于点输入框——聚焦并把光标放到末尾。
   // 只认「空白容器」本身被点中；按钮、弹层、附件卡各管各的。从输入框里拖选到空白处松手时
@@ -513,9 +556,20 @@
   {#if compose.attachments.length}
     <div class="attachments">
       {#each compose.attachments as a, ai (a.path || 'pending-' + ai)}
-        <div class="att" class:img={a.kind === 'image'} class:pending={a.pending} class:dir={a.kind === 'folder' || a.kind === 'chat'} use:dragOut={() => attDragSrc(a)}>
+        {@const vc = vidCover(a)}
+        <div class="att" class:img={a.kind === 'image' || !!vc} class:pending={a.pending} class:dir={a.kind === 'folder' || a.kind === 'chat'} use:dragOut={() => attDragSrc(a)}>
           {#if a.kind === 'image' && a.url}
-            <button class="att-view" aria-label={t('预览图片')} onclick={(e) => openAttImage(a, e.currentTarget)}><img src={a.url} alt={a.name} data-fallback={a.local ? undefined : uploadThumbUrl(a.path)} /></button>
+            <button class="att-view" aria-label={t('预览图片')} onclick={(e) => openAttMedia(a, e.currentTarget)}><img src={a.url} alt={a.name} data-fallback={a.local ? undefined : uploadThumbUrl(a.path)} /></button>
+          {:else if vc}
+            <button class="att-view att-vid" aria-label={t('预览 {name}', { name: a.name })} title={a.name} onclick={(e) => openAttMedia(a, e.currentTarget)}>
+              {#if vc.video}
+                <!-- svelte-ignore a11y_media_has_caption -->
+                <video src={vc.video + '#t=0.1'} muted playsinline preload="metadata" tabindex="-1" onerror={() => { a.vdead = true; }}></video>
+              {:else}
+                <img src={vc.img} alt={a.name} onerror={() => { a.tdead = true; }} />
+              {/if}
+              {#if !a.pending}<span class="att-play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9.2 6.6v10.8a.7.7 0 0 0 1.07.6l8.5-5.4a.7.7 0 0 0 0-1.2l-8.5-5.4a.7.7 0 0 0-1.07.6Z"/></svg></span>{/if}
+            </button>
           {:else if a.kind === 'chat'}
             <!-- 引用对话（侧栏拖一条会话进来，lib/chatQuote.js）：对话气泡图标 + 标题 + 条数 -->
             <span class="att-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12.2c0 3.9-3.6 7-8 7-1.1 0-2.2-.2-3.1-.6L4.5 20l1.2-3.5C4.6 15.3 4 13.8 4 12.2c0-3.9 3.6-7 8-7s8 3.1 8 7z"/><path d="M8.6 11h6.8M8.6 14h4.2"/></svg></span>
@@ -590,26 +644,10 @@
         {#if effortOpen}<EffortPanel onClose={() => (effortOpen = false)} dir={effortDir} />{/if}
       </div>
       {/if}
-      {#if busyNow && canSteer && (!empty || compose.attachments.length)}
-        <!-- 工作中且输入框有内容：分体按钮（官方触屏同款）——主键插话发送，右半下拉「稍后发送 / 停止」 -->
-        <div class="split-wrap">
-          <button class="submit split-main" aria-label={t('插话发送')} title={touchUI ? t('插话发送') : t('插话发送 ⏎ · 稍后发送 Ctrl+⏎')} disabled={uploading} onclick={() => submit()}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 10 4 15l5 5"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg></button>
-          <button class="submit split-caret" aria-label={t('更多发送方式')} aria-expanded={splitOpen} onclick={(e) => { e.stopPropagation(); splitOpen = !splitOpen; }}><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
-          {#if splitOpen}
-            <div class="split-menu" role="menu">
-              <button role="menuitem" onclick={() => { splitOpen = false; submit('queue'); }}>{t('稍后发送')}{#if !touchUI}<span class="kbd">Ctrl+⏎</span>{/if}</button>
-              <button role="menuitem" onclick={() => { splitOpen = false; stop(); }}>{t('停止')}</button>
-            </div>
-          {/if}
-        </div>
-      {:else if verifying}
-        <!-- 状态确认中：缓冲圈（延迟淡入，局域网下几百毫秒就确认完，用户看不到闪烁） -->
-        <button class="submit verifying" aria-label={t('正在同步会话状态…')} title={t('正在同步会话状态…')} disabled><span class="vspin"></span></button>
-      {:else if busyNow}
-        <button class="submit stop" aria-label={t('停止生成')} onclick={stop}><svg viewBox="0 0 20 20" width="13" height="13"><rect x="5" y="5" width="10" height="10" rx="2" fill="currentColor"/></svg></button>
-      {:else}
-        <button class="submit" aria-label={uploading ? t('附件上传中') : t('发送')} disabled={uploading} onclick={submit}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 10 4 15l5 5"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg></button>
-      {/if}
+      <!-- 发送 / 停止键：空着是淡键，有字墨漫上来；干活时是停止，又打了字就两颗并排（停止在左、发送在最右）；
+           「稍后发送」在 Ctrl+Enter、长按和右键里。造型与动效见 components/claude/SendKey -->
+      <SendKey bind:this={sendKey} busy={busyNow} has={!empty || compose.attachments.length > 0} upload={uploadProg} {verifying} {canSteer} touch={touchUI}
+        scope={session.id || ''} onsend={(mode) => submit(mode)} onstop={() => stop()} />
     </div>
   </div>
 
@@ -654,7 +692,13 @@
   .attachments { display: flex; flex-wrap: wrap; gap: 7px; padding: 2px 6px 10px; }
   .att { position: relative; display: flex; align-items: center; height: 52px; border-radius: 12px; overflow: hidden; background: var(--hover); }
   .att.img { width: 52px; }
-  .att img { width: 52px; height: 52px; object-fit: cover; display: block; }
+  .att img, .att video { width: 52px; height: 52px; object-fit: cover; display: block; }
+  .att video { pointer-events: none; background: #000; }
+  /* 视频瓦片：封面中间垫一枚半透明圆底播放标（和 agy 附件同一个三角） */
+  .att-vid { position: relative; }
+  .att-play { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%;
+    background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; pointer-events: none; }
+  .att-play svg { width: 13px; height: 13px; fill: #fff; margin-left: 1px; }
   .att-view { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; }
   .att-name { padding: 0 12px; font-size: 13px; color: var(--text); max-width: 170px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .att-open { align-self: stretch; border: 0; background: none; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
@@ -674,7 +718,6 @@
   .att-link:hover { text-decoration-color: currentColor; }
   .att-spin { position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; animation: attspin .8s linear infinite; }
   @keyframes attspin { to { transform: rotate(360deg); } }
-  .submit:disabled { opacity: .45; }
   .field { min-height: 30px; max-height: 40vh; overflow-y: auto; font-size: 16px; line-height: 1.4; color: var(--text); outline: none; padding: 2px 6px 12px; }
   .field:empty::before { content: attr(data-ph); color: var(--muted); }
   /* 输入建议：占位文字换成建议，右上角一枚小键帽（Tab / 手机上「填入」）；长建议折行时给键帽让位 */
@@ -693,7 +736,7 @@
   .left, .right { display: flex; align-items: center; gap: 4px; min-width: 0; }
   .left { flex: none; }
   .right { flex: 1 1 auto; justify-content: flex-end; }
-  .left :global(.qr-wrap), .submit { flex: none; }
+  .left :global(.qr-wrap) { flex: none; }
   .plus-wrap { position: relative; display: flex; flex: none; }
   .tbtn { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: var(--serif); }
   .tbtn:active { background: var(--hover); }
@@ -727,20 +770,4 @@
   .model.lvl { color: var(--muted); }
   /* 「· Fast」后缀：官方为灰色（与模型名区分） */
   .model-fast { color: var(--muted); }
-  .submit { width: 38px; height: 38px; border-radius: 11px; background: var(--text); color: var(--bg); display: flex; align-items: center; justify-content: center; margin-left: 2px; }
-  .submit.stop { border-radius: 11px; }
-  /* 确认中：底色压淡、不吃点击；圈 400ms 后才淡入，快速确认时只是按钮淡了一瞬 */
-  .submit.verifying, .submit.verifying:disabled { opacity: 1; background: var(--hover-strong); color: var(--muted); cursor: default; }
-  .vspin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent;
-    opacity: 0; animation: attspin .9s linear infinite, vfade .2s ease-out .4s forwards; }
-  @keyframes vfade { to { opacity: 1; } }
-  /* 工作中的分体发送键：左半插话发送、右半下拉（稍后发送 / 停止） */
-  .split-wrap { position: relative; display: flex; margin-left: 2px; }
-  .split-main { margin-left: 0; width: 34px; border-radius: 11px 3px 3px 11px; }
-  .split-caret { margin-left: 1.5px; width: 20px; border-radius: 3px 11px 11px 3px; }
-  .split-menu { position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 30; min-width: 168px; padding: 4px; border-radius: 10px;
-    background: var(--card); box-shadow: var(--card-shadow); display: flex; flex-direction: column; }
-  .split-menu button { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 10px; border-radius: 7px; text-align: left; font-size: 13.5px; color: var(--text); }
-  .split-menu button:hover { background: var(--hover); }
-  .split-menu .kbd { font-size: 11.5px; color: var(--muted); }
 </style>

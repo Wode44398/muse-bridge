@@ -76,3 +76,17 @@ test('子 agent 没出媒体：不插任何段（正文分段与直播一致）'
   const kinds = msgs.filter((m) => m.role === 'assistant').flatMap((m) => m.segments.map((s) => s.kind));
   assert.deepEqual(kinds, ['text', 'tools', 'text']);
 }));
+
+test('一次出多件（params 里给了张数）：回执里每个路径各还原一段；查模型工具照常露成工具行', () => withSession([
+  user('u1', null, '出两张'),
+  asst('a1', 'u1', [toolUse('l1', 'mcp__media__list_media_models', { kind: 'image' })]),
+  user('r0', 'a1', result('l1', '【图像】默认 p-1/x')),
+  asst('a2', 'r0', [toolUse('m1', 'mcp__media__generate_image', { prompt: 'two boats', params: { count: 2 } })]),
+  user('r1', 'a2', result('m1', '已生成图片并展示给用户（x · 2K · auto）。作品 id ' + ID1 + '（接着改这张传 continueFrom）。绝对文件路径（可用 Read 查看，或 Bash 复制进项目当素材）：C:\\m\\' + ID1 + '.png\n同一次另外生成的 1 件：\nC:\\m\\' + ID2 + '.jpg')),
+  asst('a3', 'r1', [{ type: 'text', text: '好了。' }]),
+], {}, async (file) => {
+  const msgs = await readSessionMessages(file);
+  assert.deepEqual(mediaSegs(msgs).map((s) => [s.id, s.ext, s.prompt]), [[ID1, 'png', 'two boats'], [ID2, 'jpg', 'two boats']]);
+  const toolNames = msgs.flatMap((m) => m.segments || []).filter((s) => s.kind === 'tools').flatMap((s) => s.tools.map((t) => t.name));
+  assert.deepEqual(toolNames, ['mcp__media__list_media_models']);
+}));

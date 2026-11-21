@@ -57,6 +57,7 @@ export default {
   '做网页、文档时不等你开口就配图、配乐；关掉后只在你明确要求时生成': 'Adds images and music to pages and documents without being asked. When off, it generates only when you ask.',
   '经 bridge 的操作接口生成；图片和语音按权限档审批，视频和音乐每次先问你': 'Generates through the bridge operations API. Images and speech follow the permission mode; video and music ask you every time.',
   '经 bridge 的操作接口生成；视频和音乐每次先问你': 'Generates through the bridge operations API. Video and music ask you every time.',
+  '对话里通过 Bridge 工具生成图片、视频、语音、音乐': 'Generates images, video, speech, and music in chat via Bridge tools',
   '外部 agent': 'External agents',
   '拿着「Agent 接入」里生成的密钥来调用的 agent 和脚本': 'Agents and scripts that call in with a key created in Agent access',
   '图片': 'Image',

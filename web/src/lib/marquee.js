@@ -22,7 +22,8 @@ export function marquee(node) {
   };
   const start = () => {
     if (!(ov > 1)) return;
-    const dist = ov + FADE_R;
+    // 行尾多一枚按钮（子会话折叠钮）时渐隐区更宽，由 CSS 的 --mq-fade 给出，滚动终点跟着落在渐隐起点
+    const dist = ov + (parseFloat(getComputedStyle(node).getPropertyValue('--mq-fade')) || FADE_R);
     node.style.setProperty('--mq-x', dist + 'px');
     node.style.setProperty('--mq-dur', (dist / SPEED).toFixed(2) + 's');
     node.dataset.run = '';

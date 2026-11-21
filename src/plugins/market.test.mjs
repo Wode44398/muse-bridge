@@ -70,7 +70,7 @@ const vis10 = zipOf('visualize', '1.0.0', { engines: { bridge: BOUNDED } });
 const vis11 = zipOf('visualize', '1.1.0', { engines: { bridge: BOUNDED }, body: 'export function apply() { throw new Error("坏了"); }\n' });
 const visOpen = zipOf('visualize', '1.2.0', { engines: { bridge: '>=1' } });
 const entries = () => [
-  { id: 'mk-demo', name: '演示', description: '演示插件', category: 'integration', versions: [ver('mk-demo', '2.0.0', demo20, { engines: { bridge: '>=99' } }), ver('mk-demo', '1.1.0', demo11), ver('mk-demo', '1.0.0', demo10)] },
+  { id: 'mk-demo', name: '演示', description: '演示插件', category: 'integration', icon: 'https://example.com/mk-demo.png', versions: [ver('mk-demo', '2.0.0', demo20, { engines: { bridge: '>=99' } }), ver('mk-demo', '1.1.0', demo11), ver('mk-demo', '1.0.0', demo10)] },
   { id: 'visualize', name: '内嵌图表', builtin: true, versions: [ver('visualize', '1.0.0', vis10, { engines: { bridge: BOUNDED } })] },
   { id: 'not-here', name: '别的版本才有的内置功能', builtin: true, versions: [ver('mk-demo', '1.0.0', demo10)] },
 ];
@@ -102,6 +102,7 @@ test('列表：兼容版本、安装状态、这台没有的内置功能不列',
   assert.equal(demo.state, 'none');
   assert.equal(demo.latest.version, '1.1.0');               // 2.0.0 要 bridge >=99，跳过
   assert.match(demo.versions[0].problem, />=99/);
+  assert.equal(demo.icon, 'https://example.com/mk-demo.png'); // 应用卡片的图标靠它，漏了就只能退回字形
   const vis = r.plugins.find((p) => p.id === 'visualize');
   assert.equal(vis.state, 'builtin');
   assert.equal(vis.update, true);                            // 内置功能有可用的市场版 = 提示更新

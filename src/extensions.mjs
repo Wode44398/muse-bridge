@@ -56,10 +56,15 @@ export const stripCc = (s) => String(s ?? '').replace(/\p{Cc}/gu, '');
 
 // 支持矩阵（值为 false=该 agent 不支持此类型；'stdio'=仅 stdio 传输时支持）。
 export const EXT_SUPPORT = {
-  skill: { claude: true, dimensio: true, codex: true },
-  connector: { claude: true, dimensio: true, codex: 'stdio' },
-  plugin: { claude: true, dimensio: false, codex: false },
+  skill: { claude: true, dimensio: true, codex: true, agy: true },
+  connector: { claude: true, dimensio: true, codex: 'stdio', agy: true },
+  plugin: { claude: true, dimensio: false, codex: false, agy: false },
 };
+// 可勾选的 agent；STDIO_ONLY 里的只接本地 stdio 连接器（Codex app-server 没声明远程 MCP 能力）。
+// agy 的 ACP 也只收 stdio，远程连接器由 bridge 服务端代连、并进 bridge 自己那个工具服务（modules/agy 的工具中枢）。
+const EXT_AGENTS = ['claude', 'dimensio', 'codex', 'agy'];
+const STDIO_ONLY = new Set(['codex']);
+const AGENT_LABEL = { codex: 'Codex', agy: 'Antigravity' };
 
 // 与 in-process MCP server 名撞车会静默顶掉内置能力，一律避让。
 // bridge 自带的进程内 MCP 服务名（claude.mjs mcpServers）：扩展连接器撞上就改名避让，否则 ...ext.mcpServers 排在最后会把内置的顶掉
@@ -89,6 +94,10 @@ function readStore() {
     }
   }
   const store = { items: (Array.isArray(data.items) ? data.items : []).filter((x) => x && typeof x.id === 'string' && typeof x.name === 'string' && x.type) };
+  // 2026-11-19 新增 agy 勾选：老条目没有这一项，按 Codex 的勾选补（同为本机 CLI agent、同样只接 stdio）；下次保存落盘
+  for (const x of store.items) {
+    if (x.agents && typeof x.agents === 'object' && typeof x.agents.agy !== 'boolean') x.agents.agy = x.type !== 'plugin' && !!x.agents.codex;
+  }
   if (!registryError) migrateLegacySecrets(store);
   return store;
 }
@@ -407,7 +416,7 @@ export function installSkillFromDir(srcDir, { replaceId, pkg, source, scope } = 
     ...(pkgName ? { pkg: pkgName } : {}),
     ...(src ? { source: src } : {}),
     enabled: old ? old.enabled : true,
-    agents: old ? old.agents : { claude: true, dimensio: true, codex: true },
+    agents: old ? old.agents : { claude: true, dimensio: true, codex: true, agy: true },
     dir: dirPrefix(sc) + 'skills/' + slug,
     entry: 'SKILL.md',
     files: stats.files, size: stats.size,
@@ -479,7 +488,7 @@ export function installPluginFromDir(srcDir, { replaceId, pkg, source, manifest,
     ...(pkgName ? { pkg: pkgName } : {}),
     ...(src ? { source: src } : {}),
     enabled: old ? old.enabled : true,
-    agents: old ? old.agents : { claude: true, dimensio: false, codex: false },
+    agents: old ? old.agents : { claude: true, dimensio: false, codex: false, agy: false },
     dir: dirPrefix(sc) + 'plugins/' + slug,
     entry: '.claude-plugin/plugin.json',
     files: stats.files, size: stats.size,
@@ -548,12 +557,12 @@ export function saveConnector(input = {}) {
     ...(input.pkg ? { pkg: stripCc(input.pkg).trim().slice(0, 80) } : old?.pkg ? { pkg: old.pkg } : {}),
     ...((cleanSource(input.source) || old?.source) ? { source: cleanSource(input.source) || old.source } : {}),
     enabled: old ? old.enabled : true,
-    agents: old ? old.agents : { claude: true, dimensio: false, codex: transport === 'stdio' },
+    agents: old ? old.agents : { claude: true, dimensio: false, codex: transport === 'stdio', agy: transport === 'stdio' },
     connector: conn,
     created: old ? old.created : now(), updated: now(),
   };
-  // codex 只支持 stdio：传输改成 http/sse 时自动摘掉 codex 勾选。
-  if (transport !== 'stdio') item.agents.codex = false;
+  // codex / agy 只支持 stdio：传输改成 http/sse 时自动摘掉它们的勾选。
+  if (transport !== 'stdio') for (const a of STDIO_ONLY) item.agents[a] = false;
   // 先存凭据（存不进去就整个不保存，绝不退回明文），再写注册表
   const storeCreds = () => {
     try { writeSecrets(EXT_ROOT, secrets); }
@@ -607,11 +616,11 @@ export function updateExtension(id, patch = {}) {
   else if (patch.pkg === null) delete item.pkg;
   if (patch.agents && typeof patch.agents === 'object') {
     const support = EXT_SUPPORT[item.type] || {};
-    for (const a of ['claude', 'dimensio', 'codex']) {
+    for (const a of EXT_AGENTS) {
       if (typeof patch.agents[a] !== 'boolean') continue;
       if (patch.agents[a] && !support[a]) throw httpErr(400, `该类型扩展不支持 ${a}`);
-      // connector×codex 仅 stdio 可勾。
-      if (patch.agents[a] && a === 'codex' && item.type === 'connector' && item.connector?.transport !== 'stdio') throw httpErr(400, 'Codex 仅支持 stdio 连接器');
+      // connector × codex / agy 仅 stdio 可勾。
+      if (patch.agents[a] && STDIO_ONLY.has(a) && item.type === 'connector' && item.connector?.transport !== 'stdio') throw httpErr(400, `${AGENT_LABEL[a]} 仅支持 stdio 连接器`);
       item.agents[a] = patch.agents[a];
     }
   }
@@ -661,11 +670,11 @@ export function bulkByPkg(pkg, input = {}) {
     const patch = input.agents || {};
     for (const it of members) {
       const sup = EXT_SUPPORT[it.type] || {};
-      for (const a of ['claude', 'dimensio', 'codex']) {
+      for (const a of EXT_AGENTS) {
         if (typeof patch[a] !== 'boolean') continue;
         // 包内类型可能混合：不支持的组合逐项跳过，不整体报错。
         if (patch[a] && !sup[a]) continue;
-        if (patch[a] && a === 'codex' && it.type === 'connector' && it.connector?.transport !== 'stdio') continue;
+        if (patch[a] && STDIO_ONLY.has(a) && it.type === 'connector' && it.connector?.transport !== 'stdio') continue;
         it.agents = { ...(it.agents || {}), [a]: patch[a] };
       }
       it.updated = now();
@@ -846,6 +855,52 @@ export function codexExtensionParams() {
     mcpServers[c.key || slugify(item.name, item.id)] = { command: c.command, args: c.args || [], ...(hasValues(env) ? { env } : {}) };
   }
   return { instructions, mcpServers };
+}
+
+// Antigravity：系统提示追加段（技能渐进披露，与 Codex 同法）+ ACP session 的 mcpServers（仅 stdio；ACP 的 env 是 [{name,value}] 数组）。
+// 只给主机管理员（agy 本身不开放给注册用户），范围 = 自用 + 全服。
+export function agyExtensionParams() {
+  const items = readStore().items.filter((x) => x.enabled);
+  const skills = items.filter((x) => x.type === 'skill' && x.agents?.agy);
+  let instructions = '';
+  if (skills.length) {
+    const lines = skills.map((s) => {
+      const md = path.join(extensionDir(s) || '', 'SKILL.md');
+      return `  - ${s.name}：${String(s.description || '').replace(/\s+/g, ' ').slice(0, 300)}\n    SKILL.md：${md}`;
+    });
+    instructions = '- 【已安装的技能】本机装有以下技能（扩展中心统一托管）。任务和某个技能对得上时，先读它的 SKILL.md（下面是绝对路径）并照做，配套文件在同一目录：\n' + lines.join('\n');
+  }
+  const mcpServers = [];
+  const conns = items.filter((x) => x.type === 'connector' && x.agents?.agy && x.connector?.transport === 'stdio');
+  const secrets = secretsForInjection(conns);
+  const seen = new Set();
+  for (const item of conns) {
+    const c = item.connector;
+    const name = connectorMcpKey(item);
+    // bridge 是 agy 自带工具服务的名字，撞上就让
+    if (seen.has(name) || RESERVED_MCP_KEYS.has(name.toLowerCase())) continue;
+    seen.add(name);
+    const { env } = connectorCreds(item, secrets);
+    mcpServers.push({
+      name,
+      command: c.command,
+      args: c.args || [],
+      env: Object.entries(env || {}).map(([k, v]) => ({ name: k, value: String(v ?? '') })),
+    });
+  }
+  return { instructions, mcpServers };
+}
+
+// Antigravity 的远程连接器（http / sse）：ACP 不收，由 bridge 服务端用 MCP 客户端代连。
+// config 与 Claude 注入的同一份（connectorMcpConfig）——CLI 存 OAuth 令牌的键按它算，差一个字就找不到令牌。
+// updated 进 agy 的工具指纹：连接器改了配置，agy 常驻进程下次空闲时重启、重新取工具清单。
+export function agyRemoteConnectors() {
+  const conns = readStore().items.filter((x) => x.enabled && x.type === 'connector' && x.agents?.agy && x.connector && x.connector.transport !== 'stdio' && x.connector.url);
+  const secrets = secretsForInjection(conns);
+  return conns.map((item) => ({
+    id: item.id, name: item.name, server: connectorMcpKey(item), updated: item.updated || 0,
+    config: connectorMcpConfig(item, secrets),
+  }));
 }
 
 // —— G10：注册表与连接器诊断（设置页扩展中心顶部显示）——

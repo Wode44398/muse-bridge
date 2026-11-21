@@ -1,0 +1,574 @@
+/* Antigravity 分页双主题令牌与排版规范：
+   暗色 = 石墨灰 + 柔和蓝、亮色 = 白底 + 浅灰侧栏；层次只靠底色深浅与细线，整页零 backdrop-filter。 */
+
+@font-face {
+  font-family: 'Agy Symbols Rounded';
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: block;
+  src: url('../../visuals/fonts/agy/material-symbols-rounded-agy.woff2') format('woff2');
+}
+
+/* 锥形光环转角：注册为继承型 <angle> 以驱动伪元素旋转渐变 */
+@property --agy-angle {
+  syntax: '<angle>';
+  inherits: true;
+  initial-value: 0deg;
+}
+/* 光环饱和度（空闲 0.5 ⇄ 在干活 1）：注册成数值才能平滑过渡 */
+@property --agy-ring-a {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0.5;
+}
+
+/* —— 统一动效（11-19，参数与 lib/agy/motion.js 同一套 M3 曲线）——
+   agy-grow：这一轮里新长出来的一行（思考 / 工具）——高度从 0 撑开、由下而上淡入，下面的状态栏被平滑推下去，
+   不是一帧跳；只挂在流式中的消息上，打开历史不演。agy-rise：新出现的块（卡片、正文段）淡入上浮。 */
+.agy-root .agy-grow {
+  animation: agy-grow 0.42s cubic-bezier(0.2, 0, 0, 1) backwards;
+}
+@keyframes agy-grow {
+  from { max-height: 0; opacity: 0; transform: translateY(5px); }
+  60% { opacity: 1; }
+  to { max-height: 34px; transform: none; }
+}
+.agy-root .agy-rise {
+  animation: agy-rise 0.44s cubic-bezier(0.05, 0.7, 0.1, 1) backwards;
+}
+@keyframes agy-rise {
+  from { opacity: 0; transform: translateY(8px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agy-root .agy-grow,
+  .agy-root .agy-rise { animation: none; }
+}
+
+.agy-root .msr,
+.agy-root .msr4,
+.agy-root .msr-f,
+.agy-root .msr5 {
+  font-family: 'Agy Symbols Rounded';
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  direction: ltr;
+  font-feature-settings: 'liga' 1;
+  font-variant-ligatures: discretionary-ligatures common-ligatures contextual;
+  -webkit-font-smoothing: antialiased;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+  user-select: none;
+  flex: none;
+}
+
+/* 图标规范（11-21，照 Material Symbols 的用法）：
+   · 字重一律 400（原来 320 / 400 / 500 三档混用，同一行里粗细不一）；msr / msr4 / msr5 三个类名留着只是历史写法，画出来一样。
+   · 光学尺寸不写死：font-optical-sizing 让 opsz 跟着字号走（字体的 opsz 轴 20–48）。原来全钉在 24，
+     而页面里的图标多数只有 14–18px，小字号下笔画偏细、细节发挤。
+   · 尺寸只用 14 / 16 / 18 / 20 / 24 五档（14 是贴着小字的箭头类）。
+   · 填充走 --ag-ico-fill：选中 / 打开态由线稿变实心（见下），带过渡。
+   · 字体是子集（scripts/agy-symbols/fetch.py 的 NAMES），用新名字先去那里加，否则页面上直接显示成那串英文。 */
+.agy-root .msr,
+.agy-root .msr4,
+.agy-root .msr-f,
+.agy-root .msr5 {
+  font-optical-sizing: auto;
+  font-variation-settings: 'FILL' var(--ag-ico-fill, 0), 'wght' 400;
+  transition: font-variation-settings 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+.agy-root .msr-f { --ag-ico-fill: 1; }
+/* 选中 / 打开 = 实心：工作区卡片开关与手机页签（aria-pressed / aria-selected）、顶栏文件夹打开时、
+   菜单里当前那一行的图标、已收藏的星 */
+.agy-root [aria-pressed="true"] > :is(.msr, .msr4),
+.agy-root [aria-selected="true"] > :is(.msr, .msr4),
+.agy-root .tb-folder-btn.on > .msr:not(.tb-chev),
+.agy-root .agy-menu-row.cur > .row-ico:is(.msr, .msr4),
+.agy-root :is(.msr, .msr4).filled { --ag-ico-fill: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .agy-root .msr, .agy-root .msr4, .agy-root .msr-f, .agy-root .msr5 { transition: none; }
+}
+
+.agy-root {
+  /* —— 暗色：取自 Antigravity 客户端自己的令牌（安装向导 / 启动页）——
+     近黑底 #131313，层级 #1A1A1A / #242424，分隔 #2A2A2A，文字 #F5F5F5 / #A0A0A0 / #666，强调 #2F80ED */
+  --ag-bg: #131313;
+  --ag-side-bg: #0e0e0e;
+  --ag-surface-1: #1a1a1a;
+  --ag-surface-2: #242424;
+  --ag-surface-3: #1a1a1a;
+  --ag-sheet-bg: #1a1a1a;
+  --ag-pop-bg: #1f1f1f;
+
+  --ag-on: #f5f5f5;
+  --ag-on-sub: #cfcfcf;
+  --ag-on-dim: #a0a0a0;
+  --ag-on-faint: #7a7a7a;
+  --ag-on-low: #5c5c5c;
+
+  --ag-accent: #4a90f0;
+  --ag-accent-strong: #2d74d7;
+  --ag-accent-soft: rgba(47, 128, 237, 0.16);
+  --ag-sel-bg: rgba(74, 144, 240, 0.2);
+  --ag-accent-bd: rgba(74, 144, 240, 0.4);
+  --ag-on-accent: #ffffff;
+  --ag-accent-fill: #2f80ed;
+
+  /* 输入框锥形光环（逆向 AI Studio /apps 首页输入栏 .input-container）：中性段取本页边框色，
+     谷歌四色只占 115°/193°/291°/322° 四个点（渐变本体写在 Composer 里：要吃到逐帧变化的 --agy-angle） */
+  --ag-conic-neutral: var(--ag-cbox-bd);
+
+  --ag-border: #2a2a2a;
+  --ag-border-strong: #3a3a3a;
+  --ag-divider: #222222;
+  --ag-hover: rgba(255, 255, 255, 0.055);
+  --ag-active: rgba(255, 255, 255, 0.09);
+  --ag-scrim: rgba(0, 0, 0, 0.6);
+
+  --ag-cbox-bg: #1a1a1a;
+  --ag-cbox-bd: #2a2a2a;
+  --ag-cbox-bd-focus: #444444;
+  --ag-cbox-on: #f5f5f5;
+  --ag-cbox-ph: #6e6e6e;
+  --ag-chip-bg: transparent;
+  --ag-chip-bd: #2a2a2a;
+  --ag-chip-hover: rgba(255, 255, 255, 0.07);
+
+  --ag-bubble-bg: #242424;
+  --ag-bubble-bd: transparent;
+  --ag-bubble-on: #f5f5f5;
+  --ag-code-bg: #1a1a1a;
+  --ag-code-bd: #2a2a2a;
+  --ag-code-on: #d4d4d4;
+  --md-codecopy-bg: #1a1a1a;
+
+  --ag-ok: #63c27f;
+  --ag-ok-bg: rgba(99, 194, 127, 0.12);
+  --ag-warn: #e8b84a;
+  --ag-warn-bg: rgba(232, 184, 74, 0.12);
+  --ag-err: #f07a72;
+  --ag-err-bg: rgba(240, 122, 114, 0.12);
+  --ag-err-bd: rgba(240, 122, 114, 0.28);
+
+  --ag-diff-add-bg: rgba(99, 194, 127, 0.12);
+  --ag-diff-add-fg: #9ad8aa;
+  --ag-diff-del-bg: rgba(240, 122, 114, 0.12);
+  --ag-diff-del-fg: #f5a9a3;
+
+  --ag-elev-shadow: 0 14px 40px -10px rgba(0, 0, 0, 0.7), 0 0 0 1px #2a2a2a;
+  --ag-glow-opacity: 0.90;
+  --ag-glow-subtle-opacity: 0.66;
+  --ag-mono: 'Google Sans Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+  --ag-sans: var(--gm-font-sans, 'Google Sans'), 'PingFang SC', 'Microsoft YaHei UI', system-ui, sans-serif;
+
+  /* 复用 Bridge 全局运动令牌（motion.js）：统一 140 / 200 / 280ms 节拍与缓动曲线 */
+  --ag-dur-micro: var(--mo-micro, 140ms);
+  --ag-dur-quick: var(--mo-quick, 200ms);
+  --ag-dur-base: var(--mo-base, 280ms);
+  --ag-ease-std: var(--ea-std, cubic-bezier(0.2, 0, 0, 1));
+  --ag-ease-decel: var(--ea-decel, cubic-bezier(0.05, 0.7, 0.1, 1));
+  --ag-ease-fade: var(--ea-fade, cubic-bezier(0.4, 0, 0.6, 1));
+
+  /* 对话列宽与三栏共用的顶栏带高度（桌面壳 WCO 下与原生 40px 窗控带严格共中线） */
+  --ag-col: 760px;
+  --ag-top-h: 44px;
+
+  font-family: var(--gm-font-brand, 'Google Sans Flex'), var(--gm-font-sans, 'Google Sans'), 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', system-ui, -apple-system, sans-serif;
+  color: var(--ag-on);
+  color-scheme: dark;
+}
+
+html[data-wco="1"] .agy-root {
+  --ag-top-h: max(40px, var(--wco-h, 40px));
+}
+
+/* 手机档（AgyPage 按 layout.compact 挂 .ag-compact）：顶栏带加高，触控目标与字号整体放大一档 */
+.agy-root.ag-compact {
+  --ag-top-h: 52px;
+}
+
+.agy-root.light {
+  /* —— 亮色：取自 Antigravity 客户端的浅色页（#FAFAFA 底、#202124 字、#DADCE0 线、Google 灰阶）—— */
+  --ag-bg: #fafafa;
+  --ag-side-bg: #f2f2f2;
+  --ag-surface-1: #f5f5f5;
+  --ag-surface-2: #ececec;
+  --ag-surface-3: #ffffff;
+  --ag-sheet-bg: #ffffff;
+  --ag-pop-bg: #ffffff;
+
+  --ag-on: #202124;
+  --ag-on-sub: #3c4043;
+  --ag-on-dim: #5f6368;
+  --ag-on-faint: #80868b;
+  --ag-on-low: #a8abaf;
+
+  --ag-accent: #2f80ed;
+  --ag-accent-strong: #2d74d7;
+  --ag-accent-soft: rgba(47, 128, 237, 0.09);
+  --ag-sel-bg: rgba(47, 128, 237, 0.12);
+  --ag-accent-bd: rgba(47, 128, 237, 0.32);
+  --ag-on-accent: #ffffff;
+  --ag-accent-fill: #2f80ed;
+
+  --ag-border: #dadce0;
+  --ag-border-strong: #c4c7cc;
+  --ag-divider: #e6e6e6;
+  --ag-hover: rgba(32, 33, 36, 0.05);
+  --ag-active: rgba(32, 33, 36, 0.085);
+  --ag-scrim: rgba(32, 33, 36, 0.3);
+
+  --ag-cbox-bg: #ffffff;
+  --ag-cbox-bd: #dadce0;
+  --ag-cbox-bd-focus: #b8bbc0;
+  --ag-cbox-on: #202124;
+  --ag-cbox-ph: #80868b;
+  --ag-chip-bg: transparent;
+  --ag-chip-bd: #dadce0;
+  --ag-chip-hover: rgba(32, 33, 36, 0.05);
+
+  --ag-bubble-bg: #ececec;
+  --ag-bubble-bd: transparent;
+  --ag-bubble-on: #202124;
+  --ag-code-bg: #f3f3f3;
+  --ag-code-bd: #e3e3e3;
+  --ag-code-on: #2b2f36;
+  --md-codecopy-bg: #f3f3f3;
+
+  --ag-ok: #188038;
+  --ag-ok-bg: rgba(24, 128, 56, 0.09);
+  --ag-warn: #b06000;
+  --ag-warn-bg: rgba(176, 96, 0, 0.09);
+  --ag-err: #c5221f;
+  --ag-err-bg: #fce8e6;
+  --ag-err-bd: rgba(197, 34, 31, 0.22);
+
+  --ag-diff-add-bg: rgba(24, 128, 56, 0.09);
+  --ag-diff-add-fg: #137333;
+  --ag-diff-del-bg: rgba(197, 34, 31, 0.08);
+  --ag-diff-del-fg: #a50e0e;
+
+  --ag-elev-shadow: 0 10px 32px -8px rgba(32, 33, 36, 0.18), 0 0 0 1px #e3e3e3;
+  --ag-glow-opacity: 0.56;
+  --ag-glow-subtle-opacity: 0.40;
+  color-scheme: light;
+}
+
+.agy-root button {
+  font-family: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 「在跑」文字流光（同 Claude 分页 cl-shine 的节奏）：本色打底，一道亮光从右往左扫过，3s 一循环、中间停一拍 */
+@keyframes agy-text-shine {
+  0%, 22% { background-position: 150% 0; animation-timing-function: cubic-bezier(.5, .05, .45, .95); }
+  76%, 100% { background-position: -50% 0; }
+}
+.agy-root .agy-shine {
+  background-image: linear-gradient(120deg, var(--ag-on-dim) 25%, var(--ag-on) 50%, var(--ag-on-dim) 75%);
+  background-position: 150% 0;
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: agy-text-shine 3s infinite;
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agy-root .agy-shine { background-position: 50% 0; animation: none; }
+}
+
+/* 从活动面板跳回某个工具步骤时的短暂高亮 */
+.agy-root .agy-card-flash {
+  animation: agy-card-flash 1.5s ease-out;
+}
+@keyframes agy-card-flash {
+  0%, 30% { background: var(--ag-accent-soft); }
+  100% { background: transparent; }
+}
+
+/* —— AI 回复 Markdown 排版与三档字号（{@html} 动态渲染节点走全局规则）—— */
+.agy-root { --ag-msg-size: 15px; }
+.agy-root[data-ag-font="sm"] { --ag-msg-size: 13.5px; }
+.agy-root[data-ag-font="lg"] { --ag-msg-size: 16.5px; }
+/* 手机档正文各档 +1：默认 16，与放大后的输入框（17）、顶栏标题（15.5）成一套 */
+.agy-root.ag-compact { --ag-msg-size: 16px; }
+.agy-root.ag-compact[data-ag-font="sm"] { --ag-msg-size: 14.5px; }
+.agy-root.ag-compact[data-ag-font="lg"] { --ag-msg-size: 17.5px; }
+
+.agy-root .agy-md {
+  font-size: var(--ag-msg-size, 15px);
+  line-height: 1.66;
+  color: var(--ag-on);
+  word-break: break-word;
+}
+.agy-root .agy-md > :first-child { margin-top: 0; }
+.agy-root .agy-md > :last-child { margin-bottom: 0; }
+.agy-root .agy-md p { margin: 0 0 11px; }
+.agy-root .agy-md h1,
+.agy-root .agy-md h2,
+.agy-root .agy-md h3,
+.agy-root .agy-md h4 {
+  margin: 18px 0 8px;
+  font-weight: 560;
+  line-height: 1.32;
+  letter-spacing: -0.01em;
+}
+.agy-root .agy-md h1 { font-size: 19px; }
+.agy-root .agy-md h2 { font-size: 17px; }
+.agy-root .agy-md h3 { font-size: 15.5px; }
+.agy-root .agy-md h4 { font-size: 14.5px; }
+.agy-root .agy-md strong { color: var(--ag-on); font-weight: 600; }
+.agy-root .agy-md a {
+  color: var(--ag-accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--ag-accent) 40%, transparent);
+  text-underline-offset: 3px;
+}
+.agy-root .agy-md a:hover { text-decoration-color: var(--ag-accent); }
+.agy-root .agy-md ul,
+.agy-root .agy-md ol { margin: 0 0 11px; padding-left: 22px; }
+.agy-root .agy-md li { margin: 3.5px 0; }
+.agy-root .agy-md blockquote {
+  margin: 0 0 11px;
+  padding: 3px 0 3px 13px;
+  border-left: 2px solid var(--ag-accent-bd);
+  color: var(--ag-on-sub);
+}
+.agy-root .agy-md hr { border: 0; border-top: 1px solid var(--ag-divider); margin: 14px 0; }
+.agy-root .agy-md code {
+  font-family: var(--ag-mono);
+  font-size: 0.87em;
+  background: var(--ag-code-bg);
+  border: 1px solid var(--ag-code-bd);
+  padding: 1.5px 6px;
+  border-radius: 6px;
+  color: var(--ag-code-on);
+}
+.agy-root .agy-md pre {
+  margin: 0 0 12px;
+  border: 1px solid var(--ag-code-bd);
+  border-radius: 13px;
+  background: var(--ag-code-bg);
+  padding: 12px 14px;
+  overflow-x: auto;
+}
+.agy-root .agy-md pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--ag-code-on);
+  white-space: pre;
+}
+.agy-root .agy-md > .md-codewrap:first-child > pre { margin-top: 0; }
+.agy-root .agy-md > .md-codewrap:last-child > pre { margin-bottom: 0; }
+.agy-root .agy-md img { max-width: 100%; border-radius: 12px; display: block; margin: 6px 0 10px; }
+/* 表格：圆角容器（lib/md.js 套的 .md-tablewrap，贴着表格收窄）+ 只留行分隔线，与代码卡成一套；
+   字号跟正文走（0.9em：15 → 13.5、手机档 16 → 14.4） */
+.agy-root .agy-md .md-tablewrap {
+  width: fit-content;
+  border: 1px solid var(--ag-divider);
+  border-radius: 13px;
+}
+.agy-root .agy-md table { border-collapse: collapse; font-size: 0.9em; }
+.agy-root .agy-md th,
+.agy-root .agy-md td { border: 0; border-bottom: 1px solid var(--ag-divider); padding: 8px 14px; text-align: left; }
+.agy-root .agy-md tr:last-child > td { border-bottom: 0; }
+.agy-root .agy-md th { background: var(--ag-surface-1); font-weight: 560; }
+
+/* —— 弹出菜单通用行（模型 / 文件夹 / 已隐藏 三个弹层共用）—— */
+.agy-root .agy-menu-label {
+  padding: 10px 10px 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ag-on-faint);
+}
+.agy-root .agy-menu-sep {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--ag-divider);
+}
+.agy-root .agy-menu-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  text-align: left;
+  font-size: 13.5px;
+  color: var(--ag-on);
+  min-width: 0;
+}
+.agy-root .agy-menu-row:hover,
+.agy-root .agy-menu-row.kb { background: var(--ag-hover); }
+.agy-root .agy-menu-row .row-ico { font-size: 18px; color: var(--ag-on-dim); flex: none; }
+.agy-root .agy-menu-row .row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.agy-root .agy-menu-row .row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agy-root .agy-menu-row .row-desc {
+  font-size: 12px;
+  color: var(--ag-on-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agy-root .agy-menu-row .row-chk { font-size: 18px; color: var(--ag-on); flex: none; }
+.agy-root .agy-menu-row.dim { color: var(--ag-on-sub); }
+
+/* —— 按压涟漪（lib/agy/ripple.js 往按钮里挂的 .agy-rpl）：铺满按钮、跟它的圆角裁切，圆点用按钮的文字色 —— */
+.agy-root .agy-rpl {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+  contain: strict;
+}
+.agy-root .agy-rpl > i {
+  position: absolute;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+/* —— 触屏：:hover 点完会粘住（按钮一直垫着灰底），按压反馈交给涟漪，这些悬停底一律不要 —— */
+@media (hover: none) {
+  .agy-root.agy-page .agy-menu-row:hover:not(.cur):not(.kb),
+  .agy-root.agy-page .tb-icon-btn:hover,
+  .agy-root.agy-page .tb-folder-btn:hover:not(.on),
+  .agy-root.agy-page .agy-bar-icon:hover:not(.on),
+  .agy-root.agy-page .agy-slash-item:hover:not(.active),
+  .agy-root.agy-page .q-btn:hover,
+  .agy-root.agy-page .sh-btn:hover,
+  .agy-root.agy-page .agy-act-btn:hover,
+  .agy-root.agy-page .agy-wait-btn:hover,
+  .agy-root.agy-page .agy-sg-head:hover,
+  .agy-root.agy-page .agy-think-head:hover,
+  .agy-root.agy-page .sb-icon-btn:hover,
+  .agy-root.agy-page .sb-row-btn:hover,
+  .agy-root.agy-page .sb-group-head:hover,
+  .agy-root.agy-page .sb-peek:hover,
+  .agy-root.agy-page .sb-hit:hover,
+  .agy-root.agy-page .sb-foot-btn:hover,
+  .agy-root.agy-page .sb-item:hover:not(.active):not(.cur) { background: transparent; }
+}
+
+/* —— 底部抽屉（AgyPopover .sheet）的行：整行胶囊；当前项 = 带一点蓝调的浅色胶囊 + 强调色对勾（M3 的 tonal 选中态）—— */
+.agy-root .agy-pop-root.sheet .agy-menu-row { border-radius: 999px; }
+.agy-root.agy-page .agy-pop-root.sheet .agy-menu-row.cur { background: var(--ag-sel-bg); }
+.agy-root.agy-page .agy-pop-root.sheet .agy-menu-row.cur .row-chk { color: var(--ag-accent); }
+
+/* 手机档的底部抽屉（AgyPopover .sheet）跟着输入框放大一档：行 15.5 / 46 高、图标 20、标题 16.5、用量小字 +1 */
+.agy-root.ag-compact .agy-pop-root.sheet .agy-pop-card { max-height: 90vh; }
+.agy-root.ag-compact .agy-pop-root.sheet .pop-head { padding: 10px 22px 10px; font-size: 16.5px; }
+.agy-root.ag-compact .agy-pop-root.sheet .pop-body { padding: 5px 6px; }
+.agy-root.ag-compact .agy-pop-root.sheet .agy-menu-row { min-height: 46px; padding: 8px 16px; gap: 12px; font-size: 15.5px; }
+.agy-root.ag-compact .agy-pop-root.sheet .agy-menu-row .row-ico,
+.agy-root.ag-compact .agy-pop-root.sheet .agy-menu-row .row-chk { font-size: 20px; }
+.agy-root.ag-compact .agy-pop-root.sheet .agy-menu-row .row-ico svg { width: 20px; height: 20px; }
+.agy-root.ag-compact .agy-pop-root.sheet .agy-menu-row .row-desc { font-size: 13px; }
+.agy-root.ag-compact .agy-pop-root.sheet .agy-menu-label { padding: 12px 14px 4px; font-size: 12.5px; }
+.agy-root.ag-compact .agy-pop-root.sheet .agy-menu-sep { margin: 6px 8px; }
+.agy-root.ag-compact .agy-pop-root.sheet .ms-tag { font-size: 12.5px; }
+.agy-root.ag-compact .agy-pop-root.sheet .ms-env-list { padding-left: 32px; }
+.agy-root.ag-compact .agy-pop-root.sheet .us-sec { padding: 11px 16px 10px; }
+.agy-root.ag-compact .agy-pop-root.sheet .us-name,
+.agy-root.ag-compact .agy-pop-root.sheet .us-acct,
+.agy-root.ag-compact .agy-pop-root.sheet .us-sub { font-size: 12.5px; }
+.agy-root.ag-compact .agy-pop-root.sheet .us-label,
+.agy-root.ag-compact .agy-pop-root.sheet .us-val,
+.agy-root.ag-compact .agy-pop-root.sheet .us-group { font-size: 13.5px; }
+
+/* —— 尾焰光标（lib/agy/glow-caret.js 画的 .agy-caret；11-19 换成官网 hero 打字光标的复刻 + 动态色，
+   demo 与逆向笔记：前端设计/agy-caret/v5-官方对比.html 的 B2）——
+   形状照 antigravity.google 的 antigravity-cursor.png：上半截实心蓝条（#3186FF、圆头），下半截彩虹并向两侧
+   散开成尾焰；下半截是一条按色相排的循环色带缓缓向下流（7s 一圈，在跑时 3.5s）。
+   尺寸：1em = 字形高（同原生光标，JS 把 font-size 设成它），宽 / 芯宽 / 模糊有下限，否则 15px 输入框里细到看不见。
+   11-19 第二版（维护者：手机上看着粗、太浓重）：芯 2px→1.5px 且只比字笔画略粗、整体 .85→.75，尾焰收窄、透明度 .76→.5，
+   高度从整行高收回字形高（原来比字高出一截）。
+   闪烁：系统同款 1060ms 硬闪，打字 / 挪动后立即常亮重计时（JS 摘掉再挂 animation）。
+   只挪 background-position，不用 transform 动画（避免合成层在切明暗快照时裁不干净）。 */
+.agy-root .agy-cbox.cv-on .agy-cbox-input { caret-color: transparent; }
+.agy-root .agy-caret {
+  --caret-blue: #3186ff;
+  --caret-blue-0: rgb(49 134 255 / 0);
+  --caret-core-op: 0.75;
+  --caret-fl-op: 0.5;
+  --rb: linear-gradient(to bottom, #12a4c4 0%, #1dbb61 13%, #9ccc25 25%, #f6c009 37%, #ff9917 49%, #fd5250 61%, #f2557f 71%, #a77bf5 83%, #4f8dfa 93%, #12a4c4 100%);
+  --flow-dur: 7s;
+  position: absolute; left: 0; top: 0;
+  width: max(0.187em, 8px); height: 1em;
+  pointer-events: none; z-index: 2;
+  transform: translate(var(--x, 0px), var(--y, 0px));
+  animation: agy-caret-blink 1060ms step-end infinite;
+}
+/* 暗色底上原色带偏沉，略微拉高芯条蓝段、彩虹色带与不透明度；浅色底维持基准值 */
+.agy-root:not(.light) .agy-caret {
+  --caret-blue: #5ca6ff;
+  --caret-blue-0: rgb(92 166 255 / 0);
+  --caret-core-op: 0.90;
+  --caret-fl-op: 0.66;
+  --rb: linear-gradient(to bottom, #2ecae9 0%, #37db7c 13%, #b7e544 25%, #ffd533 37%, #ffaf40 49%, #ff6e6b 61%, #ff739b 71%, #c199ff 83%, #70abff 93%, #2ecae9 100%);
+}
+.agy-root .agy-cbox.busy .agy-caret { --flow-dur: 3.5s; }
+.agy-root .agy-caret.hidden { visibility: hidden; animation: none; }
+@keyframes agy-caret-blink { 0% { opacity: 1; } 50% { opacity: 0; } }
+/* 实心芯：上蓝下彩，下半截逐渐变淡 */
+.agy-root .agy-caret::before {
+  content: ''; position: absolute;
+  left: 50%; width: max(0.047em, 1.5px); transform: translateX(-50%); top: 6%; bottom: 4%;
+  border-radius: 99px 99px 1px 1px;
+  opacity: var(--caret-core-op);
+  background:
+    linear-gradient(to bottom, var(--caret-blue) 0%, var(--caret-blue) 43%, var(--caret-blue-0) 50%) 0 0 / 100% 100% no-repeat,
+    var(--rb) 0 0 / 100% 0.6em repeat-y;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 42%, rgba(0, 0, 0, 0.72) 62%, rgba(0, 0, 0, 0.5) 84%, rgba(0, 0, 0, 0.3) 93%, transparent 100%);
+          mask-image: linear-gradient(to bottom, #000 0%, #000 42%, rgba(0, 0, 0, 0.72) 62%, rgba(0, 0, 0, 0.5) 84%, rgba(0, 0, 0, 0.3) 93%, transparent 100%);
+  animation: agy-caret-flow var(--flow-dur) linear infinite;
+}
+/* 尾焰柔光：内层先按梯形裁好、外层整体模糊（模糊放在裁切之后边缘才软）；
+   尾焰层从 0.40em 起、芯从 0.08em 起，色带起点补 0.28em 让同一高度两层同色，否则叠出灰 */
+.agy-root .agy-caret .fl {
+  position: absolute; left: 0; right: 0; top: 40%; bottom: 1%;
+  filter: blur(max(0.028em, 1.3px)); opacity: var(--caret-fl-op);
+}
+.agy-root .agy-caret .fl::before {
+  content: ''; position: absolute; inset: 0;
+  background:
+    linear-gradient(to bottom, var(--caret-blue) 0%, var(--caret-blue-0) 16%) 0 0 / 100% 100% no-repeat,
+    var(--rb) 0 0.28em / 100% 0.6em repeat-y;
+  clip-path: polygon(43% 0, 57% 0, 75% 100%, 25% 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 32%, #000 80%, transparent 100%);
+          mask-image: linear-gradient(to bottom, transparent 0%, #000 32%, #000 80%, transparent 100%);
+  animation: agy-caret-flow-fl var(--flow-dur) linear infinite;
+}
+@keyframes agy-caret-flow { to { background-position: 0 0, 0 0.6em; } }
+@keyframes agy-caret-flow-fl { to { background-position: 0 0, 0 0.88em; } }
+@media (prefers-reduced-motion: reduce) {
+  .agy-root .agy-caret::before, .agy-root .agy-caret .fl::before { animation: none; }
+}

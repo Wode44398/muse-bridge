@@ -9,6 +9,7 @@ export const SHARE_TTLS = Object.freeze([
 
 export const AI_NAMES = Object.freeze({
   claude: 'Claude',
+  agy: 'Antigravity',
 });
 
 export function normalizeFileQuery(value) {
@@ -116,7 +117,7 @@ export async function sendFileToAi(item, target, slot, selectedSession, {
   const chat = chats[target];
   if (chat) {
     toast(t('正在准备…'));
-    const attachment = await material(item, true);
+    const attachment = await material(item, target === 'claude');
     if (!attachment) return;
     if (selectedSession === 'new') chat.newChat();
     else if (selectedSession && selectedSession !== chat.current()) await chat.load(selectedSession);

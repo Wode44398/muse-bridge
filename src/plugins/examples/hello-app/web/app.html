@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>你好应用</title>
+<link rel="stylesheet" href="/plugins/_sdk/bridge-plugin.css">
+<style>
+  .hero { display: flex; align-items: center; gap: 14px; margin: 4px 0 20px; }
+  .hero img { width: 52px; height: 52px; flex: none; }
+  .hero p { margin: 2px 0 0; font-size: 13px; line-height: 1.5; }
+  .val { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; color: var(--bp-muted);
+         max-width: 60%; text-align: right; overflow-wrap: anywhere; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .bp-row-stack > .actions { margin-top: 0; }
+  .count { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
+  .log { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; max-height: 52vh; overflow-y: auto; }
+  .log .bp-empty { padding: 18px 8px; }
+  .msg { font-size: 14px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg .who { display: block; font-size: 12px; color: var(--bp-muted); margin-bottom: 2px; }
+  .msg.user { align-self: flex-end; max-width: 85%; background: var(--bp-hover); border-radius: 10px; padding: 6px 10px; }
+  .msg.note { font-size: 12.5px; color: var(--bp-muted); }
+  .msg.err { font-size: 13px; color: var(--bp-crit); }
+  .msg.approval { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; white-space: normal; }
+  .preview { min-height: 180px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main class="bp-page">
+  <div class="hero">
+    <img id="icon" alt="">
+    <div>
+      <h1 class="bp-h1" id="title">你好应用</h1>
+      <p class="bp-muted" data-en="A plugin with no server code: declare ui.apps in the manifest, and Home gets an icon that opens this page. The three blocks below show what a page can do through bridge: keep data, chat with Claude, and read or write a file you pick.">一个没有服务端代码的插件：清单里声明 ui.apps，主页就多一个图标，点开是这个页面。下面三块演示页面能借 bridge 做的事：存数据、和 Claude 对话、读写你选的文件。</p>
+    </div>
+  </div>
+  <p class="bp-muted" id="nocaps" hidden data-en="This bridge doesn’t support page host features yet (counter, chat, files). Update bridge and come back.">这台 bridge 还不支持页面宿主能力（计数器、对话、读写文件），升级后再来看看。</p>
+
+  <!-- 一、计数器：bridge.kv 存在服务器上，每个使用者一份 -->
+  <div class="bp-section" id="kvBox" hidden>
+    <div class="bp-section-title" data-en="Counter (bridge.kv)">计数器（bridge.kv）</div>
+    <div class="bp-group">
+      <div class="bp-row">
+        <div class="bp-row-main">
+          <div class="count" id="count">0</div>
+          <div class="bp-row-desc" data-en="Stored on the server and only yours — still here after a reload or on another device.">存在服务器上、只属于你，刷新页面、换台设备打开都还在。</div>
+        </div>
+        <button class="bp-btn bp-btn-plain" id="reset" data-en="Reset">清零</button>
+        <button class="bp-btn bp-btn-primary" id="inc">+1</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 二、对话：以你的身份开的真会话，审批在 Claude 分页里批 -->
+  <div class="bp-section" id="chatBox" hidden>
+    <div class="bp-section-title" data-en="Chat with Claude (bridge.chat)">和 Claude 聊几句（bridge.chat）</div>
+    <div class="bp-group">
+      <div class="log" id="log"></div>
+      <div class="bp-row bp-row-stack">
+        <textarea class="bp-textarea" id="prompt" rows="2" placeholder="说点什么…" data-en-ph="Say something…"></textarea>
+        <div class="actions">
+          <button class="bp-btn bp-btn-primary" id="send" data-en="Send">发送</button>
+          <button class="bp-btn" id="stop" hidden data-en="Stop">停止</button>
+          <button class="bp-btn bp-btn-plain" id="newChat" hidden data-en="New chat">新对话</button>
+          <button class="bp-btn bp-btn-plain" id="openChat" hidden data-en="Open in Claude">在 Claude 分页打开</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 三、文件：只能碰你在 bridge 选择器里亲手选的文件，页面拿到的是句柄不是路径 -->
+  <div class="bp-section" id="fileBox" hidden>
+    <div class="bp-section-title" data-en="Read and write a file (bridge.pick.file / bridge.files)">读写文件（bridge.pick.file / bridge.files）</div>
+    <div class="bp-group">
+      <div class="bp-row">
+        <div class="bp-row-main">
+          <div class="bp-row-title" id="fileName" data-en="No file chosen">还没选文件</div>
+          <div class="bp-row-desc" id="fileDesc" data-en="The page only gets the files you pick in bridge’s own picker, never their paths.">页面只碰得到你在 bridge 选择器里亲手选的文件，也看不到路径。</div>
+        </div>
+        <button class="bp-btn" id="pick" data-en="Choose a file">选一个文件</button>
+      </div>
+      <div class="bp-row bp-row-stack" id="editRow" hidden>
+        <textarea class="bp-textarea preview" id="preview" spellcheck="false"></textarea>
+        <div class="bp-row-desc" id="cutNote" hidden data-en="Only the first 2000 characters are shown; the rest is kept as is when you save.">只显示前 2000 字；存回时后面的部分原样保留。</div>
+        <div class="actions"><button class="bp-btn bp-btn-primary" id="save" data-en="Save">存回</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 页面环境：宿主交过来的信息 -->
+  <div class="bp-section">
+    <div class="bp-section-title">bridge.info</div>
+    <div class="bp-group" id="info"><div class="bp-empty">…</div></div>
+  </div>
+  <div class="bp-section">
+    <div class="bp-section-title">bridge.context()</div>
+    <div class="bp-group" id="ctx"><div class="bp-empty">…</div></div>
+  </div>
+  <div class="bp-section">
+    <div class="bp-section-title">bridge.app()</div>
+    <div class="bp-group" id="app"><div class="bp-empty">…</div></div>
+  </div>
+  <div class="actions">
+    <button class="bp-btn" id="hi" data-en="Say hello">打个招呼</button>
+  </div>
+</main>
+<script type="module">
+  import { bridge } from '/plugins/_sdk/bridge-plugin.js';
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const show = (v) => (v == null ? 'null' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+  const rows = (obj) => {
+    const list = Object.entries(obj || {});
+    return list.length ? list.map(([k, v]) => `
+      <div class="bp-row"><div class="bp-row-main"><div class="bp-row-title">${esc(k)}</div></div><div class="val">${esc(show(v))}</div></div>`).join('')
+      : '<div class="bp-empty">null</div>';
+  };
+  // 图标的 light / dark 按「显示它的界面」命名：浅色界面用 light（深色线条），深色界面用 dark（浅色线条）
+  const paintIcon = () => { $('icon').src = document.documentElement.dataset.theme === 'light' ? 'icon-light.svg' : 'icon-dark.svg'; };
+
+  // 先等宿主把主题、语言、身份交过来，再画页面
+  const info = await bridge.ready();
+  const en = /^en/i.test(info.lang || '');
+  const t = (zh, english) => (en ? english : zh);
+  if (en) {
+    document.documentElement.lang = 'en';
+    document.title = $('title').textContent = 'Hello app';
+    for (const el of document.querySelectorAll('[data-en]')) el.textContent = el.dataset.en;
+    for (const el of document.querySelectorAll('[data-en-ph]')) el.placeholder = el.dataset.enPh;
+  }
+  const paint = () => {
+    $('info').innerHTML = rows(bridge.info);
+    $('ctx').innerHTML = rows(bridge.context());
+    $('app').innerHTML = bridge.app() ? rows(bridge.app()) : '<div class="bp-empty">null</div>';
+  };
+  paintIcon();
+  paint();
+  bridge.onTheme(() => { paintIcon(); paint(); });
+  bridge.on('context', paint);
+  $('hi').onclick = () => {
+    const a = bridge.app();
+    bridge.toast(en ? 'Hello from ' + (a ? a.plugin + ':' + a.id : 'a plugin page') + '!' : '你好！这里是 ' + (a ? a.plugin + ':' + a.id : '插件页面'));
+  };
+
+  // 能力探测：嵌在网页里看宿主支持什么，手机 App 里看是不是新版；老 bridge 的 SDK 没有 can()，当作都不支持
+  const can = (name) => typeof bridge.can === 'function' && bridge.can(name);
+  const fail = (e) => bridge.toast(e?.message || String(e), { error: true });
+  $('nocaps').hidden = typeof bridge.can === 'function';
+
+  // —— 一、计数器 ——
+  if (can('kv')) {
+    $('kvBox').hidden = false;
+    let n = Number(await bridge.kv.get('count').catch(() => 0)) || 0;
+    const paintCount = () => { $('count').textContent = String(n); };
+    const save = async (v) => {
+      const old = n;
+      n = v;
+      paintCount();
+      try { await bridge.kv.set('count', v); } catch (e) { n = old; paintCount(); fail(e); }
+    };
+    paintCount();
+    $('inc').onclick = () => save(n + 1);
+    $('reset').onclick = () => save(0);
+  }
+
+  // —— 二、对话 ——
+  // 会话 id 记在 kv 里，刷新页面接着聊；会话本身就是你在 Claude 分页里看到的那个，在那边接着说，这里也收得到
+  if (can('chat')) {
+    $('chatBox').hidden = false;
+    const log = $('log');
+    let sid = null;
+    let off = null;
+    let lastAct = 0;
+    let replayUntil = 0;
+    let cur = null;                    // 正在往里拼增量的那条回复
+    const tools = new Map();           // 工具 id → 那一行
+    const approvals = new Map();       // 审批 qid → 那一行
+    const emptyHint = () => {
+      log.innerHTML = '';
+      const d = document.createElement('div');
+      d.className = 'bp-empty';
+      d.textContent = t('以你的身份开一个真会话，Claude 分页的会话列表里也看得到它。', 'Starts a real chat as you — it also shows up in your Claude chat list.');
+      log.append(d);
+    };
+    const add = (cls, who, text) => {
+      log.querySelector('.bp-empty')?.remove();
+      const d = document.createElement('div');
+      d.className = 'msg ' + cls;
+      if (who) { const w = document.createElement('span'); w.className = 'who'; w.textContent = who; d.append(w); }
+      const body = document.createElement('span');
+      body.textContent = text || '';
+      d.append(body);
+      d.body = body;
+      log.append(d);
+      log.scrollTop = log.scrollHeight;
+      return d;
+    };
+    const setRunning = (on) => { $('stop').hidden = !on; };
+    const paintButtons = () => {
+      $('newChat').hidden = !sid;
+      $('openChat').hidden = !sid || !can('nav');
+    };
+    // 页面不能代批：提示去 Claude 分页，能跳就给个按钮
+    const KIND = { permission: t('用一个工具', 'use a tool'), plan: t('按计划动手', 'go ahead with a plan'), question: t('你回答一个问题', 'an answer from you') };
+    const addApproval = (ev) => {
+      const d = add('note approval', '', t('Claude 在等你批准：', 'Claude is waiting for your approval: ') + (ev.title || KIND[ev.kind] || ''));
+      if (can('nav')) {
+        const b = document.createElement('button');
+        b.className = 'bp-btn';
+        b.textContent = t('去 Claude 分页批准', 'Approve in Claude');
+        b.onclick = () => bridge.nav.session(sid);
+        d.append(b);
+      } else {
+        d.body.textContent += t('（去 Claude 分页批准）', ' (approve it in the Claude tab)');
+      }
+      return d;
+    };
+    // 重连时服务端紧跟着先补发正在跑的那一轮：它的问话（和已写下的半截回复）可能已经从历史里画过了，以补发的为准
+    const dropReplayedTail = (userText) => {
+      const users = [...log.querySelectorAll('.msg.user')];
+      const last = users[users.length - 1];
+      if (!last || last.body.textContent !== userText) return;
+      while (last.nextSibling) last.nextSibling.remove();
+      last.remove();
+    };
+    const onEvent = (ev) => {
+      lastAct = Date.now();
+      if (ev.type === 'turn') {
+        if (Date.now() < replayUntil) dropReplayedTail(ev.userText);
+        replayUntil = 0;
+        add('user', t('你', 'You'), ev.userText);
+        cur = null;
+        setRunning(true);
+      } else if (ev.type === 'text') {
+        if (!cur) cur = add('assistant', 'Claude', '');
+        cur.body.textContent += ev.text;
+        log.scrollTop = log.scrollHeight;
+      } else if (ev.type === 'tool') {
+        if (ev.status === 'start') {
+          tools.set(ev.id, { row: add('note', '', t('正在用 ', 'Using ') + ev.name + '…'), name: ev.name });
+          cur = null;   // 工具之后的文字另起一条，别接到工具行上面那条里
+        } else {
+          const tool = tools.get(ev.id);
+          if (tool) tool.row.body.textContent = t('用了 ', 'Used ') + tool.name + (ev.isError ? t('（出错了）', ' (failed)') : '');
+          tools.delete(ev.id);
+        }
+      } else if (ev.type === 'approval') {
+        approvals.set(ev.qid, addApproval(ev));
+      } else if (ev.type === 'approval.done') {
+        approvals.get(ev.qid)?.remove();
+        approvals.delete(ev.qid);
+      } else if (ev.type === 'done') {
+        if (!cur && ev.ok && ev.result) add('assistant', 'Claude', ev.result);
+        if (ev.interrupted) add('note', '', t('已停止', 'Stopped'));
+        for (const row of approvals.values()) row.remove();
+        approvals.clear();
+        cur = null;
+        setRunning(false);
+      } else if (ev.type === 'error') {
+        add('err', '', ev.message || ev.kind);
+        setRunning(false);
+        // kind:'stream' = 订阅被切断（撤销了对话权限、插件停用……），SDK 不再重连：清掉，下次发送后重新订
+        if (ev.kind === 'stream') off = null;
+      }
+    };
+    const subscribe = () => {
+      off?.();
+      replayUntil = Date.now() + 3000;
+      lastAct = Date.now();
+      off = bridge.chat.on(sid, onEvent);
+    };
+    // 订阅被切断（off 已清掉）或很久没动静时重订一次；服务端空闲断开后 SDK 自己会重连，这里只是兜底
+    const ensureSub = () => { if (!off || Date.now() - lastAct > 20 * 60_000) subscribe(); };
+
+    $('send').onclick = async () => {
+      const text = $('prompt').value.trim();
+      if (!text) return;
+      $('send').disabled = true;
+      try {
+        if (!sid) {
+          // 第一句：开会话（没授权时 SDK 先弹 bridge 自己的授权框，不同意就抛错）
+          sid = (await bridge.chat.start({ prompt: text })).sessionId;
+          if (can('kv')) bridge.kv.set('chat.session', sid).catch(() => {});
+          subscribe();
+          paintButtons();
+        } else {
+          const r = await bridge.chat.send(sid, text);
+          // 发出之后再确认订阅：订阅被撤销切断过的话，send 过程中人已经重新同意，这时才订得上（发之前订会再被拒一次）。
+          // 服务端连上时先补发正在跑的这一轮，晚订不会漏
+          ensureSub();
+          if (r?.queued) add('note', '', t('上一轮还没完，这句排上队了', 'Queued — it goes out when the current turn finishes'));
+        }
+        $('prompt').value = '';
+      } catch (e) { fail(e); } finally { $('send').disabled = false; }
+    };
+    $('prompt').onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('send').click(); };
+    $('stop').onclick = () => { if (sid) bridge.chat.stop(sid).catch(fail); };
+    $('openChat').onclick = () => { if (sid) bridge.nav.session(sid); };
+    $('newChat').onclick = () => {
+      off?.();
+      off = null;
+      sid = null;
+      cur = null;
+      tools.clear();
+      approvals.clear();
+      setRunning(false);
+      if (can('kv')) bridge.kv.set('chat.session', null).catch(() => {});
+      emptyHint();
+      paintButtons();
+    };
+
+    emptyHint();
+    // 刷新页面：把上次的会话画回来再接着订阅；会话不在了（删了、撤销了授权……）就当新对话
+    const saved = can('kv') ? await bridge.kv.get('chat.session').catch(() => null) : null;
+    if (saved) {
+      try {
+        const { messages } = await bridge.chat.history(saved);
+        sid = saved;
+        for (const m of messages) add(m.role === 'user' ? 'user' : 'assistant', m.role === 'user' ? t('你', 'You') : 'Claude', m.text);
+        subscribe();
+      } catch {}
+    }
+    paintButtons();
+  }
+
+  // —— 三、读写文件 ——
+  if (can('files')) {
+    $('fileBox').hidden = false;
+    const PREVIEW = 2000;
+    const FULL_MAX = 5 * 1024 * 1024;      // 再大就只读一段预览，不整份读进页面
+    let file = null;
+    let rest = '';                          // 前 2000 字之后的部分：存回时原样接上，不会把文件截短
+    const CUT_NOTE = $('cutNote').textContent;
+    const size = (b) => (b < 1024 ? b + ' B' : b < 1048576 ? (b / 1024).toFixed(1) + ' KB' : (b / 1048576).toFixed(1) + ' MB');
+    if (!can('pick.file')) {
+      $('pick').disabled = true;
+      $('fileDesc').textContent = t('选文件要在新版 bridge App 里才能用。', 'Choosing files needs the latest bridge app.');
+    }
+    $('pick').onclick = async () => {
+      try {
+        // 没授权时 SDK 先弹 bridge 自己的授权框；用户取消选择回 null
+        const picked = await bridge.pick.file({ accept: 'text/*,.md,.json,.csv,.log' });
+        if (!picked?.length) return;
+        const f = picked[0];
+        const big = f.size > FULL_MAX;
+        let text;
+        if (big) text = await (await bridge.files.read(f.handle, { as: 'blob' })).slice(0, PREVIEW * 4).text();
+        else text = await bridge.files.read(f.handle, { as: 'text' });
+        file = { ...f, editable: !big && f.mode === 'rw' };
+        rest = text.slice(PREVIEW);
+        $('fileName').textContent = f.name;
+        $('fileDesc').textContent = size(f.size) + (file.editable ? '' : t(' · 只读', ' · read only'));
+        $('preview').value = text.slice(0, PREVIEW);
+        $('preview').readOnly = !file.editable;
+        $('cutNote').textContent = big ? t('文件比较大，这里只读显示开头一段。', 'This file is large, so only the beginning is shown, read only.') : CUT_NOTE;
+        $('cutNote').hidden = !rest && !big;
+        $('save').hidden = !file.editable;
+        $('editRow').hidden = false;
+      } catch (e) { fail(e); }
+    };
+    $('save').onclick = async () => {
+      if (!file?.editable) return;
+      $('save').disabled = true;
+      try {
+        const r = await bridge.files.write(file.handle, $('preview').value + rest);
+        if (r?.size != null) $('fileDesc').textContent = size(r.size);
+        bridge.toast(t('已存回', 'Saved'));
+      } catch (e) { fail(e); } finally { $('save').disabled = false; }
+    };
+  }
+</script>
+</body>
+</html>

@@ -303,6 +303,26 @@ export function applyEditDefaults(card, raw, { inputs = [], thread = null } = {}
   return raw;
 }
 
+/** 素材合不合这张卡（总大小、角色、SVG、张数）；inputs 每项要有 role、file、size。不合就抛（400）。startJob 与 runDirect 共用。 */
+export function checkInputs(card, inputs) {
+  if (inputs.length > MAX_INPUTS) throw bad(`素材最多 ${MAX_INPUTS} 个`);
+  if (inputs.reduce((n, x) => n + x.size, 0) > MAX_INPUT_BYTES) throw bad('素材加起来太大（上限 60 MB）');
+  const allowed = new Set([...(card.inputs?.images?.roles || []), ...(card.inputs?.audio ? ['audio'] : []), ...(card.inputs?.video ? ['video'] : [])]);
+  for (const x of inputs) if (!allowed.has(x.role)) throw bad(`这个模型不收「${x.role}」素材`);
+  // SVG 是矢量文本，上游的改图 / 参考图只收位图
+  if (inputs.some((x) => IMAGE_ROLES.has(x.role) && /\.svg$/i.test(x.file))) throw bad('SVG 不能当改图对象或参考图：先导出成 PNG 再用');
+  // 参考视频 / 音频（Seedance 这类）：按卡上的 max
+  for (const r of ['video', 'audio']) {
+    const lim = card.inputs?.[r]?.max;
+    if (Number.isFinite(lim) && inputs.filter((x) => x.role === r).length > lim) throw bad(`这个模型最多收 ${lim} 个${r === 'video' ? '参考视频' : '参考音频'}`);
+  }
+  // 张数：首帧 / 尾帧各一张；改图 / 参考图按卡上的 max（Veo 参考图最多 3、Nano Banana 3、GPT Image 16…）
+  const maxImg = card.inputs?.images?.max ?? 0;
+  const count = (r) => inputs.filter((x) => x.role === r).length;
+  if (count('first') > 1 || count('last') > 1) throw bad('首帧、尾帧各只能给一张');
+  if (count('edit') + count('ref') > Math.max(1, maxImg)) throw bad(`这个模型最多收 ${maxImg} 张参考图`);
+}
+
 export function startJob(ctx, body, opts = {}) {
   const owner = studioOwner(ctx);
   if (!owner) throw bad('这个身份不能用 Media Studio', 403);
@@ -324,21 +344,7 @@ export function startJob(ctx, body, opts = {}) {
   if (prompt.length > 12000) throw bad('提示词太长（上限 12000 字）');
   const inputs = (Array.isArray(body.inputs) ? body.inputs : []).slice(0, MAX_INPUTS + 1).map((x) => resolveInput(ctx, x));
   if (inputs.length > MAX_INPUTS) throw bad(`素材最多 ${MAX_INPUTS} 个`);
-  if (inputs.reduce((n, x) => n + x.size, 0) > MAX_INPUT_BYTES) throw bad('素材加起来太大（上限 60 MB）');
-  const allowed = new Set([...(card.inputs?.images?.roles || []), ...(card.inputs?.audio ? ['audio'] : []), ...(card.inputs?.video ? ['video'] : [])]);
-  for (const x of inputs) if (!allowed.has(x.role)) throw bad(`这个模型不收「${x.role}」素材`);
-  // SVG 是矢量文本，上游的改图 / 参考图只收位图
-  if (inputs.some((x) => IMAGE_ROLES.has(x.role) && /\.svg$/i.test(x.file))) throw bad('SVG 不能当改图对象或参考图：先导出成 PNG 再用');
-  // 参考视频 / 音频（Seedance 这类）：按卡上的 max
-  for (const r of ['video', 'audio']) {
-    const lim = card.inputs?.[r]?.max;
-    if (Number.isFinite(lim) && inputs.filter((x) => x.role === r).length > lim) throw bad(`这个模型最多收 ${lim} 个${r === 'video' ? '参考视频' : '参考音频'}`);
-  }
-  // 张数：首帧 / 尾帧各一张；改图 / 参考图按卡上的 max（Veo 参考图最多 3、Nano Banana 3、GPT Image 16…）
-  const maxImg = card.inputs?.images?.max ?? 0;
-  const count = (r) => inputs.filter((x) => x.role === r).length;
-  if (count('first') > 1 || count('last') > 1) throw bad('首帧、尾帧各只能给一张');
-  if (count('edit') + count('ref') > Math.max(1, maxImg)) throw bad(`这个模型最多收 ${maxImg} 张参考图`);
+  checkInputs(card, inputs);
   if (kind === 'speech' && !prompt) throw bad('要朗读的文字是空的');
   if (kind === 'music' && !prompt) throw bad('描述是空的');
   if (!prompt && !inputs.length) throw bad('描述是空的');
@@ -526,21 +532,35 @@ export function cancelJob(owner, id) {
  * 不进任务表、不落媒体库，直接跑一次（桌面 Claude Code 的 stdio MCP 用：它是独立进程，作品写到它自己指定的路径）。
  * 身份固定是主机管理员（读主机的 Studio 服务与密钥）。回 { outputs: [{ bytes, mime, ext }], provider, entry }。
  */
-export async function runDirect({ kind, key, prompt = '', negative = '', params = {}, onProgress } = {}) {
+// inputs：[{ role, file（绝对路径） }]——桌面 Claude Code 本来就能读整台机器，这里不套工作空间守卫；角色与张数照卡查。signal：调用方中断。
+export async function runDirect({ kind, key, prompt = '', negative = '', params = {}, inputs = [], signal, onProgress } = {}) {
   if (!KINDS.includes(kind)) throw bad('kind 只能是 ' + KINDS.join(' / '));
   const hit = key ? resolveAny(key, kind, HOST_OWNER) : defaultFor(kind, HOST_OWNER);
   if (!hit) throw bad(key ? `找不到可用的模型「${key}」（先在 Media Studio 里加服务，或一键导入 Vertex）` : '还没有能用的媒体服务：先在 设置 › Media Studio 里加一个', 404);
   const { provider, entry, card } = hit;
+  const ins = (Array.isArray(inputs) ? inputs : []).map((x) => {
+    if (!x || !ROLES.includes(x.role)) throw bad('素材的角色只能是 ' + ROLES.join(' / '));
+    const file = String(x.file || '');
+    let st;
+    try { st = statSync(file); } catch { throw bad('素材文件不存在：' + file); }
+    if (!st.isFile()) throw bad('素材不是文件：' + file);
+    return { role: x.role, file, size: st.size, name: path.basename(file) };
+  });
+  checkInputs(card, ins);
   const raw = { ...(entry.defaults || {}), ...params };
+  applyEditDefaults(card, raw, { inputs: ins });
+  const flags = inputFlagsOf(ins);
   const req = {
     kind, model: entry.id, card, prompt: String(prompt || '').trim(),
     negative: card.negative ? card.negative(negative) : String(negative || ''),
-    params: card.normalize ? card.normalize(raw) : applySpecs(card.params, raw),
-    inputs: [], thread: null,
+    params: card.normalize ? card.normalize(raw, flags) : applySpecs(card.params, raw, flags),
+    inputs: ins.map((x) => ({ role: x.role, data: readFileSync(x.file), mime: mimeType(x.file, { fallback: 'application/octet-stream' }), name: x.name })),
+    thread: null,
   };
   const t0 = Date.now();
+  const timeout = AbortSignal.timeout(20 * 60_000);
   const out = await adapterFor(provider.dialect).run(req, provider, {
-    secret: providerSecret(provider), signal: AbortSignal.timeout(20 * 60_000),
+    secret: providerSecret(provider), signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
     progress: () => onProgress?.(Math.round((Date.now() - t0) / 1000)), submitted: () => {},
     devKey: provider.dialect === 'vertex' ? companionGeminiKey(provider) : undefined,
   });

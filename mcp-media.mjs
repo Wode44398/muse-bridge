@@ -27,6 +27,7 @@ const { runDirect } = await import('./modules/studio/server/jobs.mjs');
 const { toolDefaults } = await import('./modules/studio/server/mcp/media-phone.mjs');
 const { autoImportIfEmpty } = await import('./modules/studio/server/migrate.mjs');
 const { imageDims } = await import('./modules/studio/server/adapters/openrouter-image.mjs');
+const { mediaModelsText } = await import('./modules/studio/server/mcp/media-models.mjs');
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const OUTDIR = path.join(ROOT, 'genmedia');
@@ -49,27 +50,46 @@ function writeOut(bytes, ext, outputPath, tag) {
 // English result text, no event emission (no client to push to over stdio).
 const desktopAdapter = {
   newId: () => Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
-  generate: async (kind, body, { id, outputPath, onProgress }) => {
-    const r = await runDirect({ ...body, onProgress });
+  // 素材是绝对路径（桌面 Claude Code 本来就能读整台机器）；一次出多件时其余几件写在第一件旁边（-2、-3…）
+  generate: async (kind, body, { id, outputPath, onProgress, signal }) => {
+    const { inputs, continueFrom, ...b } = body;
+    const ins = (inputs || []).map((x) => {
+      const f = typeof x.path === 'string' ? x.path.trim() : '';
+      if (!f || !path.isAbsolute(f)) throw new Error('inputs[].path must be an absolute file path');
+      return { role: x.role, file: f };
+    });
+    const r = await runDirect({ ...b, inputs: ins, signal, onProgress });
     const o = r.outputs[0];
     if (!o) throw new Error('no result returned');
     // 图片顺手量一下实际像素报给 Claude（runDirect 不回下发参数，这边只报像素、不判降档）
     const dims = kind === 'image' ? imageDims(o.bytes) : null;
-    return { id, file: writeOut(o.bytes, o.ext, outputPath, kind === 'speech' ? 'audio' : kind), model: r.entry.id, ...(dims ? { width: dims[0], height: dims[1] } : {}) };
+    const tag = kind === 'speech' ? 'audio' : kind;
+    const file = writeOut(o.bytes, o.ext, outputPath, tag);
+    const more = r.outputs.slice(1).map((x, i) => {
+      const alt = outputPath && path.isAbsolute(outputPath) ? outputPath.replace(/(\.[^.\\/]+)?$/, '-' + (i + 2) + '.' + x.ext) : null;
+      return { id: id + '-' + (i + 2), file: writeOut(x.bytes, x.ext, alt, tag) };
+    });
+    return { id, file, model: r.entry.id, ...(dims ? { width: dims[0], height: dims[1] } : {}), ...(more.length ? { more } : {}) };
   },
+  models: (args) => mediaModelsText('admin', args),
   emit: () => {},
   resultText: (kind, info) => {
-    if (kind === 'image') return 'Image generated' + (info.width ? ' (' + info.width + '×' + info.height + ' px)' : '') + '. Absolute path:\n' + info.file;
-    if (kind === 'video') return 'Video generated (' + info.model + ' · ' + info.resolution + '). Absolute path:\n' + info.file;
-    if (kind === 'audio') return 'Speech generated. Absolute path:\n' + info.file;
-    if (kind === 'music') return 'Music generated. Absolute path:\n' + info.file;
-    return 'Generated. Absolute path:\n' + info.file;
+    const t = desktopText(kind, info);
+    const more = (info.more || []).map((x) => x.file);
+    return more.length ? t + '\nAlso generated in the same call:\n' + more.join('\n') : t;
   },
   errorText: (kind, e) => {
     const label = kind === 'image' ? 'Image' : kind === 'video' ? 'Video' : kind === 'audio' ? 'Speech' : kind === 'music' ? 'Music' : 'Media';
     return label + ' generation failed: ' + String(e?.message ?? e);
   },
 };
+function desktopText(kind, info) {
+  if (kind === 'image') return 'Image generated' + (info.width ? ' (' + info.width + '×' + info.height + ' px)' : '') + '. Absolute path:\n' + info.file;
+  if (kind === 'video') return 'Video generated (' + info.model + ' · ' + info.resolution + '). Absolute path:\n' + info.file;
+  if (kind === 'audio') return 'Speech generated. Absolute path:\n' + info.file;
+  if (kind === 'music') return 'Music generated. Absolute path:\n' + info.file;
+  return 'Generated. Absolute path:\n' + info.file;
+}
 
 const server = new McpServer({ name: 'vertex-media', version: '1.0.0' });
 for (const t of buildMediaTools({ flavor: 'desktop', adapter: desktopAdapter, defaults: toolDefaults('admin') })) {

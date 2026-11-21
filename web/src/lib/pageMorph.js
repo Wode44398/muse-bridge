@@ -25,22 +25,27 @@ export const PAGE_NAME = 'bridge-page';
 const HERO_NAME = 'bridge-hero';
 const HOME_PUSH = 1.08;      // 打开分页时主页朝入口推近的倍率（关闭时从这里退回 1）
 
-// 各分页的根盒（必须是真正产生盒子的元素：dimensio 的 .hxroot 是 display:contents，取它的 .shell）
+// 各分页的根盒（必须是真正产生盒子的元素：dimensio 外包同步就位的 .hx-stage，免得首次懒加载分块未归或 300ms 换真应用时断掉伪元素捕获）
 const ROOTS = {
   claude: '.claude-slide',
   studio: '.studio-slide',
   chatgpt: '.chatgpt-page',
-  harness: '.hxroot > .shell, .hx-placeholder',   // 入场期间是同色底板（HarnessPage 延后挂载）
-  antigravity: '.hxroot > .shell, .hx-placeholder',
+  agy: '.agy-page',
+  harness: '.hx-stage, .hxroot > .shell, .hx-placeholder',
+  antigravity: '.hx-stage, .hxroot > .shell, .hx-placeholder',
   files: '.fd-root:not(.embedded), .ws-root:not(.embedded)',
 };
 // 入口：手机四宫格里是 [data-entry=<key>] .tile；桌面 Dock 按 aria-label 找图标
-const DOCK_LABEL = { claude: 'Claude', chatgpt: 'ChatGPT', harness: 'dimensio', studio: 'Media Studio' };
+const DOCK_LABEL = { claude: 'Claude', chatgpt: 'ChatGPT', agy: 'Antigravity', harness: 'dimensio', studio: 'Media Studio' };
 
 const html = () => document.documentElement;
 const vp = () => ({ W: innerWidth, H: innerHeight });
 let current = null;          // 正在跑的 ViewTransition
 let seq = 0;                 // 代次：新转场一起，旧转场的收尾回调全部作废
+let morphAt = 0;             // 当前转场发起时刻，供延后挂载重内容的分页扣除分块加载已耗时间
+export function morphElapsed() {
+  return ui.morphing && morphAt > 0 ? Math.max(0, performance.now() - morphAt) : 0;
+}
 
 export function morphSupported() {
   return typeof document !== 'undefined' && typeof document.startViewTransition === 'function';
@@ -63,7 +68,8 @@ function onScreen(r) {
   return !!r && r.x + r.w > 0 && r.y + r.h > 0 && r.x < W && r.y < H;
 }
 export function pageRoot(key) {
-  const sel = ROOTS[key];
+  // 插件应用：应用键 'app:<插件>:<应用>' 的根盒是 components/apps/PluginAppPage 的 <section data-app-page>
+  const sel = ROOTS[key] || (String(key).startsWith('app:') ? `[data-app-page="${cssEsc(key)}"]` : null);
   if (!sel) return null;
   for (const el of document.querySelectorAll(sel)) {
     const r = el.getBoundingClientRect();
@@ -71,14 +77,23 @@ export function pageRoot(key) {
   }
   return null;
 }
+const cssEsc = (s) => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(String(s)) : String(s));
+// 方块的圆角：主页图标多了会改成小方块（Home 的 dense 排法），圆角写在 .tile 的 data-r 上
+const radiusOf = (el, dflt) => Number(el?.dataset?.r) || dflt;
 // 入口方块 { el, rect, radius }；拿不到（入口被隐藏、从助手 / 命令面板进来）返回 null。
+// 手机主页是 [data-entry=<key>] .tile，桌面 Dock 是 [data-entry=<key>] .dico（插件应用只有这两条路；内置的再按 aria-label 兜底）
 export function entryOf(key) {
-  const k = key === 'antigravity' ? 'harness' : key;
+  const k = cssEsc(key === 'antigravity' ? 'harness' : key);
   const tile = document.querySelector(`[data-entry="${k}"] .tile`);
-  if (tile) { const rect = rectOf(tile); if (onScreen(rect)) return { el: tile, rect, radius: 30 }; }
-  const lab = DOCK_LABEL[k];
+  if (tile) { const rect = rectOf(tile); if (onScreen(rect)) return { el: tile, rect, radius: radiusOf(tile, 30) }; }
+  const di = document.querySelector(`[data-entry="${k}"] .dico`);
+  if (di) { const rect = rectOf(di); if (onScreen(rect)) return { el: di, rect, radius: radiusOf(di, 12) }; }
+  const lab = DOCK_LABEL[key === 'antigravity' ? 'harness' : key];
   const dico = lab && document.querySelector(`button.ditem[aria-label="${lab}"] .dico`);
   if (dico) { const rect = rectOf(dico); if (onScreen(rect)) return { el: dico, rect, radius: 12 }; }
+  // 收在「更多」里的入口（主页超过 8 格）：没有自己的方块，就收回「更多」那一格（data-more 列着它收着的键）
+  const mo = document.querySelector(`[data-more~="${k}"] .tile, [data-more~="${k}"] .dico`);
+  if (mo) { const rect = rectOf(mo); if (onScreen(rect)) return { el: mo, rect, radius: radiusOf(mo, mo.classList.contains('dico') ? 12 : 30) }; }
   return null;
 }
 
@@ -126,6 +141,7 @@ function run(kind, { before, update, afterUpdate, play, vars = {}, spring = null
   root.dataset.vt = kind;
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
   ui.morphing = kind;
+  morphAt = performance.now();
   const ctx = { W: innerWidth, H: innerHeight, spring: sp };
   try { before?.(ctx); } catch {}
   let vt;
@@ -155,9 +171,11 @@ function cleanup(my, vars) {
   const root = html();
   delete root.dataset.vt;
   delete root.dataset.vtPage;
+  delete root.dataset.vtGoogle;
   for (const k of Object.keys(vars)) root.style.removeProperty(k);
   clearNames();
   ui.morphing = '';
+  morphAt = 0;
 }
 
 // —— 打开：入口 → 分页 ——
@@ -203,12 +221,19 @@ export function openPage(key, { from = null, radius = null, hero = null, heroTo 
         anim(`new(${PAGE_NAME})`, [{ opacity: 0 }, { opacity: 1 }], { duration: Math.round(d * 0.3), easing: EASE.fade });
         // 新画面除去分页就只剩底色：藏起来，让退后的主页压暗到黑里而不是灰里
         anim('new(root)', [{ opacity: 0 }, { opacity: 0 }], { duration: d });
+      } else {
+        // 根盒尚未就位（懒加载分块首开未返回、占位页等）：new(root) 在伪元素栈顶，不动画会第 0 帧直接盖死 old(root)。
+        // 改用 clip-path 从入口方块张开整屏并同步浮现，保住一致的打开交互。
+        anim('new(root)', [
+          { clipPath: `inset(${s.y}px ${W - s.x - s.w}px ${H - s.y - s.h}px ${s.x}px round ${r0}px)`, opacity: 0 },
+          { clipPath: 'inset(0px 0px 0px 0px round 0px)', opacity: 1 },
+        ], { duration: d, easing: spring.easing });
       }
       // 主页朝入口推近、压暗（镜头「飞进」这个入口）：以入口为原点放大——入口本身不动，
       // 卡片就是从这一点长出来的；放大而不是缩小，屏幕四周永远不会露出黑边
       anim('old(root)', [
         { transform: 'scale(1)', opacity: 1 },
-        { transform: `scale(${HOME_PUSH})`, opacity: page ? 0.4 : 0 },
+        { transform: `scale(${HOME_PUSH})`, opacity: 0.4 },
       ], { duration: d, easing: spring.easing });
     },
   });
@@ -258,7 +283,10 @@ export async function closePage(key = ui.screen, { fromRect = null, fromRadius =
       ctx.page = !!root;
       // 快照层在转场期间吃掉所有点击：记下主页各入口的落点，下面「落地前就点下一个」时用
       ctx.tiles = [...document.querySelectorAll('[data-entry]')]
-        .map((btn) => { const el = btn.querySelector('.tile'); return { key: btn.dataset.entry, el, r: rectOf(el) }; })
+        .map((btn) => {
+          const el = btn.querySelector('.tile') || btn.querySelector('.dico');
+          return { key: btn.dataset.entry, el, r: rectOf(el), radius: radiusOf(el, el?.classList.contains('dico') ? 12 : 30) };
+        })
         .filter((t) => t.r && onScreen(t.r));
     },
     play: ({ spring, page, tiles }) => {
@@ -348,7 +376,10 @@ function tapThrough(tiles, d) {
     try { e.preventDefault(); } catch {}
     try { vt.skipTransition(); } catch {}
     // 等跳过落地（DOM 已是主页终态）再开下一段，否则新转场拍到的旧画面是半路的快照
-    vt.finished.catch(() => {}).then(() => openPage(hit.key, { from: hit.el, radius: 30 }));
+    // 插件应用走 openApp（它还要记下打开上下文、校验应用还在）；pluginApps 静态引用了本文件，这里只能动态引入
+    vt.finished.catch(() => {}).then(() => (String(hit.key).startsWith('app:')
+      ? import('./pluginApps.svelte.js').then((m) => m.openApp(hit.key, { from: hit.el, radius: hit.radius }))
+      : openPage(hit.key, { from: hit.el, radius: hit.radius })));
   };
   const off = () => window.removeEventListener('pointerdown', onDown, true);
   window.addEventListener('pointerdown', onDown, true);
@@ -422,30 +453,48 @@ function bloom(items) {
 //   · 换场期间关掉页面里所有 CSS 过渡（app.css html[data-vt-page]）——新画面直接是终态，不再各变各的；
 //   · 被点的标志单独成层：它的彩蛋 / 运行动画每帧只重画自己，不拖着整页快照重绘。
 // 连点：新一次从当前状态起波，上一段直接落幕（run 自带）。
+// style === 'google'：Material 3 Emphasized 曲线（0.2, 0, 0, 1）+ 640ms 干脆收尾 + 零页面缩放（文字零重影）
+// + 更收束的 S 形柔光波前，配合 app.css 里的标志 110ms 干净交叠，呈现原生 Google 系的丝滑亮度漫开质感。
 const PAGE_REVEAL = { dur: 900, ease: [0.3, 0.55, 0.18, 1] };
-export function morphPageTheme(originEl, apply, { toLight = true } = {}) {
+const GOOGLE_REVEAL = { dur: 640, ease: [0.2, 0, 0, 1] };
+export function morphPageTheme(originEl, apply, { toLight = true, style = 'default' } = {}) {
   if (!canMorph()) { apply(); return Promise.resolve(); }
+  const google = style === 'google';
   const { W, H } = vp();
   const o = rectOf(originEl);
   const ox = o ? o.x + o.w / 2 : W / 2, oy = o ? o.y + o.h / 2 : H / 2;
   const far = Math.max(Math.hypot(ox, oy), Math.hypot(W - ox, oy), Math.hypot(ox, H - oy), Math.hypot(W - ox, H - oy));
-  const feather = Math.round(Math.min(170, Math.max(96, far * 0.14)));
+  const feather = google
+    ? Math.round(Math.min(118, Math.max(56, far * 0.095)))
+    : Math.round(Math.min(170, Math.max(96, far * 0.14)));
   const R = far + feather;
   const mark = o && originEl instanceof Element ? originEl : null;
-  html().dataset.vtPage = '';
+  const root = html();
+  root.dataset.vtPage = '';
+  if (google) root.dataset.vtGoogle = '';
+  else delete root.dataset.vtGoogle;
   return run('theme', {
     vars: { '--vt-ox': ox + 'px', '--vt-oy': oy + 'px', '--vt-f': feather + 'px' },
     before: () => { if (mark) mark.style.viewTransitionName = 'bridge-theme-mark'; },
     update: apply,
     play: () => {
-      const D = PAGE_REVEAL.dur;
-      const easing = `cubic-bezier(${PAGE_REVEAL.ease.join(',')})`;
+      const cfg = google ? GOOGLE_REVEAL : PAGE_REVEAL;
+      const D = cfg.dur;
+      const easing = `cubic-bezier(${cfg.ease.join(',')})`;
       anim('new(root)', [{ '--vt-r': '0px' }, { '--vt-r': R + 'px' }], { duration: D, easing });
-      anim('new(root)', [{ transform: 'scale(1.01)' }, { transform: 'scale(1)' }], { duration: D + 200, easing: EASE.decel });
-      anim('old(root)', toLight
-        ? [{ transform: 'scale(1)' }, { transform: 'scale(1.01)' }]
-        : [{ transform: 'scale(1)', filter: 'brightness(1)' }, { transform: 'scale(1.01)', filter: 'brightness(.6)' }],
-      { duration: D, easing });
+      if (google) {
+        // 零缩放锁死像素网格，文字与细线在波前扫过时完全不抖动、不重影
+        anim('old(root)', toLight
+          ? [{ filter: 'brightness(1)' }, { filter: 'brightness(1.06)' }]
+          : [{ filter: 'brightness(1)' }, { filter: 'brightness(0.88)' }],
+        { duration: D, easing });
+      } else {
+        anim('new(root)', [{ transform: 'scale(1.01)' }, { transform: 'scale(1)' }], { duration: D + 200, easing: EASE.decel });
+        anim('old(root)', toLight
+          ? [{ transform: 'scale(1)' }, { transform: 'scale(1.01)' }]
+          : [{ transform: 'scale(1)', filter: 'brightness(1)' }, { transform: 'scale(1.01)', filter: 'brightness(.6)' }],
+        { duration: D, easing });
+      }
     },
   });
 }

@@ -102,6 +102,8 @@ if ((!TOKEN || TOKEN.length < 16) && !TOKEN_HASH) {
 // `claude setup-token`. The query subprocess inherits process.env, so setting
 // it here is enough. An empty ANTHROPIC_API_KEY in the environment confuses
 // auth resolution, so drop it.
+// 令牌只经环境变量给（config.json 里没有同一个）：号池播种时只在内存里用、不写进 config.json（runtime/claude-account.mjs）
+export const OAUTH_ENV_ONLY = !!process.env.CLAUDE_CODE_OAUTH_TOKEN && process.env.CLAUDE_CODE_OAUTH_TOKEN !== String(config.oauthToken || '');
 export const OAUTH = process.env.CLAUDE_CODE_OAUTH_TOKEN || config.oauthToken || '';
 if (OAUTH) process.env.CLAUDE_CODE_OAUTH_TOKEN = OAUTH;
 if (process.env.ANTHROPIC_API_KEY === '') delete process.env.ANTHROPIC_API_KEY;

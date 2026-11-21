@@ -1,0 +1,88 @@
+// Antigravity 多号池统一导出入口：账号注册表、Google OAuth 登录与令牌刷新、逐号额度、路由分派与本机上游代理。
+
+export {
+  MANUAL_PLANS,
+  STRATEGIES,
+  normPlan,
+  tierToPlan,
+  effectivePlan,
+  listAccounts,
+  listAccountsInternal,
+  getAccountInternal,
+  getActiveAccount,
+  activeAccountId,
+  localAccountId,
+  hasNonLocalAccounts,
+  highestTierAccountId,
+  setActive,
+  addAccount,
+  updateAccount,
+  noteAccountMeta,
+  moveAccount,
+  deleteAccount,
+  routerSettings,
+  setRouterSettings,
+  onRouterSettings,
+} from './accounts.mjs';
+
+export {
+  CCPA_UPSTREAM,
+  DEFAULT_AGY_UA,
+  noteHostAuth,
+  getHostAuth,
+  effectiveAgyUserAgent,
+  invalidateAccessToken,
+  exchangeRefreshToken,
+  getAccessToken,
+  fetchAccountProfile,
+  verifyAndPrepareRefreshToken,
+  parseAuthCodeInput,
+  startOAuthLogin,
+  getOAuthStatus,
+  finishOAuthLogin,
+  cancelOAuthLogin,
+  shutdownOAuthFlows,
+} from './oauth.mjs';
+
+export {
+  normalizeQuotaSummary,
+  noteQuotaFromUpstream,
+  noteQuotaBuckets,
+  markBucketExhausted,
+  accountQuotaSnapshot,
+  fetchAccountQuota,
+  poolUsage,
+  refreshAccounts,
+  deleteAccountQuota,
+} from './quota.mjs';
+
+export {
+  groupOfModel,
+  noteSessionLabel,
+  noteInnerSessionMap,
+  resolveAcpSessionId,
+  routerEnabled,
+  smartActive,
+  seamlessActive,
+  clearCooldown,
+  accountBlock,
+  rankAccountsForGroup,
+  dispatchBegin,
+  dispatchEnd,
+  boundAccountForSession,
+  pickForRequest,
+  noteLimitHit,
+  routerStatus,
+} from './router.mjs';
+
+export {
+  agyUpstreamEvents,
+  lastServedAgyAccount,
+  extractSessionIdFromRequestId,
+  parseGoogleResetMs,
+  classifyUpstreamError,
+  ensureAgyUpstream,
+  getAgyUpstreamUrl,
+  agyUpstreamStatus,
+  stopAgyUpstream,
+} from './upstream.mjs';

@@ -604,3 +604,43 @@ scenario('号池换号：开跑前激活号已用尽 → 先换号；撞墙 → 
   deleteAccount(b.id); deleteAccount(c.id);
   h.snapshot();
 });
+
+// 插话「立即打断」= 停止 + 紧跟着发出那条：软停的 result 还没回时新消息就到了——
+// 要等这一轮转入挂起再接力进同一个 CLI，不能见上一轮没收尾就 abort（会连后台任务一起杀掉）。
+scenario('停止：后台任务在跑时按停止、紧跟着发来下一条 → 等转入挂起再接力，后台任务不被杀', async (h) => {
+  const ctx = h.ctx();
+  const sid = h.sid();
+  const f = frames(sid, { cwd: ctx.cwd });
+  const cli = h.script(async function* (io) {
+    await io.user();
+    yield f.init(io);
+    const input = { command: 'npm run build', run_in_background: true };
+    yield* f.call([{ id: 'toolu_bg1', name: 'Bash', input }]);
+    yield f.sys('task_started', { task_id: 'bg1', tool_use_id: 'toolu_bg1', task_type: 'local_bash', description: '构建', is_backgrounded: true });
+    yield f.bgChanged([BG_SHELL]);
+    yield f.toolResult('toolu_bg1', 'Command running in background with ID: bg1');
+    yield f.ev({ type: 'message_start', message: {} });
+    yield f.ev({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+    yield f.ev({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '我接着说' } });
+    await io.pause('mid');
+    await io.interrupted();
+    yield f.result({ subtype: 'error_during_execution', is_error: true, result: '' });
+    const u2 = await io.user();
+    yield f.init(io);
+    yield* closing(io, f, '先回答新的这条（后台还在跑）。', { bg: [BG_SHELL_INFO], result: { user_message_uuids: [u2.uuid] } });
+    await io.pause('held2');
+  }, CONTROL);
+  const call1 = h.chat(chatArgs(ctx, '构建并讲解'));
+  await h.at(cli, 'mid');
+  h.stop(ctx.key, sid);
+  const call2 = h.chat(chatArgs(ctx, '别讲了，先回答这个', { sessionId: sid }));
+  await h.idle();
+  h.snapshot('软停的 result 还没回、新消息在等');
+  h.resume(cli, 'mid');
+  await h.done(call2);
+  await h.at(cli, 'held2');
+  h.snapshot('接力后的这一轮挂起，后台任务还在');
+  h.stop(ctx.key, sid, { release: true });
+  await h.done(call1);
+  h.snapshot();
+});

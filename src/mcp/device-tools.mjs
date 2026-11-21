@@ -107,17 +107,18 @@ export function deviceNudge() {
  * @param {() => string} [o.getSession]  会话 id（审计与设备侧「谁在操作」提示用）
  * @param {() => string} [o.getTitle]    会话标题（同上）
  * @param {() => object|null} [o.getOrigin]  当前这条用户消息的发送端（runtime/client-origins.mjs），每次调用现取
+ * @param {string} [o.by]  哪个 agent 在操作（设备侧提示与审计里显示的名字，web-bridge AGENT_LABEL）：缺省 claude，Antigravity 传 agy
  */
-export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSession = () => '', getTitle = () => '', getOrigin = () => null }) {
+export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSession = () => '', getTitle = () => '', getOrigin = () => null, by = 'claude' }) {
   const target = (want) => {
     const r = resolveDevice(ctx, { want: want || '', linked: getLink() || '' });
     if (r.error) throw new Error(r.error);
     return r.device;
   };
   const send = (d, op, args, timeoutMs, onChunk = null) => deviceDispatch(ctx, d.id, op, args, {
-    timeoutMs, onChunk, by: 'claude', session: getSession() || '', title: getTitle() || '',
+    timeoutMs, onChunk, by, session: getSession() || '', title: getTitle() || '',
   });
-  const frameKey = () => 'claude:' + (getSession() || 'new');
+  const frameKey = () => by + ':' + (getSession() || 'new');
   const tierOf = (d) => d.client?.tier || '';
   const caps = (d) => new Set(d.client?.caps || []);
 
@@ -202,7 +203,7 @@ export function makeDeviceMcp({ ctx, getLink = () => '', setLink = null, getSess
             const sid = getSession();
             const rows = sid ? messageOrigins(ctx, sid, a.history) : [];
             out.push('', `最近 ${rows.length} 条用户消息的发送端（旧 → 新）：`);
-            if (!rows.length) out.push('  （还没有记录——这个功能上线之前的消息不记发送端）');
+            if (!rows.length) out.push(by && by !== 'claude' ? '  （这个分页的对话不记录每条消息的发送端；这条消息发自哪台看上面的「← 这条消息发自这台」）' : '  （还没有记录——这个功能上线之前的消息不记发送端）');
             for (const r of rows) out.push(`  ${utc(r.at)}  ${originLabel(r, lookup)}${r.text ? `  「${r.text}」` : ''}`);
           }
           return txt(out.join('\n'));

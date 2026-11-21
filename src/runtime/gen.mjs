@@ -260,13 +260,23 @@ export function markRoutineSession(id) {
 }
 
 // 插件代为发起的会话（ctx.chat，见 plugins/chat.mjs）：id → { plugin, label }，会话列表据此标来源。
+// 插件应用页面开的会话（plugins/page-chat.mjs）多带 app（应用 id）与 owner（使用者的 ownerKey）：
+// 页面只能续聊 / 订阅「本插件为这个人开的」会话，归属就认这两个字段。ctx.chat 开的会话没有 app / owner。
 let _pluginSessionsPath = '';
 export const pluginSessions = new Map();
 export function markPluginSession(id, info) {
   if (!id) return;
+  // 先按存的样子归一（标签截 60 字）再比：拿原样的长标签去比截过的旧值永远不等，重复标就会白写一遍文件、刷新 at（会话排序跟着跳）
+  const plugin = String(info.plugin || '');
+  const label = String(info.label || '').slice(0, 60);
+  const app = info.app ? String(info.app) : null;
+  const owner = info.owner ? String(info.owner) : null;
   const prev = pluginSessions.get(id);
-  if (prev && prev.plugin === info.plugin && prev.label === info.label) return;
-  pluginSessions.set(id, { plugin: String(info.plugin || ''), label: String(info.label || '').slice(0, 60) });
+  if (prev && prev.plugin === plugin && prev.label === label && (prev.app || null) === app && (prev.owner || null) === owner) return;
+  pluginSessions.set(id, {
+    plugin, label,
+    ...(app ? { app } : {}), ...(owner ? { owner, at: Date.now() } : {}),
+  });
   while (pluginSessions.size > SESSION_CAP) pluginSessions.delete(pluginSessions.keys().next().value);
   if (_pluginSessionsPath) try { writeFileSync(_pluginSessionsPath, JSON.stringify([...pluginSessions])); } catch {}
 }

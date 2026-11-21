@@ -9,8 +9,7 @@
 // 每个请求现建一个 McpServer（无状态），插件开关 / 重载后下一次列工具就是新的。
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { kernel } from './state.mjs';
-import { CLAUDE_SLOT, audienceOk, checkTool, shapeOf, withDefaults, toResult } from './claude-tools.mjs';
+import { agentContributions, shapeOf, withDefaults, toResult } from './claude-tools.mjs';
 import { instanceCaller } from '../agent-api/instance-auth.mjs';
 import { readBody } from '../runtime/body.mjs';
 import { emitBridgeEvent, ownerOf } from './events.mjs';
@@ -21,25 +20,7 @@ export const AGENT_MCP_PATH = '/agent/mcp/plugins';
 const bearer = (req) => { const m = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || '')); return m ? m[1].trim() : ''; };
 
 /** 这个身份在 dimensio 里能用的插件工具与说明：{ tools: [{ owner, spec }], prompt }。 */
-export function dimensioContributions(turn) {
-  const out = { tools: [], prompts: [] };
-  if (!kernel.started) return out;
-  for (const { item, owner } of kernel.slot(CLAUDE_SLOT).entries()) {
-    try {
-      if (item.kind === 'tool' && Array.isArray(item.spec.agents) && item.spec.agents.includes('dimensio')) {
-        checkTool(item.spec);
-        if (!audienceOk(item.spec.who || 'host', turn)) continue;
-        if (typeof item.spec.when === 'function' && !item.spec.when(turn)) continue;
-        out.tools.push({ owner, spec: item.spec });
-      } else if (item.kind === 'prompt' && Array.isArray(item.agents) && item.agents.includes('dimensio')) {
-        if (!audienceOk(item.who, turn)) continue;
-        const t = typeof item.text === 'function' ? item.text(turn) : item.text;
-        if (t && String(t).trim()) out.prompts.push(String(t).trim());
-      }
-    } catch (e) { console.error('[plugins] ' + owner + ' 给 dimensio 的贡献出错（跳过）：', e?.message || e); }
-  }
-  return out;
-}
+export const dimensioContributions = (turn) => agentContributions('dimensio', turn);
 
 // MCP 工具名：<插件>__<工具>（连字符换下划线），dimensio 那边再加连接器前缀
 const toolNameOf = (owner, name) => `${owner.replace(/-/g, '_')}__${name}`.slice(0, 60);

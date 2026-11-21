@@ -56,7 +56,9 @@ function rememberTitle(key, sid, title) {
   while (titles.size > 600) titles.delete(titles.keys().next().value);
 }
 
-export function postNotice(key, { kind, sub = '', sessionId = null, title = '', body = '' } = {}) {
+// agent：这条通知属于哪个分页（不带 = Claude）。别的 agent（agy）的会话 id 和 Claude 的不是一个命名空间，
+// 客户端据此判断「人是不是正看着它」、点开时去哪一页。
+export function postNotice(key, { kind, sub = '', sessionId = null, title = '', body = '', agent = '' } = {}) {
   if (!key || !kind) return null;
   const now = Date.now();
   const sid = sessionId ? String(sessionId) : null;
@@ -66,6 +68,7 @@ export function postNotice(key, { kind, sub = '', sessionId = null, title = '', 
     sessionId: sid,
     title: clip(title || titleFor(key, sid), 60),
     body: clip(body, 240),
+    ...(agent ? { agent: String(agent) } : {}),
     at: now,
   };
   const list = (store.get(key) || []).filter((p) => now - p.at < KEEP_MS);
@@ -128,8 +131,16 @@ export function noticeRunEnd(ctx, gen) {
   if (gen.family && gen.family.origin && gen.family.origin.kind === 'idle-compact') return;
   const o = turnOutcome(gen);
   if (o.kind !== 'done' && o.kind !== 'error') return;
+  // 有人正盯着这个会话（例：插件应用页开着它，plugins/page-chat.mjs 的 _bridge/chat/watch 报到）：完成 / 出错不再弹通知。
+  // 只挡收尾这两类——提问 / 审批（下面 onQuestionSet）照发，那是要人去点的，页面不一定接得住。
+  // 由外面挂钩子而不是这里 import 插件模块：核心不静态依赖插件系统，插件系统没加载就什么都不挡。
+  try { if (suppressor && suppressor(ctx.key, gen.sessionId)) return; } catch {}
   postNotice(ctx.key, { kind: o.kind, sub: o.sub || '', sessionId: gen.sessionId, body: o.body || '' });
 }
+
+// 收尾通知的抑制钩子：fn(ownerKey, sessionId) → 真 = 这轮完成 / 出错不发通知。只留一个（后挂的顶掉先挂的），传 null 撤掉。
+let suppressor = null;
+export function setNoticeSuppressor(fn) { suppressor = typeof fn === 'function' ? fn : null; }
 
 // —— 提问类：sessionQuestions.set 的唯一登记口 ——
 const KIND_OF = { question: 'question', offer: 'question', refusal: 'question', permission: 'permission', plan: 'permission' };

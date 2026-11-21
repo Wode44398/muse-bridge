@@ -29,6 +29,7 @@ export const sa = $state({
   limits: null,          // /api/status 的 limits（5h/7d 用量）
   noFiveHour: false,     // 激活号没有 5 小时限额（部分 Ultra）
   gens: [],              // /api/admin/active 的活跃生成
+  agy: null,             // Antigravity 常驻进程状态摘要
   users: [], invites: [],
   agentStatus: [],       // /api/admin/users 附带的 agent 全局状态（按人勾选时把「全局已关 / 不支持多用户」置灰）
   multiUser: true,       // 服务器开没开多用户（features.multiUser 关着：没有注册 / 邀请，只剩服务账号）
@@ -61,7 +62,9 @@ export const fmtUptime = (s) => { if (!s) return '—'; const h = Math.floor(s /
 // —— 数据装载 ——
 export async function loadOverview() {
   try {
-    sa.overview = await api.get('/api/admin/overview');
+    const ov = await api.get('/api/admin/overview');
+    sa.overview = ov;
+    if (ov?.agy !== undefined) sa.agy = ov.agy;
     sa.ok = true;
   } catch { sa.ok = false; }
 }
@@ -69,7 +72,11 @@ export async function loadLimits() {
   try { const s = await api.get('/api/status'); sa.limits = s?.limits || null; sa.noFiveHour = !!s?.noFiveHour; } catch {}
 }
 export async function loadActive() {
-  try { sa.gens = (await api.get('/api/admin/active'))?.gens || []; } catch {}
+  try {
+    const d = await api.get('/api/admin/active');
+    sa.gens = d?.gens || [];
+    if (d?.agy !== undefined) sa.agy = d.agy;
+  } catch {}
 }
 export async function loadUsers() {
   try {

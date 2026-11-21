@@ -24,6 +24,9 @@ const ICONS = {
   // 会话信息面板开关（官方标题栏 Info 钮：带横线的卡片）
   info: S('<rect x="3.5" y="5" width="17" height="14" rx="3"/><path d="M7.5 10h3.5M7.5 14h9"/>', 1.7),
   check: S('<path d="M5 12.5 10 17.5 19 7"/>', 2),
+  // 收起整个工作区（右侧栏收进去）/ 手机整页的返回
+  fold: S('<rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M14.5 4.5v15M8 9.5l2.5 2.5L8 14.5"/>', 1.7),
+  back: S('<path d="m14.5 5.5-6.5 6.5 6.5 6.5"/>', 2),
 };
 
 export function dockIcon(key) {

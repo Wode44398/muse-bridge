@@ -3,6 +3,8 @@
 // 用户跑过的东西 agent 也读得到。读屏经 term-screen.ts 把原始 ANSI 渲染成屏幕上的文字。
 // 闸门：没有命令行的租户不给这个工具（enabled，同 /api/dock/term/* 的 403）；偏好 workspace.terminal 可降到只读或关掉；
 // run 与带回车的 write 按 Bash 的规则判权限、走 Bash 的命令围栏（同一条命令换个入口不该绕过去）。子 agent 不给。
+// 嵌在 bridge 里跑时（bridge-runtime.ts）动作转给 bridge 的共享终端（terminal/shared.ts）——与 bridge 工作台的终端面板同一个 PTY；
+// 上面这些闸门仍在本地先过。wait / resize / read(screen) 只有 bridge 那边的终端有。
 import type { AgentEvent } from "../agent/events.ts";
 import type { PermissionView, Tool, ToolContext, ToolRunResult } from "./types.ts";
 import { fail, ok } from "./types.ts";
@@ -11,8 +13,12 @@ import { ensureTerm, getTermIfAny, killTerm, snapshotTerm, subscribeTerm, writeT
 import { renderScreen } from "../term-screen.ts";
 import { tenantShell } from "../tenant.ts";
 import { prefValue } from "../prefs.ts";
+import { sharedTerminal } from "../bridge-runtime.ts";
+import { runSharedTerminal } from "./terminal/shared.ts";
 
-const READ_ACTIONS = new Set(["status", "read"]);
+// wait 只看屏幕、不往终端里写
+const READ_ACTIONS = new Set(["status", "read", "wait"]);
+const SHARED_ONLY = new Set(["wait", "resize"]);
 const QUIET_MS = 800;
 const OUT_CAP = 512 * 1024;
 
@@ -116,18 +122,25 @@ export const terminalTool: Tool = {
       "Enter and returns output once it goes quiet. write(text, enter?) / keys(\"ctrl+c\", \"up enter\"…) drive prompts, REPLs " +
       "and TUIs. If a program owns the screen (vim, a REPL, a CLI asking something), run/write go to THAT program — read() " +
       "first. status() / restart() (restart wipes it; ask first). Prefer your own Bash for routine work; use this when the " +
-      "user should watch or the context is theirs.",
+      "user should watch or the context is theirs. Inside bridge only: wait(until?, quietSec?, waitSec?) blocks until the " +
+      "screen shows `until` or goes quiet; resize(cols, rows) pins the size for a TUI (release:true hands it back); read(screen:true) = just the visible screen.",
     parameters: {
       type: "object",
       properties: {
-        action: { type: "string", enum: ["status", "read", "run", "write", "keys", "restart"] },
+        action: { type: "string", enum: ["status", "read", "run", "write", "keys", "restart", "wait", "resize"] },
         command: { type: "string", description: "run: one command line, no trailing newline." },
         text: { type: "string", description: "write: raw text." },
         enter: { type: "boolean", description: "write: press Enter after the text." },
         keys: { type: "string", description: "keys: space-separated names (ctrl+c esc up down left right enter tab …)." },
         repeat: { type: "number", description: "keys: repeat the sequence (max 50)." },
         lines: { type: "number", description: "read: last N lines (default 200, max 3000)." },
-        waitSec: { type: "number", description: "run: max seconds to wait (default 20, max 300)." },
+        waitSec: { type: "number", description: "run: max seconds to wait (default 20, max 300); wait: default 120, max 600." },
+        screen: { type: "boolean", description: "read: only the visible screen (bridge only)." },
+        until: { type: "string", description: "wait: text to wait for; /regex/flags for a regex (bridge only)." },
+        quietSec: { type: "number", description: "wait: return once the screen has not changed this long (default 5; bridge only)." },
+        cols: { type: "number", description: "resize: columns (bridge only)." },
+        rows: { type: "number", description: "resize: rows (bridge only)." },
+        release: { type: "boolean", description: "resize: hand the size back to the user's panel (bridge only)." },
       },
       required: ["action"],
     },
@@ -139,6 +152,11 @@ export const terminalTool: Tool = {
     if (mode === "read" && !READ_ACTIONS.has(action)) {
       return fail("read only", "The user lets you read their terminal but not type into it. Use Bash, or tell them what to run.");
     }
+    if (sharedTerminal()) {
+      if (!READ_ACTIONS.has(action)) announce(ctx, action);
+      return runSharedTerminal(action, args, ctx);
+    }
+    if (SHARED_ONLY.has(action)) return fail("not supported", `${action} is only available in bridge's shared terminal; this dimensio runs its own terminal. Use read() / run() instead.`);
     const ws = ctx.sandbox.root;
     try {
       if (action === "status") {

@@ -76,17 +76,34 @@ export const hostPlatform = () => (typeof window === 'undefined' ? 'web' : windo
 export const inAndroidApp = () => typeof window !== 'undefined' && !!window.AndroidStore;
 
 // 独立打开一个插件页面（which: 'panel' | 'settings' | 'workbench'）。返回 false = 打不开（已提示）。
-// workbench（Claude 工作台标签，四期）要带 page；context = { sessionId, cwd, agent } 随地址的 # 交给页面（SDK 的 bridge.context()）。
-export async function openPluginStandalone(id, { which = 'panel', title = '', page = '', context = null } = {}) {
-  const r = await api.post('/api/plugins/ticket', which === 'workbench' ? { id, which, page } : { id, which });
+// workbench（Claude 工作台标签）要带 page；context = { sessionId, cwd, agent, file? } 随地址的 # 交给页面（SDK 的 bridge.context()）。
+// which: 'panel'（控制面板）| 'workbench'（工作台标签，带 page）| 'app'（插件应用，带应用 id；服务端按登记的应用找页面签票）
+export async function openPluginStandalone(id, { which = 'panel', title = '', page = '', app = '', context = null } = {}) {
+  const body = which === 'workbench' ? { id, which, page } : which === 'app' ? { id, which, app } : { id, which };
+  const r = await api.post('/api/plugins/ticket', body);
   const hash = new URLSearchParams({ t: r.ticket, theme: currentTheme(), lang: isEn() ? 'en' : 'zh', platform: hostPlatform() });
+  if (which === 'app' && app) hash.set('app', String(app));   // SDK 读进 bridge.app()（独立页没有宿主 init 消息可带）
   if (context) {
     if (context.sessionId) hash.set('sid', String(context.sessionId));
     if (context.cwd) hash.set('cwd', String(context.cwd));
-    hash.set('agent', context.agent === 'dimensio' ? 'dimensio' : 'claude');
+    // 只带文件的上下文（「用 X 打开」）没有会话，# 里不写 agent；SDK 读不到时按文档缺省 'claude'，和嵌在界面里（PluginFrame）给的一致
+    if (context.sessionId || context.cwd || context.agent) hash.set('agent', context.agent === 'dimensio' ? 'dimensio' : 'claude');
+    // 「用「X」打开」交来的文件句柄：独立页没有宿主 init 可带，放进 #，SDK 读进 context().file。
+    // 路径从来不给页面，只有句柄、名字、大小、类型、读写模式
+    const f = context.file;
+    if (f && typeof f === 'object' && f.handle) {
+      hash.set('fh', String(f.handle));
+      if (f.name) hash.set('fn', String(f.name));
+      if (f.size != null && Number.isFinite(Number(f.size))) hash.set('fs', String(Number(f.size)));
+      if (f.mime) hash.set('fm', String(f.mime));
+      hash.set('fmo', f.mode === 'r' ? 'r' : 'rw');
+    }
   }
-  const url = apiUrl(r.page) + '#' + hash.toString();
   const store = typeof window !== 'undefined' ? window.AndroidStore : null;
+  // hc=1：这个 App 会接 bridge-host:// 中转，页面的跳转、授权、选择器才走中转；
+  // 旧版 App 没有 resumePluginPage，页面拿不到 hc 就直接报「要新版 App」，而不是发出一个没人接的请求干等。
+  if (store && typeof store.resumePluginPage === 'function') hash.set('hc', '1');
+  const url = apiUrl(r.page) + '#' + hash.toString();
   if (store && typeof store.openPluginPage === 'function') { store.openPluginPage(url, String(title || ''), currentTheme() === 'dark'); return true; }
   if (store) { location.assign(url); return true; }
   window.open(url, '_blank', 'noopener');

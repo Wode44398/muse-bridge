@@ -175,6 +175,27 @@ export function textUnits(s) {
   return n;
 }
 
+// —— 按钮上的字太长：并排放不下就上下叠（DialogHost 用） ——
+// 按钮字一长（插件确认框的确认钮可以有 20 个字，uiConfirm 的按钮字最多 LABEL_MAX）并排就放不下：390 宽的手机上
+// 20 字的确认钮折成四行，挤出药丸、压出玻璃框。并排时每个按钮的字宽大约是：
+//   玻璃框 100px（框宽 300、两钮各占一半、17px 粗体）≈ 5 个汉字 / 10 个西文字符；
+//   扁平卡片窄窗口（< 700）两钮等分 ≈ 7 个汉字；宽窗口卡片最宽 400，两钮合起来 ≈ 18 个汉字。
+// 超过就上下叠（主操作在上、取消在下，同 iOS），按钮占满整行，还放不下就折行、按钮跟着长高；并排时一律单行、放不下省略。
+// 叠起来之后不截行：按钮字最多 LABEL_MAX 个，占满整行最多三四行，整句都看得到才知道确认的是什么。
+// （也截不干净：玻璃框的按钮是 Alert 画的、字直接在按钮里，line-clamp 截掉的第三行会露在按钮的下内边距里）
+// 按 textUnits 估（汉字记 2），不量 DOM：版面在第一帧就定了，不会先挤成几行再跳开
+export const GLASS_SIDE_UNITS = 10;
+export const FLAT_NARROW_UNITS = 14;
+export const FLAT_ROW_UNITS = 36;
+
+/** → { glass：玻璃框上下叠, narrow：扁平卡片窄窗口上下叠, wide：扁平卡片宽窗口也上下叠 } */
+export function labelFit(req) {
+  const ok = textUnits(req?.okLabel);
+  const no = req?.kind === 'confirm' ? textUnits(req?.cancelLabel) : 0;
+  const max = Math.max(ok, no);
+  return { glass: max > GLASS_SIDE_UNITS, narrow: max > FLAT_NARROW_UNITS, wide: ok + no > FLAT_ROW_UNITS };
+}
+
 const letters = (s) => (s.match(/\p{L}/gu) || []).length;
 
 /** 第一处可拆的位置（前半句的结尾下标）；拆不开返回 -1。 */
@@ -234,10 +255,21 @@ function reducedMotion() {
   try { return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; }
 }
 
-/** 入队并返回 Promise：alert → undefined，confirm → boolean。 */
-export function request(kind, message, opts, defaults) {
+/**
+ * 入队并返回 Promise：alert → undefined，confirm → boolean。
+ * signal（可选 AbortSignal）：abort 等于按了「取消」并关掉框——插件页面走了 / 换了文档时，宿主替它弹的框得跟着收掉。
+ * 已经 abort 的直接按取消回、不入队；结算之后再 abort 什么都不做。
+ */
+export function request(kind, message, opts, defaults, signal) {
   const req = makeRequest(kind, message, opts, defaults);
-  return new Promise((resolve) => {
+  if (signal?.aborted) return Promise.resolve(valueOf(req, 'cancel'));
+  return new Promise((done) => {
+    let onAbort = null;
+    const resolve = (v) => {
+      if (onAbort) signal.removeEventListener('abort', onAbort);
+      onAbort = null;
+      done(v);
+    };
     const wasIdle = !activeRequest(dlg.queue);
     const r = enqueue(dlg.queue, req);
     if (r.status === 'full') {
@@ -252,6 +284,18 @@ export function request(kind, message, opts, defaults) {
     const id = r.target.id;
     const list = waiters.get(id);
     if (list) list.push(resolve); else waiters.set(id, [resolve]);
+    if (!signal) return;
+    // 这一条只有自己在等：按取消结算（框跟着退场）。合并进来的提示（别的调用也在等同一条）只退自己这一份，框留给别人
+    onAbort = () => {
+      const ws = waiters.get(id);
+      if (!ws || !ws.includes(resolve)) return;
+      if (ws.length === 1) { settle(id, 'cancel'); return; }
+      ws.splice(ws.indexOf(resolve), 1);
+      const r = dlg.queue.find((x) => x.id === id);
+      if (r && r.count > 1) r.count -= 1;
+      resolve(valueOf(r || req, 'cancel'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 

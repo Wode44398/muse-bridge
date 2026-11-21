@@ -15,6 +15,8 @@ import { readFileSync } from 'node:fs';
 export { harnessDir };
 // 公网预览子域（core routes/preview-host.mjs）查注册表、控制台「服务控制」排空与计数用。
 export { harnessEndpoints, drainHarnesses } from './routes/harness.mjs';
+// 「空闲时重启」要数上 dimensio 实例里在跑的轮（核心 registry.mjs moduleBusyRuns → runtime/service-control.mjs）。
+export { busyRuns } from './routes/harness.mjs';
 // 拉取请求自动修复：核心的 PR 后台扫描（src/runtime/pr-monitor.mjs）叫醒 dimensio 会话用。
 export { deliverPrEvent } from './routes/harness.mjs';
 // 会话协作（Claude ⇄ dimensio）：核心 runtime/session-family.mjs 经 getModule('dimensio').familyCall 往 dimensio 会话开会话、发消息。

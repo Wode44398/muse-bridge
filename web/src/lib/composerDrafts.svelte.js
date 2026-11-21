@@ -63,15 +63,16 @@ function slim(list) {
   return out;
 }
 // 给 <img> 用，必须走 mediaUrl：apiUrl 在家会走局域网，而 WebView 经 LAN 加载 <img> 会失败（切会话回来整张裂图）
-function rawUrl(file) {
+function rawUrl(file, tier = 'preview') {
   const t = getToken();
-  return mediaUrl('/api/upload/raw?name=' + encodeURIComponent(file) + '&thumb=preview' + (t ? '&token=' + encodeURIComponent(t) : ''));
+  return mediaUrl('/api/upload/raw?name=' + encodeURIComponent(file) + '&thumb=' + tier + (t ? '&token=' + encodeURIComponent(t) : ''));
 }
 // 输入栏图片附件的服务端缩略图（不是 uploads 副本返回 undefined）。Composer 挂在 data-fallback 上：
 // 本地 blob: 预览被回收 / 失效时，全局媒体自愈（lib/mediaHeal.js）换成它
-export function uploadThumbUrl(path) {
+// tier：preview = 1280（图片附件默认）| 1 = 320（视频封面用：服务端 ffmpeg 抽一帧，52px 的瓦片用不着大图）
+export function uploadThumbUrl(path, tier = 'preview') {
   const f = (UPLOAD_FILE_RE.exec(path || '') || [])[1];
-  return f ? rawUrl(f) : undefined;
+  return f ? rawUrl(f, tier) : undefined;
 }
 function revive(list) {
   return (list || []).map((a) => {

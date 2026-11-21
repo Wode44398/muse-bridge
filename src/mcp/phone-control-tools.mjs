@@ -181,7 +181,9 @@ function turnBrief(gen) {
 // 新 apk 的打开类动作自己会等前台切换（回包带 foreground）：认出来之后就不再先查一次前台（按 设备@app 版本记）。
 const OPEN_WAITS = new Set();
 
-export function buildPhoneControlTools(genKey, getGen, originDevice, owner) {
+// opts.confirm：替换高危动作的确认闸（别的 agent 没有 Claude 的问答卡，自己弹确认）——async ({ kind, deviceId, header, question, detail, owner, ownerLabel }) → 是否同意；
+//   kind = 'send_sms' | 'call' | 'confirm'。opts.toUser = false：截图不往聊天里发（别的 agent 的前端不认 gen_media 帧）。
+export function buildPhoneControlTools(genKey, getGen, originDevice, owner, { confirm = null, toUser: shotToChat = true } = {}) {
   // originDevice 可以是函数：停放的 CLI 跨轮复用，每次调用现取「这条消息发自哪台手机」
   const originOf = typeof originDevice === 'function' ? originDevice : () => originDevice;
   const resolveGen = () => (getGen && getGen()) || getCurrentGen(genKey);
@@ -199,6 +201,9 @@ export function buildPhoneControlTools(genKey, getGen, originDevice, owner) {
     st.deviceId = r.device.id;
     return { d: r.device, switched, via: r.via };
   };
+  const askUser = (kind, deviceId, header, question, detail) => (confirm
+    ? confirm({ kind, deviceId, header, question, detail, ...who() })
+    : confirmDanger({ genKey, deviceId, resolveGen, ...who() }, header, question, detail));
   const tagOf = (d) => '【' + (d.name || d.model || deviceHandle(d)) + '】';
   // 发给选定设备；返回 {r, d, tag, note}。note 在换台时提醒「编号作废」、沿用上次那台时说明一句。
   const run = async (op, args, timeoutMs, want) => {
@@ -367,7 +372,7 @@ export function buildPhoneControlTools(genKey, getGen, originDevice, owner) {
       handler: async (a) => {
         try {
           const { d } = pick(a.device);
-          const ok = await confirmDanger({ genKey, deviceId: d.id, resolveGen, ...who() }, '发送短信', '确认用 ' + deviceLabel(d) + ' 给 ' + a.to + ' 发这条短信吗？', '内容：' + a.body);
+          const ok = await askUser('send_sms', d.id, '发送短信', '确认用 ' + deviceLabel(d) + ' 给 ' + a.to + ' 发这条短信吗？', '内容：' + a.body);
           if (!ok) return txt('已取消：用户没有确认发送这条短信。');
           await requestPhoneControl({ genKey, deviceId: d.id, op: 'send_sms', args: { to: a.to, body: a.body }, ...who() });
           return txt(tagOf(d) + ' ✓ 已发出短信给 ' + a.to);
@@ -387,7 +392,7 @@ export function buildPhoneControlTools(genKey, getGen, originDevice, owner) {
       handler: async (a) => {
         try {
           const { d } = pick(a.device);
-          const ok = await confirmDanger({ genKey, deviceId: d.id, resolveGen, ...who() }, '拨打电话', '确认用 ' + deviceLabel(d) + ' 拨打 ' + a.number + ' 吗？', '会立即拨出。');
+          const ok = await askUser('call', d.id, '拨打电话', '确认用 ' + deviceLabel(d) + ' 拨打 ' + a.number + ' 吗？', '会立即拨出。');
           if (!ok) return txt('已取消：用户没有确认拨打。');
           await requestPhoneControl({ genKey, deviceId: d.id, op: 'call', args: { number: a.number }, ...who() });
           return txt(tagOf(d) + ' ✓ 已拨打 ' + a.number);
@@ -414,7 +419,7 @@ export function buildPhoneControlTools(genKey, getGen, originDevice, owner) {
         try {
           let deviceId = null;
           try { deviceId = pick(a.device).d.id; } catch { /* 没设备在线也能在聊天里问 */ }
-          const ok = await confirmDanger({ genKey, deviceId, resolveGen, ...who() }, '确认操作', a.question, a.detail || '');
+          const ok = await askUser('confirm', deviceId, '确认操作', a.question, a.detail || '');
           return txt(ok ? '用户已确认，可以执行。' : '用户没有确认（拒绝或超时）——不要执行，按用户意思换做法或停下回报。');
         } catch (e) { return errText(e); }
       },
@@ -435,7 +440,7 @@ export function buildPhoneControlTools(genKey, getGen, originDevice, owner) {
           const pack = await run('screen', { format: f, grid: !a.toUser, som: !a.toUser, clean: !!a.toUser }, 30_000, a.device);
           const r = pack.r || {};
           let pre = pack.note || '';
-          if (a.toUser) pre += (r.screenshot && showShotToUser(resolveGen, r.screenshot)) ? '（这张截图已发到用户聊天里）' : '（没拿到截图，没能发给用户）';
+          if (a.toUser && shotToChat) pre += (r.screenshot && showShotToUser(resolveGen, r.screenshot)) ? '（这张截图已发到用户聊天里）' : '（没拿到截图，没能发给用户）';
           const out = obsContent(r, pack.tag, pre);
           surfaceExp(out, r.package);
           return out;

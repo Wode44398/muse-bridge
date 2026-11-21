@@ -5,6 +5,7 @@
   import TopBar from './TopBar.svelte';
   import SidebarToggle from './claude/SidebarToggle.svelte';
   import RoutinesPage from './RoutinesPage.svelte';
+  import SidebarAppHost from './apps/SidebarAppHost.svelte';   // 侧栏「应用」组点开的插件应用（pin: 'sidebar'）
   import { api } from '../lib/api.js';
   import { me, ui, session, singleMode, sessionWt } from '../lib/state.svelte.js';
   import UserMenu from './UserMenu.svelte';
@@ -41,6 +42,7 @@
   import { createSessionActions } from '../lib/claudePage/sessionActions.svelte.js';
   import { createSideDnd } from '../lib/claudePage/sideDnd.svelte.js';
   import { createSplitPanes } from '../lib/claudePage/splitPanes.svelte.js';
+  import { createSideApps } from '../lib/claudePage/sideApps.svelte.js';
 
   // 页面上下文：外壳与各区段工厂、子组件经它互相取用（getter / setter 直通各自的局部状态，响应式不丢）。
   // 各区段工厂按原来在本文件里的位置依次调用——$effect 的创建顺序因此与拆分前一致。
@@ -56,7 +58,7 @@
     get pinned() { return pinned; },
     get who() { return who; },
     get atBottom() { return atBottom; }, set atBottom(v) { atBottom = v; },
-    onScroll,
+    onScroll, onWheel, onTouchStart, onTouchEnd,
     closeDrawer,
     slideOut,
     get single() { return single; },
@@ -285,34 +287,63 @@
   // 改成每帧把视口往底部缓动（τ≈90ms，一行高的增长约 0.2s 滑到位；落差特别大直接到底）。
   // 用户一往上滚（scrollTop 变小、且不是内容变短被夹的）立刻放手；跟底途中自己造成的滚动事件
   // 不重算 atBottom——大段内容一次到达时落差可能瞬间超过 120px，重算会把跟底误判成「用户离开了底部」。
-  let followRaf = 0, followT = 0, lastTop = 0;
+  // 手机「上滑被吸回底部」的两个根因（11-18）：① 这个循环每帧改写 lastTop，手指上拖的位移先被 rAF
+  // 读到、拽回一截、再记成「上一位置」，onScroll 永远看不出用户在往上滚，atBottom 一直为真、每帧和手指
+  // 抢；② 高 DPR 下 scrollTop 是小数、scrollHeight 取整，最大位置可能永远差 1px 以上够不到底，
+  // += 被夹住毫无进展，循环在会话早已结束后仍空转——于是「有时候」一上滑就被吸住。
+  // 对策：手指按着时不跟底；每帧先查有没有被别人往上挪过（有就放手）；写了没进展就停。
+  let followRaf = 0, followT = 0, lastTop = 0, touching = false;
   const calmScroll = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function stopFollow() { if (followRaf) { cancelAnimationFrame(followRaf); followRaf = 0; } }
   function followBottom() {
-    if (followRaf || !scrollEl) return;
+    if (followRaf || !scrollEl || touching) return;
     followT = performance.now();
+    lastTop = scrollEl.scrollTop;
     followRaf = requestAnimationFrame(stepFollow);
   }
   function stepFollow(now) {
     followRaf = 0;
     const el = scrollEl;
-    if (!el || !atBottom || !el.clientHeight) return;
-    const gap = el.scrollHeight - el.clientHeight - el.scrollTop;
+    if (!el || !atBottom || touching || !el.clientHeight) return;
+    const top = el.scrollTop;
+    const gap = el.scrollHeight - el.clientHeight - top;
+    if (top < lastTop - 0.5 && gap > 2) { atBottom = false; lastTop = top; return; }   // 用户（滚轮/拖条/惯性）往上挪了
     if (gap <= 1) return;
     const dt = Math.min(64, Math.max(1, now - followT));
     followT = now;
     let d = gap > 1600 || calmScroll() ? gap : gap * (1 - Math.exp(-dt / 90));
     if (d < 1) d = Math.min(gap, 1);
-    el.scrollTop += d;
+    el.scrollTop = top + d;
     lastTop = el.scrollTop;
+    if (lastTop <= top + 0.1) return;                   // 被夹住没进展 = 已经是能到的最底，别空转
     followRaf = requestAnimationFrame(stepFollow);
+  }
+  // 手指按住期间滚动归手指：停掉跟底，松手后若仍在底部再接着跟（惯性上甩由 onScroll / stepFollow 识别放手）。
+  function onTouchStart() { touching = true; stopFollow(); }
+  function onTouchEnd() {
+    touching = false;
+    if (scrollEl) lastTop = scrollEl.scrollTop;
+    if (atBottom) followBottom();
+  }
+  // 电脑滚轮（11-20「往上滚都滚不动、底部像磁铁」）：Chromium 平滑滚动的起步与收尾每帧只挪一两像素，
+  // 旧判定要「上移 > 2px」才算用户在滚——起步那帧没认出来，跟底循环紧接着写 scrollTop，直接把这次
+  // 滚轮动画打断吃掉；侥幸滚上去了，收尾那几帧又走「离底 < 120px 就重新粘底」，下一批内容一到又被吸回去。
+  // 对策：① 滚轮往上 = 明确意图，wheel 事件当场放手，不等 scroll 事件猜；② 上移阈值降到 0.5px；
+  // ③ 放手后只有【往下】滚回底部附近（或真到底）才重新粘底，往上的任何残余位移都不再重新吸住。
+  function onWheel(e) {
+    if (e.deltaY >= 0 || !scrollEl || scrollEl.scrollTop <= 0) return;
+    atBottom = false;
+    stopFollow();
+    lastTop = scrollEl.scrollTop;
   }
   function onScroll() {
     if (!scrollEl) return;
     const top = scrollEl.scrollTop, gap = scrollEl.scrollHeight - scrollEl.clientHeight - top;
-    if (top < lastTop - 2 && gap > 2) {                 // 用户往上滚：立刻放手
+    if (top < lastTop - 0.5 && gap > 2) {               // 用户往上滚：立刻放手
       atBottom = false;
-      if (followRaf) { cancelAnimationFrame(followRaf); followRaf = 0; }
-    } else if (!followRaf || gap < 120) atBottom = gap < 120;
+      stopFollow();
+    } else if (gap <= 2) atBottom = true;               // 真到底了（含新消息落底、内容变短被夹到底）
+    else if (top > lastTop + 0.5 && !followRaf && gap < 120) atBottom = true;   // 用户往下滚回底部附近
     lastTop = top;
   }
   $effect(() => {
@@ -403,7 +434,7 @@
     axis: 'x', dir: 1, edge: 40, threshold: 0.32,
     // 宽屏（鼠标）不启用；侧栏常驻时左缘归侧栏所有（那儿是会话列表，再挂整页右滑会打架）；转场中不接；
     // 单页模式身后没有主页可露。
-    guard: () => !(single || wide || pinned || ui.drawerOpen || ui.routinesOpen || ui.morphing),
+    guard: () => !(single || wide || pinned || ui.drawerOpen || ui.routinesOpen || pc.sideApp || ui.morphing),
     base: () => dragX, cur: () => dragX,
     onStart: () => { sliding = true; ui.claudeSliding = true; },
     onMove: (x) => { dragX = x; },
@@ -419,12 +450,16 @@
   // 不在两格里各开一份——两份内核各挂一条直播，谁发消息都会把另一格晾成旧快照）。
   function pickSession(s) {
     closeDrawer();
+    pc.sideApp = null;   // 点了会话就是要看那段对话：侧栏应用让开（点的是当前会话 session.id 不变，也要收）
     if (pc.splitOn) {
       if (s.id === pc.paneId) { pc.focusPane(); return; }
       if (s.id === session.id) { pc.paneFocus = false; return; }
       if (pc.paneFocus) { pc.postPane({ t: 'open', id: s.id }); return; }
     }
-    session.projectId = s.projectId || null; openSession(s.id);
+    // 点下即高亮（pc.pickId，见 splitPanes）：不等消息加载完；这次加载落定（成功 / 失败 / 被后一次点击作废）就交还给 session.id
+    pc.pickId = s.id;
+    session.projectId = s.projectId || null;
+    Promise.resolve(openSession(s.id)).finally(() => { if (pc.pickId === s.id) pc.pickId = null; });
   }
   // 项目行点击 = 在该项目里开新聊天（与 GPT 分页同构：项目即新会话的 cwd 上下文）。分屏时开在有焦点的那一格。
   function newInProject(p) {
@@ -432,7 +467,8 @@
     if (pc.splitOn && pc.paneFocus) { pc.postPane({ t: 'new', projectId: p.id }); return; }
     newConversation(p.id);
   }
-  function openRoutines() { closeDrawer(); ui.routinesOpen = true; }
+  function openRoutines() { closeDrawer(); pc.sideApp = null; ui.routinesOpen = true; }
+  expose(pc, createSideApps(pc));
 
   // —— 新对话（S1-6，审查 G21）：侧栏第一行 + 手机顶栏 + 快捷键（网页 Ctrl/⌘+Shift+O，桌面壳另认 Ctrl/⌘+N）——
   // 落点（lib/quickChat.js 的 newChatTarget）：当前在真实项目里就在它里面开；在临时对话里（或还没有归属）
@@ -444,6 +480,7 @@
   }
   function newChat() {
     closeDrawer();
+    pc.sideApp = null;   // 新对话 = 换了上下文，侧栏应用收起（同切会话）
     const cur = pc.splitOn && pc.paneFocus ? ((pc.paneId && pc.sessions.find((s) => s.id === pc.paneId)?.projectId) || pc.paneProjId) : sessionProjId;
     openNew(newChatTarget({ currentProjectId: cur, projects: pc.projects, sessions: pc.listed }));
   }
@@ -620,6 +657,7 @@
 {/if}
 <!-- 定时任务：侧栏常驻（电脑）时铺在正文区、侧栏照旧可点；手机是下面那份全屏页 -->
 {#if pinned}<RoutinesPage embedded />{/if}
+{#if pinned && pc.sideApp}<SidebarAppHost appKey={pc.sideApp} embedded onClose={pc.closeSideApp} />{/if}
 </div>
 
 
@@ -648,6 +686,7 @@
 {/if}
 
 {#if !pinned}<RoutinesPage />{/if}
+{#if !pinned && pc.sideApp}<SidebarAppHost appKey={pc.sideApp} onClose={pc.closeSideApp} />{/if}
 </div>
 </div>
 <svelte:window onkeydown={pc.onSearchKey} />

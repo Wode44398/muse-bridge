@@ -8,6 +8,7 @@ import { canAllFiles } from '../../../lib/localfs.js';
 import { untitledMdName } from '../../../lib/files-business.js';
 import { kindOf, newShareDialog } from '../../../lib/files/common.js';
 import { G, locGlyph, locLabel } from './panelLook.js';
+import { panelPluginOpenItems } from './panelPluginOpen.js';
 
 export function createPanelMenus(P) {
   const locItems = $derived([
@@ -84,6 +85,7 @@ export function createPanelMenus(P) {
     }
     add(!it.isDir && !P.isLocal, P.desktopNative ? t('另存为…') : t('下载到本地'), 'download', { symbol: 'arrow.down.circle' });
     add(!it.isDir && (P.canOpenWith || P.desktopNative), t('打开方式'), 'openwith', { symbol: 'arrow.up.forward.app' });
+    L.push(...panelPluginOpenItems(P, it));
     add(!it.isDir && !P.isLocal && !P.desktopExtra && kindOf(it.name) === 'zip' && !P.readonly, t('解压'), 'extract', { icon: G.zip });
     add(P.canZip, t('压缩…'), 'compress', { icon: G.zip });
     add((!P.isLocal || P.localOps.move) && !P.readonly, t('移动到'), 'move', { icon: G.folder });

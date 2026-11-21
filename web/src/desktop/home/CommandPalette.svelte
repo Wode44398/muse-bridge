@@ -8,6 +8,9 @@
   import { GLASS } from '../glass/material.js';
   import { settingsNav } from '../settings/settingsNav.svelte.js';
   import { t } from '../../lib/i18n.js';
+  import { pluginUi, paletteCommands, runPluginUi } from '../../lib/pluginUi.svelte.js';
+  import { handoffToClaude } from '../../lib/claudeHandoff.js';
+  import { openApp, appKey } from '../../lib/pluginApps.svelte.js';
 
   let { onOpenAgent } = $props();
 
@@ -41,10 +44,23 @@
   const AGENT_ITEMS = $derived([
     { kind: 'agent', key: 'claude', label: t('打开 Claude'), keys: 'claude cc' },
     { kind: 'agent', key: 'chatgpt', label: t('打开 ChatGPT'), keys: 'codex openai gpt' },
+    { kind: 'agent', key: 'agy', label: t('打开 Antigravity'), keys: 'agy antigravity google gemini' },
     { kind: 'agent', key: 'harness', label: t('打开 dimensio'), keys: 'dimensio harness hx' },
     { kind: 'agent', key: 'studio', label: t('打开 Media Studio'), keys: t('图像 视频 配音 音乐 生图 gemini vertex') },
     { kind: 'agent', key: 'files', label: t('打开工作空间'), keys: t('文件 files workspace') },
   ].filter((it) => screenOn(it.key)));
+  // 插件应用：按应用名和插件名都搜得到；没输入时只露前 4 个，免得把最近会话 / 设置挤出列表
+  const APP_ITEMS = $derived(me.kind === 'none' ? [] : pluginUi.apps.map((a) => ({
+    kind: 'app', key: a.key || appKey(a), app: a, label: t('打开 {name}', { name: a.title || a.id }),
+    keys: [a.title, a.pluginName, a.plugin].filter(Boolean).join(' '),
+  })));
+  // 插件命令（ctx.ui.command 声明了 palette: true 的）：标签 = /名字 · 说明，插件名也搜得到。
+  // 这里身边没有输入框：模板命令把模板交给 Claude（开新对话填好不发），动作命令跑完的 insert 同样走交接
+  const CMD_ITEMS = $derived(me.kind === 'none' ? [] : paletteCommands().map((c) => ({
+    kind: 'cmd', key: c.plugin + '/' + c.name, cmd: c,
+    label: '/' + c.name + (c.description ? ' · ' + c.description : ''), sub: c.pluginName || c.plugin,
+    keys: [c.pluginName, c.plugin, c.name].filter(Boolean).join(' '),
+  })));
   const SETTING_ITEMS = [
     { kind: 'settings', sec: 'general', label: t('设置 · 通用'), keys: t('通知 语言 自启') },
     { kind: 'settings', sec: 'appearance', label: t('设置 · 外观'), keys: t('明暗 深色 浅色 动画') },
@@ -56,7 +72,7 @@
   const items = $derived.by(() => {
     const needle = q.trim().toLowerCase();
     const ses = screenOn('claude') ? sessions.map((s) => ({ kind: 'session', id: s.id, label: t('继续 · {title}', { title: s.title }), keys: t('claude 会话 继续') })) : [];
-    const all = [...AGENT_ITEMS, ...ses, ...SETTING_ITEMS];
+    const all = [...AGENT_ITEMS, ...(needle ? APP_ITEMS : APP_ITEMS.slice(0, 4)), ...(needle ? CMD_ITEMS : []), ...ses, ...SETTING_ITEMS];
     const hitList = needle ? all.filter((it) => (it.label + ' ' + it.keys).toLowerCase().includes(needle)) : all;
     return hitList.slice(0, 10);
   });
@@ -66,8 +82,13 @@
     if (!it) return;
     close();
     if (it.kind === 'agent') onOpenAgent?.(it.key);
+    else if (it.kind === 'app') openApp(it.app);   // 没给起点：转场从 Dock 上它那枚图标（或「更多」那格）长出来
     else if (it.kind === 'session') { ui.screen = 'claude'; openSession(it.id).catch(() => {}); }
     else if (it.kind === 'settings') { settingsNav.sec = it.sec; ui.settingsOpen = true; }
+    else if (it.kind === 'cmd') {
+      if (it.cmd.mode === 'action') runPluginUi(it.cmd, 'command', { args: '' }, { handoff: true });   // toast / insert 由 runPluginUi 自己落地
+      else handoffToClaude(String(it.cmd.template || ''));
+    }
   }
   function onInputKey(e) {
     if (e.key === 'ArrowDown') { e.preventDefault(); hi = (hi + 1) % Math.max(1, items.length); }
@@ -89,10 +110,11 @@
       <kbd>esc</kbd>
     </div>
     <div class="list">
-      {#each items as it, i (it.kind + (it.key || it.id || it.sec))}
+      {#each items as it, i (it.kind + ':' + (it.key || it.id || it.sec))}
         <button class="it" class:hi={i === hi} onpointerenter={() => (hi = i)} onclick={() => run(it)}>
-          <span class="dot" class:ses={it.kind === 'session'} class:set={it.kind === 'settings'}></span>
+          <span class="dot" class:ses={it.kind === 'session'} class:set={it.kind === 'settings'} class:app={it.kind === 'app'} class:cmd={it.kind === 'cmd'}></span>
           <span class="lb">{it.label}</span>
+          {#if it.sub}<span class="sub">{it.sub}</span>{/if}
           {#if i === hi}<kbd>↵</kbd>{/if}
         </button>
       {:else}
@@ -133,6 +155,9 @@
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dsk-accent, #d97757); flex: none; }
   .dot.ses { background: #64d2ff; }
   .dot.set { background: #bf5af2; }
+  .dot.app { border-radius: 2px; background: #30d158; }   /* 插件应用：小方点（应用 = 一格图标） */
+  .dot.cmd { border-radius: 2px; background: #ffd60a; transform: rotate(45deg); }   /* 插件命令：菱形点，与应用的方点分开 */
+  .sub { flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: rgba(255, 255, 255, .45); }
   .lb { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .none { padding: 16px; text-align: center; color: rgba(255, 255, 255, .45); font-size: 13px; }
 </style>

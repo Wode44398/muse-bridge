@@ -12,7 +12,7 @@ import { spareRuns, sleep, warmRuns, warmStat, closeWarm } from './warm.mjs';
 export async function admitTurn(plan, req, res) {
   const {
     message, sessionId, model, attachments, source, origin, limitResume, restartResume, ctx, family, snap, isSpare, ownKey, permPolicy, turnPerm, billTo,
-    pIn, warmSig, sigDiff, chatPrefs, limitReplay,
+    pIn, warmSig, sigDiff, chatPrefs, limitReplay, pageChat,
   } = plan;
   if (isSpare) {
     // 已有同参数的预热进程：续期即可；参数变了（换模型/项目/开关）就换掉旧的。
@@ -43,7 +43,9 @@ export async function admitTurn(plan, req, res) {
     if (sp) {
       if (sp.sig === warmSig && await sp.take({ res, message, attachments, pin: pIn, source, chatPrefs, origin, permMode: turnPerm.mode, limitReplay })) { handedTurn(req, sessionId, 'spare'); return true; }
       console.log(`[claude] spare CLI not used (${sp.sig !== warmSig ? 'options changed: ' + sigDiff(sp.digest) : 'gone'}) — cold start`);
-      sp.close();
+      // 插件应用页面的对话签名对不上时不关它：那份预热是 Claude 页按自己选的项目 / 输入建议起的，留给那边的下一条消息；
+      // 页面对话本来就在默认工作目录、不要输入建议，签名不一致是常态，关了只会让 Claude 页白等一次冷起。
+      if (!pageChat || sp.sig === warmSig) sp.close();
     }
   }
   // 上一轮定局后停放着的 CLI（见 WARM_IDLE_MS）：参数一致就直接接着用；否则关掉它再冷起

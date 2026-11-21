@@ -23,6 +23,14 @@
 //         POST /api/chat 的分支；attachments(额外根目录[]) 返回过了守卫的附件路径。准入（ctx.allow*）核心已判。
 //   claude: { hostNudge(ctx), nudge(ctx), mcp(ctx, { getGen }) }   给 Claude 主聊天 / 定时任务的提示段与工具
 //   routines: { <routine.agent>: async (ctx, r) => ({ sessionId, text, isError }) }   定时任务的引擎
+//   live(ctx) => { agent, label, runs: [{ sessionId, userText, startedAt }], asks: [{ sessionId, id, kind, header, question }] }
+//         这个身份眼下在跑的轮与在等人的卡（GET /api/active 的 ext：手机后台服务、桌面壳据此知道「还有别的分页在干活」）
+//   busyRuns() => number | Promise<number>   全服在跑、但【不在核心 gen 表里】的轮数（dimensio 的轮跑在 harness 子进程里）：
+//         「空闲时重启」/ 装更新据此等它们跑完（runtime/service-control.mjs）。登记了 gen 的（Codex、agy）别再报，免得重数。
+//   agentOps: { <agent id>: { list, search, read, send, wait, stop, answer, pending, overview } }
+//         bridge 的 agent 操作（src/agent-api/ops/chat.mjs 的 sessions.* / chat.*）带 agent:<id> 时转到这里。
+//         除 overview 外都是 async (ctx, args, env, kit) => 数据，kit = { OpError, internalRequest, routeError }（核心传入，
+//         扩展不必引 agent-api 的内部文件）；overview(ctx) => { agent, label, running:[], pending:[] }，并进 overview 操作。
 //   其余具名导出供核心经 getModule(id) 按需取（控制台、预览子域等）。
 //
 // 测试开关：BRIDGE_MODULES_SKIP=codex,dimensio（或 all）假装这些扩展没装，在满配仓库里模拟基础版；
@@ -40,6 +48,7 @@ export const MODULE_CATALOG = Object.freeze([
   // Media Studio（2026-11-04 接替 Vertex 扩展；Gemini 对话同日下线）：图像 / 视频 / 配音 / 音乐与给 Claude 的媒体工具。工具型页面，不能对话（agents.mjs tool:true）。
   { id: 'studio', label: 'Media Studio', agents: ['studio'] },
   { id: 'codex', label: 'ChatGPT · Codex', agents: ['codex'] },
+  { id: 'agy', label: 'Antigravity', agents: ['agy'] },
   { id: 'dimensio', label: 'dimensio', agents: ['dimensio'] },
 ]);
 const CATALOG_BY_ID = Object.fromEntries(MODULE_CATALOG.map((m) => [m.id, m]));
@@ -112,7 +121,7 @@ export function buildEdition() {
 const HIDE = new Set(idList(process.env.BRIDGE_MODULES_HIDE));
 export function moduleOffered(id) {
   if (HIDE.has(id) && !found[id]) return false;
-  if (id !== 'codex') return true;
+  if (id !== 'codex' && id !== 'agy') return true;
   if (found[id] || existsSync(path.join(PENDING_DIR, id, MANIFEST_NAME))) return true;
   return existsSync(path.join(BUILTIN_MODULES_DIR, id, MANIFEST_NAME)) || !!baseBuildId();
 }
@@ -363,6 +372,59 @@ export function moduleClaudeMcp(ctx, opts = {}) {
   for (const r of loadedList()) {
     const c = r.exports.claude;
     if (c && typeof c.mcp === 'function') Object.assign(out, safe(r.id, 'claude.mcp', () => c.mcp(ctx, opts) || {}, {}));
+  }
+  return out;
+}
+
+// 各扩展眼下在跑的轮 / 在等人的卡（核心自己的 Claude 轮不在这里）。只收有东西的。
+export function moduleLive(ctx) {
+  const out = [];
+  for (const r of loadedList()) {
+    if (typeof r.exports.live !== 'function') continue;
+    const v = safe(r.id, 'live', () => r.exports.live(ctx), null);
+    if (!v || typeof v !== 'object') continue;
+    const runs = Array.isArray(v.runs) ? v.runs : [];
+    const asks = Array.isArray(v.asks) ? v.asks : [];
+    if (runs.length || asks.length) out.push({ agent: String(v.agent || r.id), label: String(v.label || r.id), runs, asks });
+  }
+  return out;
+}
+
+// 全服在跑、核心 gen 表看不到的轮数之和（见顶部 busyRuns）。单个扩展问不到或超时按 1 轮算：宁可多等也别打断。
+export async function moduleBusyRuns() {
+  const hooks = loadedList().filter((r) => typeof r.exports.busyRuns === 'function');
+  const counts = await Promise.all(hooks.map(async (r) => {
+    try {
+      const v = await Promise.race([r.exports.busyRuns(), new Promise((res) => setTimeout(() => res(null), 5000).unref?.())]);
+      return v == null ? 1 : Math.max(0, Number(v) || 0);
+    } catch (e) {
+      console.warn(`[modules] ${r.id}.busyRuns 出错：`, e?.message || e);
+      return 1;
+    }
+  }));
+  return counts.reduce((a, b) => a + b, 0);
+}
+
+// 哪些扩展自己会发会话消息通知（notices.mjs 的 postNotice 带 agent）：hello 里告诉前端，前端据此不再替它们凑本机通知。
+export function moduleNoticeAgents() {
+  return loadedList().filter((r) => r.exports.notices === true).map((r) => r.id);
+}
+
+// agent 操作的分发表（agent id → { list, search, … }）；扩展没装就是 null。
+export function moduleAgentOps(agent) {
+  for (const r of loadedList()) {
+    const h = r.exports.agentOps && Object.hasOwn(r.exports.agentOps, agent) ? r.exports.agentOps[agent] : null;
+    if (h && typeof h === 'object') return h;
+  }
+  return null;
+}
+
+// 有 agent 操作的扩展 agent（overview 逐个问在跑什么）
+export function moduleAgentOpsAgents() {
+  const out = [];
+  for (const r of loadedList()) {
+    const m = r.exports.agentOps;
+    if (m && typeof m === 'object') for (const k of Object.keys(m)) if (m[k] && typeof m[k] === 'object') out.push(k);
   }
   return out;
 }

@@ -16,6 +16,10 @@
   //      没开就不会因为点了按键弹出来。
   //    - 「直接键盘」模式（输入行左边的键盘钮）：按键直接进终端，给 vim / less / Claude Code 这类全屏程序用。
   //
+  // 渲染器：能用 WebGL 就用（@xterm/addon-webgl）。默认的 DOM 渲染器每一行都是一串 span，TUI 转圈、流式输出时
+  // 整屏的 span 反复重排，手机上明显掉帧；WebGL 把字形缓存成贴图一次画完。上下文丢了（切后台久了、显存紧）
+  // 就卸掉它，xterm 自动退回 DOM 渲染，不影响使用。
+  //
   // xterm 按需加载（~250KB）：它此前是静态 import，被打进主 chunk，于是【每次启动】都要解析一遍——
   // 而终端是工作台 dock 里的功能，手机上绝大多数会话一次都不会打开。离线 apk 同样受益。
   let Terminal = null, FitAddon = null;
@@ -33,7 +37,8 @@
   import { api } from '../../lib/api.js';
   import { ui } from '../../lib/state.svelte.js';
   import { pointer } from '../../lib/layout.svelte.js';
-  import { dock, readDockSse, dockToolOk, openDock, openCodexDock, browserSessionOf } from '../../lib/dock.svelte.js';
+  import { dock, readDockSse, hostOf, browserSessionOf } from '../../lib/dock.svelte.js';
+  import { sharedTool, toolAllowed } from '../../lib/dock/tools.js';
   import { devices, loadDevices } from '../../lib/devices.svelte.js';
   import { openExternalUrl } from '../../lib/pluginUi.svelte.js';
   import { showToast } from '../../lib/toast.svelte.js';
@@ -41,6 +46,7 @@
   import { edgeAutoScroll } from '../../lib/touchAutoScroll.js';
   import { keySeq, applyMods, findUrls, isLocalUrl, pushHistory } from '../../lib/termKeys.js';
   import { termTouch, cellAt, logicalLine, bufferText } from '../../lib/termTouch.js';
+  import { termTheme } from '../../lib/termTheme.js';
   import MorphMenu from '../ios27/MorphMenu.svelte';
   import { t, tr } from '../../lib/i18n.js';
   let { dockState = dock } = $props();
@@ -108,29 +114,26 @@
     if (term) { term.reset(); lastCR = { cols: 0, rows: 0 }; replaying = false; greeted = false; connect(); focusTermIfDesk(); }
   }
 
-  // xterm 主题从 Claude 分页 CSS 变量现取（明暗切换时跟随）。从终端自己所在的元素取：
-  // 工作台卡片把 --bg 换成了卡片色，终端底色要跟卡片一致，不能读根上的页面底色。
-  function palette() {
+  // xterm 配色从 Claude 分页 CSS 变量现取（明暗切换时跟随）。从终端自己所在的元素取：
+  // 工作台卡片把 --bg 换成了卡片色，终端底色要跟卡片一致，不能读根上的页面底色。浅色模式的处理见 lib/termTheme.js。
+  function themeOpts() {
     const cs = getComputedStyle(holder || document.documentElement);
-    const v = (n, fb) => (cs.getPropertyValue(n) || '').trim() || fb;
-    const dark = ui.theme !== 'light';
-    return {
-      background: v('--bg', dark ? '#262624' : '#faf9f5'),
-      foreground: v('--text', dark ? '#eee' : '#1a1915'),
-      cursor: v('--coral', '#d97757'),
-      cursorAccent: v('--bg', '#262624'),
-      selectionBackground: dark ? 'rgba(217,119,87,.35)' : 'rgba(217,119,87,.28)',
-      black: dark ? '#3a3a37' : '#4a4a45',
-      brightBlack: '#8a8a84',
-      red: '#e06c5f', brightRed: '#f0857a',
-      green: '#7fb069', brightGreen: '#98c983',
-      yellow: '#d9a05b', brightYellow: '#eab97a',
-      blue: '#7aa2f7', brightBlue: '#93b6ff',
-      magenta: '#bb9af7', brightMagenta: '#cdb3ff',
-      cyan: '#6cb5c9', brightCyan: '#85cde0',
-      white: dark ? '#d9d9d4' : '#5c5c56',
-      brightWhite: dark ? '#f5f5f0' : '#1a1915',
-    };
+    return termTheme(ui.theme !== 'light', (n) => (cs.getPropertyValue(n) || '').trim());
+  }
+  function applyTheme() {
+    if (!term) return;
+    const o = themeOpts();
+    term.options.theme = o.theme;
+    term.options.minimumContrastRatio = o.minimumContrastRatio;
+  }
+  async function loadWebgl(xt) {
+    try {
+      const { WebglAddon } = await import('@xterm/addon-webgl');
+      if (xt !== term) return;
+      const gl = new WebglAddon();
+      gl.onContextLoss(() => { try { gl.dispose(); } catch { /* 已卸 */ } });
+      xt.loadAddon(gl);
+    } catch { /* 没有 WebGL2（老 WebView）：留在 DOM 渲染 */ }
   }
 
   // —— 上行：输入微批 / 行列同步 ——
@@ -151,15 +154,52 @@
     term?.scrollToBottom();
   }
   function syncResize() {
-    if (!term) return;
+    if (!term || lock) return;
     const { cols, rows } = term;
     if (cols === lastCR.cols && rows === lastCR.rows) return;
     lastCR = { cols, rows };
-    api.post(ep('resize'), { ...who(), cols, rows }).catch(() => {});
+    // 服务端回 lock = 尺寸被 agent 占着（错过了 size 事件也能从这里接上）
+    api.post(ep('resize'), { ...who(), cols, rows }).then((r) => { if (r?.lock && !lock) adoptLock(r.lock); }).catch(() => {});
   }
+
+  // —— 尺寸占用：agent 驱动 TUI 时把 PTY 调宽并占住（src/runtime/claude-term.mjs），面板不再按自己的大小适配，
+  // 改为按占用尺寸整体缩放显示；用户点「适配面板」把尺寸要回来。——
+  let lock = $state(null);   // { cols, rows } | null
+  function fitLock() {
+    const el = term?.element;
+    if (!el || !holder) return;
+    if (term.cols !== lock.cols || term.rows !== lock.rows) { try { term.resize(lock.cols, lock.rows); } catch { /* 尺寸越界 */ } }
+    el.style.transform = '';
+    const scr = el.querySelector('.xterm-screen');
+    const k = Math.min(1, holder.clientWidth / (scr?.offsetWidth || 1), holder.clientHeight / (scr?.offsetHeight || 1));
+    el.style.transformOrigin = '0 0';
+    el.style.transform = k < 0.999 ? `scale(${k})` : '';
+  }
+  function adoptLock(l) {
+    lock = { cols: l.cols, rows: l.rows };
+    clearTimeout(resizeTimer);
+    refit();
+  }
+  function dropLock() {
+    if (!lock) return;
+    lock = null;
+    const el = term?.element;
+    if (el) { el.style.transform = ''; el.style.transformOrigin = ''; }
+    lastCR = { cols: 0, rows: 0 };
+    refit(true);
+  }
+  async function releaseLock() {
+    let d = null;
+    try { d = fit?.proposeDimensions(); } catch { /* 量不到：照当前尺寸 */ }
+    try { await api.post(ep('resize'), { ...who(), unlock: true, cols: d?.cols || term?.cols, rows: d?.rows || term?.rows }); } catch { /* 下次 size 事件再对齐 */ }
+    dropLock();
+    focusTermIfDesk();
+  }
+
   // 本地立刻重排，PTY 的 resize 稍后合并发（键盘弹起 / 收起会连着来好几帧尺寸变化，每帧都让 shell 重绘没必要）
   function refit(now = false) {
     if (!term || !fit || replaying) return;
+    if (lock) { fitLock(); return; }
     try { fit.fit(); } catch { /* 卡片被藏起来时量不到尺寸 */ }
     clearTimeout(resizeTimer);
     if (now) syncResize(); else resizeTimer = setTimeout(syncResize, 120);
@@ -172,9 +212,12 @@
   // 老服务端则是原始输出字节），按面板现在的尺寸直接写会错位、复行（键盘开合 / 换卡片后重连最常见）。
   // 所以先把终端临时调成 hello 报的行列，写完再适配回面板、把尺寸同步给 PTY。重放期间 ResizeObserver 的 refit 先忍着。
   let srvCR = null, replaying = false, helloFit = 0;
+  // 流的心跳：服务端 10 秒一次 ping，收到任何字节都记一下（见下面「断流自愈」）
+  let lastBeat = 0;
   function connect() {
     clearTimeout(closeRetry);
     stop?.();
+    lastBeat = Date.now();
     connecting = true; exited = false; failMsg = ''; offline = false; replaying = false;
     const mine = target;
     const url = mine
@@ -188,6 +231,8 @@
         // Windows 的 PTY 是 ConPTY：和服务端镜像用同一份兼容设置（改尺寸时不丢行，见 src/runtime/term-mirror.mjs）
         try { term.options.windowsPty = ev.pty && ev.pty.backend ? { backend: ev.pty.backend, buildNumber: +ev.pty.buildNumber || undefined } : {}; } catch { /* 老版本 xterm 不认 */ }
         lastCR = srvCR ? { ...srvCR } : { cols: 0, rows: 0 };   // PTY 眼下就是这个尺寸：一样就不必再发 resize
+        if (ev.lock) lock = { cols: ev.lock.cols, rows: ev.lock.rows };
+        else if (lock) { lock = null; if (term.element) term.element.style.transform = ''; }
         // 没有快照（新开的壳）：直接按面板尺寸同步；有快照的等重放完再同步（服务端 hello 与快照同一拍发出）
         clearTimeout(helloFit);
         helloFit = setTimeout(() => refit(true), 60);
@@ -204,10 +249,12 @@
         });
       }
       else if (ev.type === 'data') term.write(ev.d || '');
+      else if (ev.type === 'size') { if (ev.lock) adoptLock(ev.lock); else dropLock(); }
       else if (ev.type === 'offline') offline = true;
       else if (ev.type === 'online') offline = false;
       else if (ev.type === 'exit') { exited = true; offline = false; if (ev.error) failMsg = ev.error; }
     }, {
+      onBeat: () => { lastBeat = Date.now(); },
       onDead: (status, body) => {
         connecting = false;
         failMsg = (body && body.error) ? tr(String(body.error)) : (status === 403 ? t('终端仅对完整权限用户开放') : t('连接失败'));
@@ -220,6 +267,37 @@
       },
     });
   }
+
+  // —— 断流自愈 ——
+  // 手机切后台（或锁屏）再回来，SSE 常常已被系统 / 隧道掐断，fetch 却不报错也不结束：画面停在那一刻，
+  // 打字照样发得出去（输入走单独的 POST），就是不再刷新，只能关掉面板重开。两道保险：
+  //  · 回到前台时看心跳：后台期间积压的字节此刻应该一涌而至，稍等一下还没动静就是死流，立刻重连；
+  //  · 看门狗：前台时超过两个半心跳周期一个字节都没收到，同样重连（网络切换、隧道卡住）。
+  // 重连会重放服务端屏幕镜像的快照，画面原样接上。
+  const STALL_MS = 25000;
+  function revive(staleMs) {
+    if (!term || exited || failMsg || document.hidden) return;
+    if (Date.now() - lastBeat > staleMs) connect();
+  }
+  $effect(() => {
+    if (!ready) return;
+    const iv = setInterval(() => revive(STALL_MS), 5000);
+    let resumeT = 0;
+    const onBack = () => {
+      if (document.hidden) return;
+      clearTimeout(resumeT);
+      resumeT = setTimeout(() => revive(12000), 1500);
+    };
+    document.addEventListener('visibilitychange', onBack);
+    window.addEventListener('online', onBack);
+    window.addEventListener('pageshow', onBack);
+    return () => {
+      clearInterval(iv); clearTimeout(resumeT);
+      document.removeEventListener('visibilitychange', onBack);
+      window.removeEventListener('online', onBack);
+      window.removeEventListener('pageshow', onBack);
+    };
+  });
 
   async function restart() {
     await api.post(ep('kill'), who()).catch(() => {});
@@ -531,14 +609,15 @@
   }
 
   // —— 网址 ——
-  const canDockBrowser = () => !target && !!dockState.ws && (dockState === dock ? dockToolOk('browser') : dockState.meta?.shell !== false);
+  // 这个终端属于哪个分页的工作区，网址就开进那个分页的浏览器卡（门禁同那张卡）
+  const canDockBrowser = () => { const h = hostOf(dockState); return !target && !!dockState.ws && !!h && toolAllowed(sharedTool('browser'), h, { snap: !!dockState.snap }); };
   async function openInDock(url) {
     const u = url.replace(/^(https?:\/\/)0\.0\.0\.0/i, '$1127.0.0.1');
     try {
       const narrow = coarse && window.innerWidth < 700;
       await api.post('/api/claude/browser/navigate', { ws: dockState.ws, session: browserSessionOf(dockState), url: u, ...(narrow ? { preset: 'mobile' } : {}) });
     } catch (e) { showToast(tr(String(e?.body?.error || '')) || t('打开失败'), 'err'); return; }
-    if (dockState === dock) openDock('browser'); else openCodexDock('browser');
+    hostOf(dockState)?.open('browser');
   }
   function openLink(url) {
     if (isLocalUrl(url) && canDockBrowser()) openInDock(url);
@@ -613,7 +692,7 @@
   }
   function onPinch(s, phase, mid) {
     const el = term?.element;
-    if (!el) return;
+    if (!el || lock) return;   // 尺寸被占用时是整体缩放显示，捏合改字号没有意义
     if (phase === 'start') {
       pinchBase = fontSize;
       const r = el.getBoundingClientRect();
@@ -658,8 +737,8 @@
       term = new Terminal({
         fontSize: untrack(() => fontSize),
         fontFamily: MONO,
-        theme: palette(),
-        cursorBlink: true,
+        ...themeOpts(),
+        cursorBlink: !untrack(() => coarse),   // 触屏上光标不闪：每次闪烁都是一次重绘，手机上能省则省
         scrollback: 5000,
         convertEol: false,
         rightClickSelectsWord: false,
@@ -667,6 +746,7 @@
       fit = new FitAddon();
       term.loadAddon(fit);
       term.open(el);
+      loadWebgl(term);
       lastCR = { cols: 0, rows: 0 };
       // 直接键盘模式 / 电脑上叠粘滞修饰键（输入法一次上屏一串时原样发）
       term.onData((d) => queueSend(modsOn() ? applyMods(d, takeMods()) : d));
@@ -714,12 +794,17 @@
       stop?.(); stop = null;
       ro?.disconnect(); ro = null;
       if (sendTimer) { clearTimeout(sendTimer); flushSend(); }   // 卸载时还没发出去的按键补发，不丢
-      term?.dispose(); term = null; fit = null;
+      term?.dispose(); term = null; fit = null; lock = null;
     };
   });
 
-  // 明暗主题切换即时换 xterm 配色。
-  $effect(() => { void ui.theme; if (term) term.options.theme = palette(); });
+  // 明暗主题切换即时换 xterm 配色。等一帧再读 CSS 变量：主题属性挂到根元素上之前读到的还是旧配色。
+  $effect(() => {
+    void ui.theme;
+    if (!ready) return;
+    const raf = requestAnimationFrame(applyTheme);
+    return () => cancelAnimationFrame(raf);
+  });
 
   // 工具行字形：和工作台图标同一套线稿（24 栅格、1.7 线宽、圆角端点；见 lib/dockIcons.js）
   const SV = (body, sw = 1.7) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
@@ -746,7 +831,7 @@
 
   // 触屏菜单
   const tgtItems = $derived([
-    { label: t('服务器'), symbol: 'server.rack', detail: t('工作空间，Claude 的命令也在这里跑'), checked: !target, onclick: () => pick('') },
+    { label: t('服务器'), symbol: 'server.rack', detail: t('工作空间，agent 的命令也在这里跑'), checked: !target, onclick: () => pick('') },
     ...termDevices.map((d) => ({ label: d.name, symbol: 'desktopcomputer', detail: t('我的电脑'), checked: target === d.id, onclick: () => pick(d.id) })),
     ...(dev && !termDevices.some((d) => d.id === dev.id) ? [{ label: dev.name, symbol: 'desktopcomputer', detail: t('离线'), checked: true, disabled: true }] : []),
   ]);
@@ -774,6 +859,13 @@
     {#if coarse && ready}
       <!-- 手势层：滚动 / 缩放 / 点按 / 长按全归它，手指碰终端不再弹键盘；data-sheet-nodrag：下拉是滚动，不是收起工作台 -->
       <div class="tm-touch" data-sheet-nodrag use:termTouch={{ term: () => term, onTap, onLongPress: openSel, onPinch }}></div>
+    {/if}
+    {#if lock && selText == null}
+      <!-- 尺寸被 agent 占用：整体缩放显示中，点一下按面板大小适配回来 -->
+      <button class="tm-lockpill" onpointerdown={keepFocus} onclick={releaseLock}
+        title={t('Claude 把终端调成了 {cols}×{rows} 方便它读屏；点这里改回按面板大小显示', { cols: lock.cols, rows: lock.rows })}>
+        <span class="dim">{lock.cols}×{lock.rows}</span><span>{t('适配面板')}</span>
+      </button>
     {/if}
     {#if scrolledUp && selText == null}
       <button class="tm-tobottom" aria-label={t('回到底部')} title={t('回到底部')} onpointerdown={keepFocus} onclick={() => { term?.scrollToBottom(); focusTermIfDesk(); }}>
@@ -825,7 +917,7 @@
       {#if menuOpen && !coarse}
         <div class="tm-menu" role="menu">
           <button role="menuitemradio" aria-checked={!target} onclick={() => pick('')}>
-            <span class="lbl">{t('服务器')}</span><small>{t('工作空间，Claude 的命令也在这里跑')}</small>
+            <span class="lbl">{t('服务器')}</span><small>{t('工作空间，agent 的命令也在这里跑')}</small>
           </button>
           {#each termDevices as d (d.id)}
             <button role="menuitemradio" aria-checked={target === d.id} onclick={() => pick(d.id)}>
@@ -942,13 +1034,18 @@
 
 <style>
   .tm { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; padding: 6px 6px 0; background: var(--bg); }
-  .tm-screen { flex: 1; min-height: 0; position: relative; border-radius: 10px; overflow: hidden; background: var(--bg); }
+  .tm-screen { flex: 1; min-height: 0; position: relative; border-radius: 10px; overflow: hidden; background: var(--bg); contain: strict; }
   /* 内边距用 inset 给：全站 border-box 下 FitAddon 量的是父元素的 border-box 高度，padding 会让最后一行被裁掉半截 */
   .tm-body { position: absolute; inset: 6px 2px 2px 8px; }
   .tm-body :global(.xterm) { height: 100%; }
   .tm-body :global(.xterm-viewport) { background: transparent !important; }
   .tm-touch { position: absolute; inset: 0; z-index: 2; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 
+  .tm-lockpill { position: absolute; top: 8px; right: 10px; z-index: 4; display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px;
+    border-radius: 14px; background: var(--card, var(--bg)); color: var(--text); font-size: 12.5px; white-space: nowrap;
+    box-shadow: 0 0 0 1px var(--divider), 0 4px 14px rgba(0, 0, 0, .14); animation: tmFade .16s ease; }
+  .tm-lockpill .dim { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .touch .tm-lockpill { height: 32px; padding: 0 13px; border-radius: 16px; font-size: 13px; }
   .tm-tobottom { position: absolute; right: 12px; bottom: 12px; z-index: 4; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
     background: var(--card, var(--bg)); color: var(--text); box-shadow: 0 0 0 1px var(--divider), 0 6px 18px rgba(0, 0, 0, .22); animation: tmFade .16s ease; }
   .tm-tobottom :global(svg) { width: 18px; height: 18px; }

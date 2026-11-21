@@ -59,7 +59,7 @@ export function ensureTerm(ref, cols, rows) {
   // 成员工作区（属主不是主机身份，或路径在用户根 / 快照桶下）的终端：按名字剔掉凭据与 bridge 内部变量（runtime/member-boundary.mjs）
   const pty = loadPty().spawn(file, args, { name: 'xterm-256color', cols: c, rows: r, cwd: ws, env: terminalEnv(ws, process.env, { owner: refOwner(ref) }) });
   // pending：正在接入的面板（attachTerm 切快照那一刻之后的输出先攒在这里，快照发完再补）
-  t = { ws, key, owner: ownerOfRef(ref), pty, mirror: createMirror(c, r, { windowsPty: PTY_COMPAT }), chunks: [], bytes: 0, subs: new Set(), taps: new Set(), pending: new Set(), lastUsed: Date.now(), cols: c, rows: r, exited: false, exitCode: null };
+  t = { ws, key, owner: ownerOfRef(ref), pty, mirror: createMirror(c, r, { windowsPty: PTY_COMPAT }), lock: null, chunks: [], bytes: 0, subs: new Set(), taps: new Set(), pending: new Set(), lastUsed: Date.now(), cols: c, rows: r, exited: false, exitCode: null };
   pty.onData((d) => {
     // 有产出也算活着——agent 起的长跑任务（编译/下载）没人订阅也不该被 reaper 半路收走。
     t.lastUsed = Date.now();
@@ -96,15 +96,61 @@ export function writeTerm(ws, data) {
   return true;
 }
 
-export function resizeTerm(ws, cols, rows) {
-  const t = terms.get(keyOf(ws));
-  if (!t || t.exited) return false;
+function applySize(t, cols, rows) {
   t.cols = clampC(cols);
   t.rows = clampR(rows);
   try { t.pty.resize(t.cols, t.rows); } catch { /* 竞态：刚退出 */ }
   t.mirror?.resize(t.cols, t.rows);
+}
+
+const broadcast = (t, ev) => { for (const res of t.subs) sseWrite(res, ev); };
+const sizeEvent = (t) => ({ type: 'size', cols: t.cols, rows: t.rows, lock: t.lock ? { cols: t.cols, rows: t.rows } : null });
+
+// 尺寸占用：PTY 的行列默认跟着面板走，手机侧栏只有四十来列——agent 驱动 TUI 时整屏被排成窄条，读出来全是碎行。
+// agent 可以把尺寸占住：面板发来的 resize 一律不理，面板改为按占用尺寸整体缩放显示。agent 一段时间不碰终端就自动作废，
+// 免得它忘了交还、用户的面板一直是缩小的。
+const LOCK_IDLE_MS = 15 * 60 * 1000;
+function lockLive(t) {
+  if (!t.lock) return false;
+  if (Date.now() - t.lock.at <= LOCK_IDLE_MS) return true;
+  t.lock = null;
+  broadcast(t, sizeEvent(t));
+  return false;
+}
+
+/** 面板改尺寸。尺寸被 agent 占着时不改，返回占用尺寸（面板据此改为缩放显示）。 */
+export function resizeTerm(ws, cols, rows) {
+  const t = terms.get(keyOf(ws));
+  if (!t || t.exited) return false;
+  if (lockLive(t)) return { lock: { cols: t.cols, rows: t.rows } };
+  applySize(t, cols, rows);
   return true;
 }
+
+/** agent 占住尺寸（同时改成这个尺寸）；看着的面板收到 size 事件后改为缩放显示。 */
+export function lockTermSize(ws, cols, rows) {
+  const t = terms.get(keyOf(ws));
+  if (!t || t.exited) return null;
+  applySize(t, cols, rows);
+  t.lock = { at: Date.now() };
+  broadcast(t, sizeEvent(t));
+  return t;
+}
+
+/** 交还尺寸：面板收到 size 事件后按自己的大小重新适配、再把尺寸发上来。 */
+export function unlockTermSize(ws) {
+  const t = terms.get(keyOf(ws));
+  if (!t || !t.lock) return false;
+  t.lock = null;
+  broadcast(t, sizeEvent(t));
+  return true;
+}
+
+/** agent 每次操作终端都续一下占用期。 */
+export function touchTermLock(t) { if (t?.lock) t.lock.at = Date.now(); }
+
+/** 当前占用（没有 / 已过期 = null）。hello 与状态读它。 */
+export function termLock(t) { return t && lockLive(t) ? { cols: t.cols, rows: t.rows } : null; }
 
 export function killTerm(ws) {
   const t = terms.get(keyOf(ws));
@@ -117,7 +163,7 @@ export function killTerm(ws) {
 function dropTerm(t, { end = false } = {}) {
   if (terms.get(t.key) === t) terms.delete(t.key);
   try { t.pty.kill(); } catch { /* already gone */ }
-  for (const res of t.subs) sseWrite(res, { type: 'exit', code: -1 });
+  broadcast(t, { type: 'exit', code: -1 });
   // 还在等快照切点的面板：镜像要收了，直接告诉它结束
   for (const p of t.pending) { p.done = true; sseWrite(p.res, { type: 'exit', code: -1 }); if (end) { try { p.res.end(); } catch { /* 已断 */ } } }
   t.pending.clear();

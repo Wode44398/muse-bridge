@@ -117,7 +117,7 @@ export function normalizeIndex(o) {
     seen.add(p.id);
     plugins.push({
       id: p.id, name: str(p.name, 60) || p.id, nameEn: str(p.nameEn, 60), description: str(p.description, 500), descriptionEn: str(p.descriptionEn, 500),
-      category: str(p.category, 30) || 'third-party', author: str(p.author, 60), homepage: https(p.homepage), builtin: p.builtin === true, versions,
+      category: str(p.category, 30) || 'third-party', author: str(p.author, 60), homepage: https(p.homepage), icon: https(p.icon), builtin: p.builtin === true, versions,
     });
   }
   return { format: 1, market: str(o.market, 40) || 'official', seq: o.seq, generatedAt: str(o.generatedAt, 40), plugins };
@@ -238,7 +238,7 @@ function viewEntry(kernel, e) {
   }
   return {
     id: e.id, name: e.name, nameEn: e.nameEn, description: e.description, descriptionEn: e.descriptionEn,
-    category: e.category, author: e.author, homepage: e.homepage, builtin: e.builtin,
+    category: e.category, author: e.author, homepage: e.homepage, icon: e.icon, builtin: e.builtin,
     state, current, update,
     latest: latest ? { version: latest.version, date: latest.date, notes: latest.notes, restart: latest.restart, size: latest.size } : null,
     blocked: latest ? '' : versionProblem(e, e.versions[0]),

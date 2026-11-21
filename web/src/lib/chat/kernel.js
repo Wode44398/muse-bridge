@@ -48,6 +48,7 @@ import { storeGet } from '../store.js';
 import { IS_CSNAP } from '../csnap.js';
 import { prefsFor, lastPrefs, absorbServerPrefs } from '../chatPrefs.js';
 import { promoteComposerDraft, syncComposerDraftKey } from '../composerDrafts.svelte.js';
+import { prefillComposer, composerHasDraft } from '../composerBridge.svelte.js';   // 插话最终没发出去：原文放回输入栏
 // 权限模式 / 逐次审批卡 / 计划审批卡（2026-10-20）：帧处理与状态都在 permissions.svelte.js，这里只转发
 import { permOnFinish, draftPermissionMode, draftShape, setDraftShape, resetPermDraft, steerWhileWaiting } from '../permissions.svelte.js';
 import { t as tt, tr } from '../i18n.js';   // 本文件的 t 是工具行/任务局部变量，翻译函数取别名 tt
@@ -63,7 +64,7 @@ import { sentAttachments, cacheChat, revokeMessageBlobUrls, toUiAttachments } fr
 import { tickHint } from './runHint.js';
 import { newAssistant, cur, hasContent, flushText, dropText } from './turn.js';
 import { pendingNew, notePendingNew, dropPendingNew } from './pending.svelte.js';
-import { queueState, mcpState, noteLimitResume, refreshQueue } from './queue.svelte.js';
+import { queueState, mcpState, noteLimitResume, refreshQueue, takeSteer, attsFromPaths } from './queue.svelte.js';
 import { toUiMessages, trimTurnTail, mergeMessages } from './history.js';
 import { STATUS_ONLY, applyStatusEvent, applyEvent } from './events.js';
 
@@ -919,14 +920,16 @@ export function releaseBgHold() {
   try { api.stop(liveId || undefined, { release: true }); } catch {}
 }
 
-export function stop() {
+// opts.resync = false：调用方紧接着就发下一条（插话「立即打断」），软停后不再重挂直播看挂起态——
+// 下一条到了服务端会等这一轮转入挂起再接力进同一个 CLI（agents/claude/controls.mjs handoff）。
+export function stop(opts = {}) {
   // 点名停「正看的这一轮」——并行的后台轮不受影响。新会话 id 还没回来时退回旧行为（停最新一轮）。
   const liveId = (live && live.sessionId) || session.id || null;
   // 还有后台任务在跑时服务端只打断这一轮作答（held:true，官方 Esc 同款）：进程还在、这一轮转入
   // 挂起等后台任务——重新挂上直播，挂起态（等待后台任务…/任务芯片）才看得见。
   try {
     Promise.resolve(api.stop(liveId || undefined))
-      .then((r) => { if (r && r.held) requestSync('soft-stop', 800); })
+      .then((r) => { if (r && r.held && opts.resync !== false) requestSync('soft-stop', 800); })
       .catch(() => {});
   } catch {}
   if (liveId) session.id = liveId;   // killLive 前保住刚拿到但尚未落 state 的新会话 id
@@ -1142,13 +1145,36 @@ function steerParams(t, atts, priority) {
   return params;
 }
 
-// 409 not_running = 服务端那一轮恰好刚收尾：等本地也收尾后按普通发送（最多等 6 秒）
+// 409 not_running = 服务端那一轮恰好刚收尾 / 刚转入挂起等后台任务：等本地也收尾（或收到 bg_hold）后按普通发送。
+// 以前等满 6 秒本地还显示在跑（直播落后：bg_hold / done 没到）就调 send()，而 send() 见 busy 直接 return——
+// 输入框早已清空，这条连同附件就静默消失了（11-18 维护者报：带图插话回车后不见了）。现在：
+// 到点再问一次服务端（插得进就当插话）；仍说没在跑 → 按挂起接力强发（服务端挂起中→接力进同一 CLI，已收尾→新一轮）；
+// 都不行就原样放回输入框并提示，绝不吞掉。
 function sendWhenIdle(t, atts) {
+  const sid = session.id;
   let tries = 0;
-  const tick = () => {
+  const giveBack = (msg) => {
+    if (session.id === sid) {
+      if (t && !composerHasDraft()) prefillComposer(t);   // 用户这几秒里又写了新草稿就不冲掉它
+      for (const a of atts) if (!compose.attachments.some((x) => x.path === a.path)) compose.attachments.push(a);
+    }
+    queueState.error = msg || tt('插话没发出去，请重试');
+    showToast(queueState.error);
+  };
+  const tick = async () => {
+    if (session.id !== sid) { giveBack(tt('会话已切换，这条插话没发出去')); return; }
     if (!session.busy || bgHoldNow()) { send(t, atts); return; }
-    if (++tries > 20) { send(t, atts); return; }
-    setTimeout(tick, 300);
+    if (++tries <= 20) { setTimeout(tick, 300); return; }
+    let r;
+    try { r = await postChatJSON(steerParams(t, atts, 'next')); } catch { r = { status: 0 }; }
+    if (session.id !== sid) { if (!(r.status === 200 && r.body?.steered)) giveBack(tt('会话已切换，这条插话没发出去')); return; }
+    if (r.status === 200 && r.body?.steered) { steerWhileWaiting(sid); return; }
+    if (r.status === 409 && r.body?.code === 'not_running') {
+      if (!session.busy || bgHoldNow()) send(t, atts);
+      else reallySend(t, atts, true);
+      return;
+    }
+    giveBack(r.body?.error);
   };
   tick();
 }
@@ -1167,6 +1193,33 @@ export async function steer(text, attachments) {
   if (attachments === undefined) compose.attachments = atts;   // 没发出去：附件放回输入框
   queueState.error = r.body?.error || tt('插话没发出去，请重试');
   return false;
+}
+
+// 插话「立即打断」：Claude 还没读到的这条（虚线气泡）不再等它做完手头这一步——
+// ① 先从这一轮里抽回（与撤回同一条 unsteer：还在 bridge 队列就摘掉、已在 CLI 队列就 cancel；
+//    必须先抽回再停，否则停止时它还挂在 CLI 队列里，可能被写进 transcript 又被新一轮重发一遍）；
+// ② 停掉这一轮（与停止键同语义：有后台任务只打断作答、后台任务照跑）；
+// ③ 原文与附件当场作为新一条发出（后台任务在跑时服务端等这一轮转入挂起后接力进同一个 CLI）。
+// 不经过输入栏，所以输入框里的草稿不受影响。Claude 抢先读到了就什么都不停，只提示。
+export async function forceSteer(uuid) {
+  const sid = session.id;
+  if (!sid || !uuid || IS_CSNAP) return false;
+  const r = await takeSteer(uuid, 'force');
+  if (!r) return false;
+  const t = (r.message || '').trim();
+  const atts = attsFromPaths(r.attachments, r.files);
+  if (session.id !== sid) {
+    // 抽回期间切走了会话：这条已经不在原会话那一轮里，原样放回输入栏，不往别的会话里发
+    if (t && !composerHasDraft()) prefillComposer(t);
+    for (const a of atts) if (!compose.attachments.some((x) => x.path === a.path)) compose.attachments.push(a);
+    queueState.error = tt('会话已切换，这条插话没发出去');
+    return false;
+  }
+  if (!t && !atts.length) return false;
+  // 这一轮恰好刚收尾 / 已在挂起等后台任务：不用停，直接发（挂起中服务端接力进同一个 CLI）
+  if (session.busy && !bgHoldNow()) stop({ resync: false });
+  send(t, atts);
+  return true;
 }
 
 // 稍后发送：排进服务端队列，这一轮结束后合并成一条自动发出。

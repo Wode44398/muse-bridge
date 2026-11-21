@@ -46,6 +46,12 @@ export function codexArtifactUrl(id, filePath, { dl = false, name = '' } = {}) {
     + (name ? '&name=' + encodeURIComponent(name) : '')
     + (dl ? '&dl=1' : '') + tokenSuffix('&'));
 }
+export function agyArtifactUrl(id, filePath, { dl = false, name = '' } = {}) {
+  return apiUrl('/api/agy/artifact?path=' + encodeURIComponent(filePath)
+    + (id ? '&id=' + encodeURIComponent(id) : '')
+    + (name ? '&name=' + encodeURIComponent(name) : '')
+    + (dl ? '&dl=1' : '') + tokenSuffix('&'));
+}
 export function claudeArtifactUrl(id, filePath, { dl = false, name = '' } = {}) {
   return apiUrl('/api/claude/artifact?path=' + encodeURIComponent(filePath)
     + (id ? '&id=' + encodeURIComponent(id) : '')
@@ -102,6 +108,7 @@ function htmlSiteUrl(raw) {
   }
   if (raw.origin === 'claude') return claudeArtifactUrl(raw.id, raw.path) + '&site=1';
   if (raw.origin === 'codex') return codexArtifactUrl(raw.id, raw.path) + '&site=1';
+  if (raw.origin === 'agy') return agyArtifactUrl(raw.id, raw.path) + '&site=1';
   return null;
 }
 
@@ -224,6 +231,11 @@ function normalize(raw) {
     out.previewUrl = out.url;
     out.downloadHref = codexArtifactUrl(raw.id, raw.path, { dl: true, name });
     out.absPath = raw.path || '';   // 桌面壳原生另存为：本机绝对路径直拷（bridge 三形态都跑在本机）
+  } else if (raw.origin === 'agy') {
+    out.url = agyArtifactUrl(raw.id, raw.path, { name });
+    out.previewUrl = out.url;
+    out.downloadHref = agyArtifactUrl(raw.id, raw.path, { dl: true, name });
+    out.absPath = raw.path || '';
   } else if (raw.origin === 'claude') {
     out.url = claudeArtifactUrl(raw.id, raw.path, { name });
     out.previewUrl = out.url;

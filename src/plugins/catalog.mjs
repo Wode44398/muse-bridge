@@ -257,7 +257,14 @@ export const BUILTIN_PLUGINS = [
     description: 'Claude 页右侧的「浏览器」面板与 Claude 的 browser 工具：按工作空间隔离的无头浏览器，你能看着它操作。',
     load: async () => {
       const { registerClaudeDockRoutes } = await import('../routes/claude-dock.mjs');
-      return { apply(ctx) { registerClaudeDockRoutes(pathFilter(ctx.router, (p) => p.startsWith(DOCK_PLUGIN_PATH.browser)), { identify: auth(ctx).identifySnap }); } };
+      const { registerAgentBrowserRoutes } = await import('../routes/agent-runtime.mjs');
+      return {
+        apply(ctx) {
+          registerClaudeDockRoutes(pathFilter(ctx.router, (p) => p.startsWith(DOCK_PLUGIN_PATH.browser)), { identify: auth(ctx).identifySnap });
+          // dimensio 的 Browser / ReadPage / Eval / Network 也落在同一个实例池上（同机实例凭据）
+          registerAgentBrowserRoutes(ctx.router);
+        },
+      };
     },
   },
   {
@@ -265,7 +272,14 @@ export const BUILTIN_PLUGINS = [
     description: 'Claude 页右侧的「终端」面板与 Claude 的 terminal 工具：你和 Claude 共用同一个 shell。',
     load: async () => {
       const { registerClaudeDockRoutes } = await import('../routes/claude-dock.mjs');
-      return { apply(ctx) { registerClaudeDockRoutes(pathFilter(ctx.router, (p) => p.startsWith(DOCK_PLUGIN_PATH.terminal)), { identify: auth(ctx).identifySnap }); } };
+      const { registerAgentTermRoutes } = await import('../routes/agent-runtime.mjs');
+      return {
+        apply(ctx) {
+          registerClaudeDockRoutes(pathFilter(ctx.router, (p) => p.startsWith(DOCK_PLUGIN_PATH.terminal)), { identify: auth(ctx).identifySnap });
+          // dimensio 的 Terminal 工具也落在同一个 PTY 上（同机实例凭据）
+          registerAgentTermRoutes(ctx.router);
+        },
+      };
     },
   },
   {

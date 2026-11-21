@@ -1,14 +1,16 @@
 // 工具结果里的图片（读图 / 截图 / 浏览器截屏）→ 状态行缩略图条的数据（官方 4.4212 TurnStatus 的 bQ/xQ）。
 // 工具条目只带张数（t.images，来自 tool_done / 历史解析），图本身按 /api/tool-image 取：
 // 缩略图走 v=thumb（服务端 sharp 出 480px webp），灯箱走原图。
-import { apiUrl } from './server.js';
+// 地址走 mediaUrl 而不是 apiUrl：<img> 经局域网直连可能整批加载不出来（甚至一直挂着不报错），
+// 只有这台设备实测过「媒体能走 LAN」才走 LAN，否则走隧道 / 同源（同 Media Studio、聊天附件）。
+import { mediaUrl } from './server.js';
 import { getToken } from './api.js';
 import { toolVerb } from './toolVerbs.js';
 
 const tok = () => { const t = getToken && getToken(); return t ? '&token=' + encodeURIComponent(t) : ''; };
 
 export function toolImageUrl(sid, toolId, n, thumb) {
-  return apiUrl('/api/tool-image?sid=' + encodeURIComponent(sid || '') + '&t=' + encodeURIComponent(toolId) + '&n=' + n + (thumb ? '&v=thumb' : '') + tok());
+  return mediaUrl('/api/tool-image?sid=' + encodeURIComponent(sid || '') + '&t=' + encodeURIComponent(toolId) + '&n=' + n + (thumb ? '&v=thumb' : '') + tok());
 }
 
 // 一组工具 → 平铺的图片列表（按工具顺序、每个工具内按序号）。caption = 那一步的标题（官方悬停卡同款）。

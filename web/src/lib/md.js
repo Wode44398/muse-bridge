@@ -293,7 +293,7 @@ function renderUncached(src) {
 // 未知协议整个剥掉 href——模型交付产物最常写的就是绝对路径，于是正文链接成了点不动的死字
 //（09-28 查实：以前能点开的只有尖括号那种，靠的是 href 以 %3C 开头躲过了协议判定）。单字母不是任何
 // 可执行协议（javascript:/data:/vbscript: 都是多字母），点击本就由 onMdClick 拦进应用内预览。
-const URI_OK = /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix):|[a-z]:(?:[\\/]|%5c)|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
+const URI_OK = /^(?:(?:(?:f|ht)tps?|file|mailto|tel|callto|sms|cid|xmpp|matrix):|[a-z]:(?:[\\/]|%5c)|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
 
 // 净化后的树只走一趟 DOM，表格滚动壳与代码块复制按钮一起套。
 function decorate(clean) {

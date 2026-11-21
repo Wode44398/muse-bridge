@@ -28,7 +28,7 @@ import path from 'node:path';
 import { kernel } from './state.mjs';
 import { DATA_ROOT, PROGRAM_ROOT } from '../runtime/paths.mjs';
 import { requireCtx, contextFor } from '../runtime/identity.mjs';
-import { ticketOf, resolveTicket } from './tickets.mjs';
+import { ticketOf, claimsTicket, resolveTicket, revokeTicket, watchKernelTickets } from './tickets.mjs';
 import { can, HOST_OWNER } from '../runtime/principal.mjs';
 import { readBody } from '../runtime/body.mjs';
 import { busPublish, busPublishAll } from '../runtime/bus.mjs';
@@ -43,10 +43,10 @@ import { makeScheduleService } from './schedule.mjs';
 import { PLUGIN_API_VERSION, PLUGIN_FEATURES } from './engines.mjs';
 import { notePush } from '../runtime/push-notices.mjs';
 import { randomUUID } from 'node:crypto';
-import { setInternalRouter } from '../agent-api/internal.mjs';
+import { setInternalRouter, identityOfCtx } from '../agent-api/internal.mjs';
 import { startMarketWatcher, setUpdatesPublisher } from './market.mjs';
 import { provideModelService, addModelMiddleware, MODEL_AGENTS } from '../runtime/model-services.mjs';
-import { checkTool, checkHook, checkWho } from './claude-tools.mjs';
+import { checkTool, checkHook, checkWho, TOOL_AGENTS } from './claude-tools.mjs';
 import { subscribe, EVENT_NAMES, emitBridgeEvent } from './events.mjs';
 import { makeNet } from './net.mjs';
 import { makeOAuth } from './oauth.mjs';
@@ -104,12 +104,17 @@ function installMixins() {
     // 插件页面的票据（plugins/tickets.mjs）：只在本插件自己的 /api/plugin/<id>/ 下认，插件停用就失效
     const byTicket = (req, res) => {
       const tok = ticketOf(req);
-      if (!tok) return undefined;
+      // 格式不对的票头也按「带了票」处理（401），不退回 cookie / NO_AUTH 身份
+      if (!tok && !claimsTicket(req)) return undefined;
       let p = '';
       try { p = new URL(req.url, 'http://x').pathname; } catch {}
       const id = p.startsWith('/api/plugin/' + ctx.id + '/') && kernel.isActive(ctx.id) ? resolveTicket(tok, ctx.id) : null;
       if (!id) { sendText(res, 401, 'plugin ticket expired'); return null; }
-      return contextFor(id);
+      // 票上记的是签票那一刻的身份：账号之后被停用 / 删除，这张票不能还当那个人用。
+      // 每次都对着账号库重新认一遍（同 /api/plugins/_bridge），认不出就当场作废票——账号恢复了也别让旧票复活。
+      const fresh = identityOfCtx(contextFor(id));
+      if (!fresh) { revokeTicket(tok); sendText(res, 401, 'plugin ticket expired'); return null; }
+      return contextFor(fresh);
     };
     return {
       json: sendJson,
@@ -142,12 +147,13 @@ function installMixins() {
   kernel.mixin('api', () => PLUGIN_API_VERSION);
   kernel.mixin('has', () => (name) => PLUGIN_FEATURES.includes(String(name)));
 
-  // 工具 / 提示的 agents：缺省只给 Claude（老写法不变）；ctx.tools.add 缺省两个都给。dimensio 经 /agent/mcp/plugins 拿到（plugins/agent-mcp.mjs）
+  // 工具 / 提示的 agents：缺省只给 Claude（老写法不变）；ctx.tools.add 缺省全给。dimensio 经 /agent/mcp/plugins 拿到（plugins/agent-mcp.mjs），
+  // Antigravity 经 bridge 工具服务里的插件组拿到（modules/agy 的工具中枢）
   const agentsOf = (v, dflt) => {
     if (v == null) return dflt;
     const list = Array.isArray(v) ? v : [v];
-    const bad = list.filter((a) => !MODEL_AGENTS.includes(a));
-    if (bad.length) throw new Error(`agents 里的「${bad.join('、')}」不认识（可用：${MODEL_AGENTS.join(' / ')}）`);
+    const bad = list.filter((a) => !TOOL_AGENTS.includes(a));
+    if (bad.length) throw new Error(`agents 里的「${bad.join('、')}」不认识（可用：${TOOL_AGENTS.join(' / ')}）`);
     return list;
   };
   const addTool = (ctx, spec, dflt) => {
@@ -160,7 +166,7 @@ function installMixins() {
     //   params 写法同 agent 接口操作：{ 参数名: { type, required?, desc?, enum?, min?, max?, default? } }
     //   access 'read'（只读：免审批）| 'write'（缺省：按会话的权限模式审批）| 'danger'
     //   who    'host'（缺省：只给服务器主机本人的会话）| 'members'（成员的会话也给）| 'all'（再加插件沙箱）
-    //   agents ['claude']（缺省）| ['claude', 'dimensio']（dimensio 也给）
+    //   agents ['claude']（缺省）| ['claude', 'dimensio', 'agy'] 的任意组合（dimensio / Antigravity 也给）
     tool: (spec) => addTool(ctx, spec, ['claude']),
     // 加一段系统提示（字符串或 (turn) => 字符串；返回空串就不加）。opts.agents 同上（dimensio 那边是插件工具服务的说明）
     prompt: (text, opts = {}) => { checkWho(opts.who); return ctx.contribute(CLAUDE_SLOT, { kind: 'prompt', text, who: opts.who || 'host', agents: agentsOf(opts.agents, ['claude']), order: opts.order ?? 0 }); },
@@ -176,8 +182,8 @@ function installMixins() {
     // 每轮参数：fn(turn) 回 { model?, effort?, env?, settings?, agents?, additionalDirectories?, append? }
     options: (fn, opts = {}) => { if (typeof fn !== 'function') throw new Error('ctx.claude.options 要一个函数'); checkWho(opts.who); return ctx.contribute(CLAUDE_SLOT, { kind: 'options', fn, who: opts.who || 'host', timeout: opts.timeout }); },
   }));
-  // 两个 agent 都给的工具（写法同 ctx.claude.tool，agents 缺省 ['claude', 'dimensio']）
-  kernel.mixin('tools', (ctx) => ({ add: (spec) => addTool(ctx, spec, [...MODEL_AGENTS]) }));
+  // 各 agent 都给的工具（写法同 ctx.claude.tool，agents 缺省 ['claude', 'dimensio', 'agy']）
+  kernel.mixin('tools', (ctx) => ({ add: (spec) => addTool(ctx, spec, [...TOOL_AGENTS]) }));
 
   // 订阅 bridge 事件（plugins/events.mjs）
   kernel.mixin('events', (ctx) => ({ on: (name, fn) => subscribe(ctx, name, fn), names: () => [...EVENT_NAMES] }));
@@ -288,6 +294,7 @@ export async function bootPlugins({ register }) {
   // 插件工具给 dimensio 的 MCP 端点（plugins/agent-mcp.mjs）：核心路由，插件开关不影响它在不在
   if (kernel.hasService('router')) registerAgentMcpRoute(kernel.service('router'));
   await register(kernel);
+  watchKernelTickets(kernel);   // 插件停用 / 卸载就作废它的页面票（registerPluginRoutes 也会挂，WeakSet 去重）
   const list = await kernel.start();
   // 插件订阅的 plugin.state（plugins/events.mjs）：每次对账后比一遍谁开了谁关了
   watchUi();   // 界面扩展的登记变了就推 plugins.ui 给在线页面

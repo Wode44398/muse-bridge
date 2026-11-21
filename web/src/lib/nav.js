@@ -13,6 +13,7 @@
 // 层级模型（从顶到底）：
 //   转场播放中（入场/主题）→ 吞掉返回，动画不被打断
 //   瞬态层栈 pushBackLayer（灯箱/弹出菜单等「开着才挂载」的组件，后开先关）
+//   原生返回（手机 App 插件页面替人跳过来的那一下 → 切回压在后面的插件页，见 lib/screenReturn.js）
 //   沉浸查看器 preview > 助手浮层 > 任务详情抽屉(TaskSheet) > 设置 > 登录 > 定时 > claude 抽屉
 //   dimensio 分页自带的层级（sheet / 抽屉 / 灯箱 / 预览，window.__harnessBack；它当根页时也要先关这些）
 //   非主页 screen（files/antigravity/studio/claude 各自分派带动画的 closer）
@@ -23,7 +24,17 @@
 // 注册其带动画的关闭函数；其余层直接置 false（关闭动画走各自 CSS/transition）。
 import { ui, rootScreen } from './state.svelte.js';
 import { preview, closePreview } from './preview.svelte.js';
-import { closePage } from './pageMorph.js';
+import { closePage, switchPage } from './pageMorph.js';
+import { takeScreenReturn, takeNativeReturn } from './screenReturn.svelte.js';
+
+// 原生返回判「那一层开着没」用（名字同 screenReturn.js 的 NATIVE_LAYERS，先后同下面 closeTopLayer）
+const LAYER_OPEN = {
+  preview: () => preview.open,
+  settings: () => ui.settingsOpen,
+  login: () => ui.loginOpen,
+  routines: () => ui.routinesOpen,
+  drawer: () => ui.drawerOpen,
+};
 
 const closers = {};
 // 组件注册带动画的关闭函数；返回反注册器（配合 $effect 的 cleanup 使用）。
@@ -48,6 +59,17 @@ function closeTopLayer() {
   // 瞬态层（灯箱/弹出菜单）：最新打开的视为最顶，先关它。
   const top = layerStack[layerStack.length - 1];
   if (top) { try { top(); } catch {} return true; }
+  // 手机 App 里插件页面经宿主中转替人跳过来的这一下（bridge.nav / composer，lib/pluginHostRelay.js 落地后记的）：
+  // 插件页面还压在后面活着，返回就切回它（同 screenReturn 的规则：只认一次、到了以后去了别处即作废）。
+  // 目标是层（文件预览 / 设置里的插件详情）就连层一起收掉——直接置 false 不走设置的 closer：那个是逐级后退，
+  // 会退回扩展列表而不是收起设置；切回插件页本来就盖住了主界面，收场动画看不见。人后来另开的层照常先关（记录留着）。
+  const nat = takeNativeReturn((name) => !!LAYER_OPEN[name]?.());
+  if (nat) {
+    if (nat.layer === 'preview') closePreview();
+    else if (nat.layer === 'settings') ui.settingsOpen = false;
+    try { window.AndroidStore?.resumePluginPage?.(); } catch {}
+    return true;
+  }
   // 沉浸式文件查看器盖在一切之上——系统返回最先关它。
   if (preview.open) { closePreview(); return true; }
   // 任务详情（Agent 子转录 / Workflow 阶段面板）住在右侧工作台里，工作台自己注册返回层（ClaudeDock）。
@@ -61,6 +83,14 @@ function closeTopLayer() {
   if (hxPage) {
     try { if (window.__harnessBack && window.__harnessBack()) return true; } catch {}
   }
+  if (ui.screen === 'agy') {
+    try { if (closers.agyLayer && closers.agyLayer()) return true; } catch {}
+  }
+  // 插件页面替人跳过来的这一页（bridge.nav 去会话 / 别的应用、composer 交给 Claude；lib/screenReturn.js）：
+  // 回到发起的那一页（应用还保活着，状态都在），而不是收回入口回主页——人是从那一页过来的，没经过主页。
+  // 放在各分页自己的层之后（先关这一页里开着的东西）、根页判断之前：单 agent 模式下从应用跳到根页（Claude 页）同样该回应用。只认一次，之后照常。
+  const back = takeScreenReturn();
+  if (back) { switchPage(back); return true; }
   // 单 agent 模式：根页就是「主页」——到这儿无层可关，交给原生退后台
   if (ui.screen !== rootScreen()) {
     // 按当前分页分派各自的返回逻辑（此前 files/antigravity 也被派去 claudeSlide——

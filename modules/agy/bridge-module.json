@@ -1,0 +1,6 @@
+{
+  "id": "agy",
+  "label": "Antigravity",
+  "version": "dev",
+  "entry": "server/index.mjs"
+}

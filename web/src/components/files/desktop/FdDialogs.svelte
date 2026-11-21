@@ -126,6 +126,13 @@
               <svg class="ai-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
             </button>
           {/if}
+          {#if P.ai.caps.agy}
+            <button class="ai-opt" onclick={() => P.ai.pick('agy')}>
+              <span class="ai-ic" style="background:#101829"><img src="{P.BASE}assets/icons/antigravity.svg" alt="" /></span>
+              <span class="ai-lb">Antigravity<small>{t('当附件向 Antigravity 提问')}</small></span>
+              <svg class="ai-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
+            </button>
+          {/if}
           {#if P.ai.caps.studio}
             <button class="ai-opt" onclick={() => (P.ai.view = 'studio')}>
               <span class="ai-ic"><img src="{P.BASE}assets/icons/studio.svg" alt="" /></span>
@@ -177,7 +184,7 @@
           <div class="ai-list">
             {#each P.ai.filtered as s (s.id)}
               <button class="ai-row" onclick={() => P.ai.pickChat(s.id)}>
-                {#if P.ai.chat.target === 'claude'}<span class="ai-dot" class:work={s.thinking} class:ask={!s.thinking && s.pending}></span>{/if}
+                {#if P.ai.chat.target === 'claude' || P.ai.chat.target === 'agy'}<span class="ai-dot" class:work={s.thinking} class:ask={!s.thinking && s.pending}></span>{/if}
                 <span class="ai-title">{P.ai.chatTitle(s)}</span>
                 {#if s.id === P.ai.cur}<span class="ai-cur">{t('当前')}</span>{/if}
                 {#if s.mtime}<span class="ai-time">{relTime(s.mtime)}</span>{/if}

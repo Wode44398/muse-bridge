@@ -21,7 +21,8 @@ export const clip = (s, n) => {
 export function toolShown(name) {
   if (typeof name !== 'string' || !name) return false;
   // ExitPlanMode（2026-10-20）→ 计划审批卡（plan 段，runtime/permissions.mjs + 历史重建 sessions.mjs），不再露成「Proposed plan」工具行
-  return name !== 'AskUserQuestion' && name !== 'ExitPlanMode' && !name.startsWith('mcp__antigravity__') && !name.startsWith('mcp__media__') && !name.startsWith('mcp__visualize__');
+  // 媒体只藏 generate_*（有媒体卡）；list_media_models（2026-11-18）是普通查询，照常露成工具行
+  return name !== 'AskUserQuestion' && name !== 'ExitPlanMode' && !name.startsWith('mcp__antigravity__') && !name.startsWith('mcp__media__generate_') && !name.startsWith('mcp__visualize__');
 }
 
 // 官方 /code 页工具分组的 standalone 桶（桌面端 c06cf64bb `xr` 集合，HD 分桶时命中即单独成组）：

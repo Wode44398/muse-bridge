@@ -32,10 +32,12 @@ import {
   type PageState,
 } from "../browser-verify.ts";
 import { latestService } from "../services.ts";
-import { describeImage, visionConfigured, visionModel } from "../vision.ts";
 import { controlPlanePortBlock, controlPlaneUrlBlock } from "../control-plane.ts";
 import { fileUrlBlock } from "../sandbox.ts";
-import { imageDimensions, screenshotEvent } from "../image-assets.ts";
+import { imageDimensions } from "../image-assets.ts";
+import { sharedBrowser } from "../bridge-runtime.ts";
+import { shotResult } from "./browser/shot-report.ts";
+import { sharedBrowserStep } from "./browser/shared.ts";
 import { tenantMode } from "../tenant.ts";
 import { browserAvailable } from "../headless.ts";
 import { redactOutput } from "../redact.ts";
@@ -52,11 +54,14 @@ import { WEB_CONTENT_NOTE } from "./untrusted.ts";
 // 见 browser-verify.ts）、expect / wait_for / batch / screenshot_after、截图坐标帧换算、find / set_value / page_text /
 // upload / reload、长按 / 拖拽 / 双指、修饰键点击、横向与按元素滚动、原生对话框自动应答、页面新开的标签自动跟过去、
 // 面板有没有人在看。
+//
+// 嵌在 bridge 里跑时（bridge-runtime.ts 的 sharedBrowser）每一步转给 bridge 的共享浏览器（browser/shared.ts），与 bridge 工作台的
+// 浏览器面板同一个实例；控制面 / file:// 拦截、"/path" 解析、upload 的沙箱路径解析仍在本地先做，batch 仍在本地逐步跑。
 
 // Resolve a navigate target: full http(s) URL, or a "/path" against THIS
 // session's most recently started Preview service (an unscoped pick would send
 // one session's Browser at another session's dev server).
-function resolveUrl(raw: string, owner: string): string {
+export function resolveUrl(raw: string, owner: string): string {
   if (/^(https?|file):\/\//i.test(raw)) return raw;
   if (raw.startsWith("/")) {
     const s = latestService(owner);
@@ -198,67 +203,9 @@ async function captureAndReport(page: CdpSession, question: string, ctx: ToolCon
   } catch (e) {
     return fail("browser screenshot", `Could not capture the page: ${(e as Error).message}`);
   }
-  const png = captured.png;
-  const url = page.url;
   const framing = describeShot(captured, opts, page);
   const scope = framing.what === "viewport" ? "" : ` (${framing.what})`;
-  // R12（二）：给界面的截图存成会话资产、事件只带 id（不再把 base64 塞进事件流）
-  const shot = (verdict?: string) => screenshotEvent(ctx.ownerId, png, "image/png", url, verdict);
-
-  if (ctx.agentSeesImages) {
-    const q = question ? `You wanted to verify: "${question}". ` : "";
-    return {
-      ok: true,
-      summary: `screenshot ${url}${scope}`,
-      content: [
-        {
-          t: "text",
-          text: `Captured ${url}${framing.text} ${q}The screenshot is attached below — look at it and judge for yourself. The user sees the same image.`,
-        },
-      ],
-      feedback: [{ t: "image", mime: "image/png", data: png.toString("base64") }],
-      events: [shot()],
-    };
-  }
-
-  if (!question || !visionConfigured()) {
-    const note = !question
-      ? `Captured ${url}${framing.text} No question was asked, so no visual verdict. The user can see the image. For a text verdict, pass question:"…".`
-      : `Captured ${url}${framing.text} But no vision model is configured (set VISION_API_KEY), so I cannot give a visual verdict. The user can see the image.`;
-    return {
-      ok: true,
-      summary: `screenshot${scope}${question ? " (no vision model)" : ""}`,
-      content: [{ t: "text", text: note }],
-      events: [shot()],
-    };
-  }
-
-  try {
-    const verdict = await describeImage(png, question);
-    return {
-      ok: true,
-      summary: `screenshot verdict (${verdict.model})`,
-      content: [
-        {
-          t: "text",
-          text: `Visual check of ${url} via ${verdict.model}${framing.text}\n\nQ: ${question}\n\nA: ${verdict.text}\n\n(A multimodal model's reading of the screenshot — the user sees the same image.)`,
-        },
-      ],
-      events: [shot(verdict.text)],
-    };
-  } catch (e) {
-    return {
-      ok: false,
-      summary: "screenshot (vision failed)",
-      content: [
-        {
-          t: "text",
-          text: `Captured ${url}${framing.text} But the vision model (${visionModel()}) failed: ${(e as Error).message}\nThe screenshot is shown to the user, but I could not get an automated visual verdict.`,
-        },
-      ],
-      events: [shot()],
-    };
-  }
+  return shotResult(captured.png, page.url, framing.text, scope, question, ctx);
 }
 
 // "ctrl+shift" → CDP 修饰位（Alt 1 / Ctrl 2 / Meta 4 / Shift 8）；空 = 0，认不出 = null。
@@ -521,6 +468,8 @@ function keepLastShots(events: AgentEvent[]): AgentEvent[] | undefined {
 
 // 单步：动作本身 → 通用收尾（expect → screenshot_after → 标签角标 → 对话框回报）
 async function runStep(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolRunResult> {
+  // 共享浏览器：收尾（expect、screenshot_after、标签角标、对话框回报）由 bridge 那边的动作层做
+  if (sharedBrowser()) return sharedBrowserStep(args, ctx);
   const action = String(args.action ?? "").trim();
   let result: ToolRunResult;
   let changedNow: boolean | null = null;

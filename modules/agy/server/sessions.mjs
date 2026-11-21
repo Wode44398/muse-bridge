@@ -1,0 +1,716 @@
+// Antigravity 会话列表、过滤排序、历史恢复、隐藏与收藏。
+// agy acp 没有物理删除会话接口：「隐藏」在本地侧车表标 hidden；「彻底删除」（session-purge.mjs）删掉 agy 的文件后
+// 在侧车表留一条 deleted 墓碑——agy 进程没退出前 session/list 可能还列着它，所有列表 / 详情 / 搜索都靠墓碑挡掉。
+// session/list 返回全量会话且 cwd 混有 URL 编码与守护进程默认目录，在此统一解码、去伪、按项目过滤并按时间降序排列。
+
+import path from 'node:path';
+import { readJson, writeJson } from '@bridge/core/jsonfile.mjs';
+import { normalizeAgyPath, foldAgyPath } from './paths.mjs';
+import { reconstructHistoryMessages, extractConfigSummary } from './events.mjs';
+import { loadAgySettings } from './settings.mjs';
+import { findProjectByPath, getProject, authorizeProjectPath } from './projects.mjs';
+import { acpPrimary, acpFor } from './acp/index.mjs';
+import { buildAgySessionTooling } from './mcp/config.mjs';
+import { readToolOutputs, applyToolOutputs } from './tool-outputs.mjs';
+import { collectDeliverableAttachments } from './deliverables.mjs';
+import { sessionBrainDir } from './background.mjs';
+import { hasProtectedSubagents } from './subagents.mjs';
+import {
+  armSubagentMonitor,
+  getPassiveBackgroundGen,
+  markSessionTranscriptSynced,
+  noteSessionOwner,
+} from './subagent-monitor.mjs';
+import { extractRecentSessionDirs } from './recent-dirs.mjs';
+
+export { extractRecentSessionDirs };
+
+const LIST_CACHE_TTL_MS = 5_000;
+// 每个 agy 进程各一份列表缓存：主机一个进程、每个成员各一个，会话库互不相通。
+// 共用一份的话，两个人前后脚取列表时，后一个会拿到前一个的会话（标题、目录、id）。
+let listGen = 0;
+const listCaches = new WeakMap();   // AcpClient -> { gen, at, raw, inflight }
+function listCacheOf(client) {
+  let c = listCaches.get(client);
+  if (!c) { c = { gen: -1, at: 0, raw: null, inflight: null }; listCaches.set(client, c); }
+  if (c.gen !== listGen) { c.gen = listGen; c.at = 0; c.raw = null; c.inflight = null; }
+  return c;
+}
+
+function metaFile(agyDir) {
+  return path.join(agyDir, 'sessions-meta.json');
+}
+
+function readMetaStore(agyDir) {
+  if (!agyDir) return { sessions: {} };
+  const data = readJson(metaFile(agyDir), { sessions: {} });
+  return {
+    sessions: data && typeof data.sessions === 'object' && !Array.isArray(data.sessions)
+      ? data.sessions
+      : {},
+  };
+}
+
+function writeMetaStore(agyDir, store) {
+  if (!agyDir) return;
+  writeJson(metaFile(agyDir), store, 2);
+}
+
+// 用代数作废在途的 session/list 请求，避免失效前发出的慢请求回包后把陈旧快照写回缓存
+export function invalidateSessionsCache() {
+  listGen++;
+}
+
+// 回复正文里的交付物链接 → 这条消息的成品附件卡
+function attachDeliverables(messages, { workDir = '', additionalDirectories = [], uploads, artifactDir = '' } = {}) {
+  for (const m of (Array.isArray(messages) ? messages : [])) {
+    if (m?.role !== 'assistant' || !m.text) continue;
+    const atts = collectDeliverableAttachments(m.text, { workDir, additionalDirectories, uploads, artifactDir });
+    if (atts.length) m.attachments = atts;
+  }
+}
+
+export function getSessionMeta(agyDir, sessionId) {
+  if (!agyDir || !sessionId) return null;
+  const store = readMetaStore(agyDir);
+  return store.sessions[String(sessionId)] || null;
+}
+
+export function isSessionDeleted(agyDir, sessionId) {
+  return !!getSessionMeta(agyDir, sessionId)?.deleted;
+}
+
+// 彻底删除后只留墓碑：别的字段（标题、cwd、审批记录……）一并丢掉，不可恢复
+export function markSessionDeleted(agyDir, sessionId) {
+  if (!agyDir || !sessionId) return false;
+  const store = readMetaStore(agyDir);
+  store.sessions[String(sessionId)] = { deleted: true, deletedAt: new Date().toISOString() };
+  writeMetaStore(agyDir, store);
+  invalidateSessionsCache();
+  return true;
+}
+
+// 收藏不动 updatedAt：收藏一下不该把会话顶到列表最前面
+export function setSessionFavorite(agyDir, sessionId, favorite) {
+  if (!agyDir || !sessionId) return null;
+  const id = String(sessionId);
+  const store = readMetaStore(agyDir);
+  const prev = store.sessions[id] || {};
+  if (prev.deleted) return null;
+  const next = { ...prev };
+  if (favorite) next.favorite = true;
+  else delete next.favorite;
+  store.sessions[id] = next;
+  writeMetaStore(agyDir, store);
+  invalidateSessionsCache();
+  return next;
+}
+
+function mergeExtraDirs(prevDirs = [], nextDirs) {
+  if (!Array.isArray(nextDirs)) return Array.isArray(prevDirs) ? prevDirs : [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of [...(Array.isArray(prevDirs) ? prevDirs : []), ...nextDirs]) {
+    const norm = normalizeAgyPath(raw);
+    if (!norm) continue;
+    const key = foldAgyPath(norm);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(norm);
+  }
+  return out;
+}
+
+// 判断路径是否为桥接层为常驻守护进程创建的占位目录（含跨实例/临时目录残留），避免把 daemon-cwd 误当真实项目
+export function isDaemonPseudoCwd(rawPath, daemonCwd = '', platform = process.platform) {
+  const norm = rawPath ? normalizeAgyPath(rawPath, platform) : '';
+  if (!norm) return false;
+  if (daemonCwd && foldAgyPath(norm, platform) === foldAgyPath(daemonCwd, platform)) return true;
+  // 测试实例的数据根不一定叫 agy（如 agy-fix1-verify-xxx\daemon-cwd），按目录名 daemon-cwd 一律认作占位目录
+  return /(?:^|[\\/])daemon-cwd(?:[\\/]|$)/i.test(norm);
+}
+
+export function noteSessionMeta(agyDir, sessionId, patch = {}) {
+  if (!agyDir || !sessionId) return null;
+  const id = String(sessionId);
+  const store = readMetaStore(agyDir);
+  const prev = store.sessions[id] || {};
+  // 删掉的会话不许被迟到的标题 / 收尾记录写活
+  if (prev.deleted) return null;
+  const mergedDirs = mergeExtraDirs(prev.additionalDirectories, patch.additionalDirectories);
+  const cleanCwd = patch.cwd && !isDaemonPseudoCwd(patch.cwd)
+    ? normalizeAgyPath(patch.cwd)
+    : '';
+  const prevInterrupted = Array.isArray(prev.interruptedTurns) ? prev.interruptedTurns : [];
+  const nextInterrupted = patch.appendInterruptedTurn
+    ? [...prevInterrupted, {
+      prompt: String(patch.appendInterruptedTurn.prompt || '').trim().slice(0, 2000),
+      partialText: String(patch.appendInterruptedTurn.partialText || '').trim().slice(0, 4000),
+      at: patch.appendInterruptedTurn.at || new Date().toISOString(),
+    }].slice(-40)
+    : prevInterrupted;
+  const next = {
+    ...prev,
+    ...(cleanCwd ? { cwd: cleanCwd } : {}),
+    ...(patch.projectId !== undefined ? { projectId: patch.projectId || null } : {}),
+    ...(mergedDirs.length ? { additionalDirectories: mergedDirs } : {}),
+    ...(patch.title ? { title: String(patch.title).slice(0, 240) } : {}),
+    ...(patch.customTitle !== undefined ? { customTitle: String(patch.customTitle || '').trim().slice(0, 240) } : {}),
+    ...(typeof patch.hidden === 'boolean' ? { hidden: patch.hidden } : {}),
+    ...(patch.config && typeof patch.config === 'object'
+      ? { config: { ...(prev.config || {}), ...patch.config } }
+      : {}),
+    ...(patch.toolApprovals && typeof patch.toolApprovals === 'object'
+      ? { toolApprovals: { ...(prev.toolApprovals || {}), ...patch.toolApprovals } }
+      : {}),
+    ...(nextInterrupted.length ? { interruptedTurns: nextInterrupted } : {}),
+    ...(patch.lastTurnStatus ? { lastTurnStatus: patch.lastTurnStatus } : {}),
+    ...(patch.lastTurnStats && typeof patch.lastTurnStats === 'object' ? { lastTurnStats: patch.lastTurnStats } : {}),
+    updatedAt: patch.updatedAt || new Date().toISOString(),
+  };
+  if (next.cwd && isDaemonPseudoCwd(next.cwd)) delete next.cwd;
+  store.sessions[id] = next;
+  writeMetaStore(agyDir, store);
+  invalidateSessionsCache();
+  return next;
+}
+
+export function rememberSessionConfig(agyDir, sessionId, configPatch = {}, extra = {}) {
+  const clean = {};
+  for (const k of ['model', 'thought_level', 'mode']) {
+    if (typeof configPatch[k] === 'string' && configPatch[k]) clean[k] = configPatch[k];
+  }
+  return noteSessionMeta(agyDir, sessionId, { ...extra, config: clean });
+}
+
+export function hideSession(agyDir, sessionId) {
+  if (!sessionId) return false;
+  noteSessionMeta(agyDir, sessionId, { hidden: true });
+  return true;
+}
+
+export function restoreSession(agyDir, sessionId) {
+  if (!sessionId) return false;
+  noteSessionMeta(agyDir, sessionId, { hidden: false });
+  return true;
+}
+
+export function countHiddenSessions(agyDir) {
+  if (!agyDir) return 0;
+  const store = readMetaStore(agyDir);
+  let count = 0;
+  for (const meta of Object.values(store.sessions)) {
+    if (meta && meta.hidden && !meta.deleted) count++;
+  }
+  return count;
+}
+
+export function restoreAllHiddenSessions(agyDir) {
+  if (!agyDir) return 0;
+  const store = readMetaStore(agyDir);
+  let restored = 0;
+  for (const meta of Object.values(store.sessions)) {
+    if (meta && meta.hidden && !meta.deleted) {
+      meta.hidden = false;
+      restored++;
+    }
+  }
+  if (restored > 0) {
+    writeMetaStore(agyDir, store);
+    invalidateSessionsCache();
+  }
+  return restored;
+}
+
+export function renameSession(agyDir, sessionId, customTitle) {
+  if (!sessionId) return null;
+  return noteSessionMeta(agyDir, sessionId, { customTitle: String(customTitle ?? '') });
+}
+
+function toTimestampMs(val) {
+  if (typeof val === 'number' && Number.isFinite(val)) return val;
+  const t = Date.parse(String(val || ''));
+  return Number.isFinite(t) ? t : 0;
+}
+
+// 纯函数：对 session/list 原始结果做路径解码、剔除回填的守护目录伪路径、合并本地元数据并按项目/搜索词过滤排序
+export function filterAgySessionList(rawSessions = [], {
+  metaMap = {},
+  daemonCwd = '',
+  cwd = '',
+  projectId = '',
+  projectsFile = '',
+  query = '',
+  includeHidden = false,
+  platform = process.platform,
+} = {}) {
+  let targetFoldedCwd = cwd ? foldAgyPath(cwd, platform) : '';
+  if (!targetFoldedCwd && projectId && projectsFile) {
+    const proj = getProject(projectsFile, projectId);
+    if (proj?.path) targetFoldedCwd = foldAgyPath(proj.path, platform);
+  }
+  const q = String(query || '').trim().toLowerCase();
+
+  const seen = new Set();
+  const merged = [];
+  let hiddenCount = 0;
+
+  const pushItem = (rawId, rawCwd, rawTitle, rawUpdatedAt) => {
+    const id = String(rawId || '').trim();
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+
+    const meta = metaMap[id] || {};
+    if (meta.deleted) return;
+    if (meta.hidden) hiddenCount++;
+    if (meta.hidden && !includeHidden) return;
+
+    const normFromMeta = meta.cwd && !isDaemonPseudoCwd(meta.cwd, daemonCwd, platform)
+      ? normalizeAgyPath(meta.cwd, platform)
+      : '';
+    const normFromAgy = rawCwd && !isDaemonPseudoCwd(rawCwd, daemonCwd, platform)
+      ? normalizeAgyPath(rawCwd, platform)
+      : '';
+    const resolvedCwd = normFromMeta || normFromAgy;
+
+    const title = String(meta.customTitle || rawTitle || meta.title || '新对话').trim();
+    const updatedAt = rawUpdatedAt || meta.updatedAt || '';
+    const updatedMs = Math.max(toTimestampMs(rawUpdatedAt), toTimestampMs(meta.updatedAt));
+
+    if (targetFoldedCwd) {
+      if (!resolvedCwd || foldAgyPath(resolvedCwd, platform) !== targetFoldedCwd) return;
+    }
+
+    if (q) {
+      const hay = `${title}\n${resolvedCwd}`.toLowerCase();
+      if (!hay.includes(q)) return;
+    }
+
+    const matchedProj = (!meta.projectId && resolvedCwd && projectsFile)
+      ? findProjectByPath(projectsFile, resolvedCwd)
+      : null;
+
+    merged.push({
+      sessionId: id,
+      cwd: resolvedCwd,
+      projectId: meta.projectId || matchedProj?.id || null,
+      projectName: matchedProj?.name || (resolvedCwd ? path.basename(resolvedCwd) || resolvedCwd : ''),
+      title,
+      customTitle: meta.customTitle || '',
+      updatedAt: updatedMs ? new Date(updatedMs).toISOString() : String(updatedAt || ''),
+      updatedMs,
+      hidden: !!meta.hidden,
+      ...(meta.favorite ? { favorite: true } : {}),
+      config: meta.config || null,
+    });
+  };
+
+  for (const item of (Array.isArray(rawSessions) ? rawSessions : [])) {
+    if (!item || typeof item !== 'object') continue;
+    pushItem(item.sessionId, item.cwd, item.title, item.updatedAt);
+  }
+
+  // 本地已由 ACP 确认创建或恢复、尚未刷入 agy 摘要库的会话一并补入列表，防止新建对话瞬间在侧栏消失
+  for (const [id, meta] of Object.entries(metaMap)) {
+    if (!seen.has(id) && meta && !meta.deleted && (meta.cwd || meta.title || meta.customTitle)) {
+      pushItem(id, meta.cwd || '', meta.title || '新对话', meta.updatedAt || '');
+    }
+  }
+
+  merged.sort((a, b) => b.updatedMs - a.updatedMs || a.sessionId.localeCompare(b.sessionId));
+  return { sessions: merged, hiddenCount };
+}
+
+export async function fetchRawSessionList(client, { refresh = false } = {}) {
+  if (refresh) listGen++;
+  const cache = listCacheOf(client);
+
+  if (cache.raw && Date.now() - cache.at < LIST_CACHE_TTL_MS) return cache.raw;
+  if (cache.inflight) return cache.inflight;
+
+  const reqGen = listGen;
+  const inflight = client.listSessions({ cwd: client.daemonCwd })
+    .then((sessions) => {
+      // 取的途中被作废过（代数变了）就不写回，免得慢请求把陈旧快照塞进缓存
+      if (reqGen === listGen && listCaches.get(client) === cache && cache.gen === reqGen) {
+        cache.at = Date.now();
+        cache.raw = sessions;
+      }
+      return sessions;
+    })
+    .finally(() => {
+      if (cache.inflight === inflight) cache.inflight = null;
+    });
+
+  cache.inflight = inflight;
+  return inflight;
+}
+
+export async function listAgySessions(ctx, { cwd = '', projectId = '', query = '', includeHidden = false, refresh = false } = {}) {
+  const client = acpPrimary(ctx);
+  const store = readMetaStore(ctx?.agyDir);
+  let rawSessions = [];
+  let warning = '';
+  try {
+    rawSessions = await fetchRawSessionList(client, { refresh });
+  } catch (err) {
+    warning = err?.message || String(err);
+  }
+
+  const filtered = filterAgySessionList(rawSessions, {
+    metaMap: store.sessions,
+    daemonCwd: client.daemonCwd,
+    cwd,
+    projectId,
+    projectsFile: ctx?.agyProjects || '',
+    query,
+    includeHidden,
+  });
+
+  // 未带项目或搜索词过滤时，从全量可见会话提取最多 8 个真实存在的最近工作目录供工作空间弹窗一键选用
+  const recentDirs = (!cwd && !projectId && !query)
+    ? extractRecentSessionDirs(filtered.sessions, {
+      ctx,
+      projectsFile: ctx?.agyProjects || '',
+      isPseudoCwd: (p) => isDaemonPseudoCwd(p, client.daemonCwd),
+      limit: 8,
+    })
+    : [];
+
+  return {
+    ...filtered,
+    recentDirs,
+    ...(warning ? { warning } : {}),
+  };
+}
+
+// 查询会话已确认的真实工作目录（本地元数据优先，其次为 session/list 中非守护目录的真实记录）
+export async function resolveVerifiedSessionCwd(ctx, sessionId, client = acpPrimary(ctx)) {
+  const meta = getSessionMeta(ctx?.agyDir, sessionId);
+  if (meta?.cwd && !isDaemonPseudoCwd(meta.cwd, client.daemonCwd)) {
+    return normalizeAgyPath(meta.cwd);
+  }
+  try {
+    const rawList = await fetchRawSessionList(client);
+    const found = rawList.find((x) => x && x.sessionId === sessionId);
+    if (found?.cwd && !isDaemonPseudoCwd(found.cwd, client.daemonCwd)) {
+      const norm = normalizeAgyPath(found.cwd);
+      if (norm) return norm;
+    }
+  } catch {}
+  return '';
+}
+
+function cancelUnfinishedToolsInMsg(msg, includeTrailingAborted = false) {
+  let touched = false;
+  const shouldCancel = (tool, isLast) => Boolean(
+    tool && (
+      tool.status === 'in_progress'
+      || tool.status === 'pending'
+      || (includeTrailingAborted && isLast && tool.status === 'failed' && !tool.output && tool.exitCode === undefined)
+    )
+  );
+  if (Array.isArray(msg.tools)) {
+    for (let i = 0; i < msg.tools.length; i++) {
+      if (shouldCancel(msg.tools[i], i === msg.tools.length - 1)) {
+        msg.tools[i].status = 'cancelled';
+        touched = true;
+      }
+    }
+  }
+  if (Array.isArray(msg.blocks)) {
+    const toolBlocks = msg.blocks.filter((b) => b?.type === 'tool' && b.tool);
+    for (let i = 0; i < toolBlocks.length; i++) {
+      if (shouldCancel(toolBlocks[i].tool, i === toolBlocks.length - 1)) {
+        toolBlocks[i].tool.status = 'cancelled';
+        touched = true;
+      }
+    }
+  }
+  return touched;
+}
+
+function isUnfinishedTool(tool) {
+  return Boolean(tool && (tool.status === 'in_progress' || tool.status === 'pending'));
+}
+
+// 仅当未完结工具位于助手消息末尾（后面没有正文输出也没有其它已结束工具）时，才像中途被打断。
+// 后台化命令（run_command / schedule 转入后台）在 ACP 回放中会保留 in_progress，但模型随后已接着输出正文或执行了后续步骤，
+// 不能据此把正常结束的一轮误判成「已停止」。
+function hasTrailingUnfinishedTool(msg) {
+  if (!msg || msg.role !== 'assistant') return false;
+  if (Array.isArray(msg.blocks) && msg.blocks.length > 0) {
+    let lastUnfinishedIdx = -1;
+    for (let i = 0; i < msg.blocks.length; i++) {
+      const b = msg.blocks[i];
+      if (b?.type === 'tool' && isUnfinishedTool(b.tool)) lastUnfinishedIdx = i;
+    }
+    if (lastUnfinishedIdx < 0) return false;
+    for (let i = lastUnfinishedIdx + 1; i < msg.blocks.length; i++) {
+      const b = msg.blocks[i];
+      if (b?.type === 'text' && String(b.text || '').trim()) return false;
+      if (b?.type === 'tool' && b.tool && !isUnfinishedTool(b.tool)) return false;
+    }
+    return true;
+  }
+  if (Array.isArray(msg.tools) && msg.tools.length > 0) {
+    if (String(msg.text || '').trim()) return false;
+    return isUnfinishedTool(msg.tools[msg.tools.length - 1]);
+  }
+  return false;
+}
+
+// ACP 的 session/load 只回放消息与工具块，不下发 stopReason=cancelled；结合本地记录补齐中断标记与未完结工具的取消态
+export function applyInterruptedMeta(messages = [], meta = {}) {
+  const out = Array.isArray(messages) ? messages : [];
+  const turns = Array.isArray(meta?.interruptedTurns) ? meta.interruptedTurns : [];
+  const matchedAssistants = new Set();
+
+  for (const it of turns) {
+    const prompt = String(it?.prompt || '').trim();
+    const partial = String(it?.partialText || '').trim();
+    let hit = false;
+
+    // 优先精确匹配（用户提问 + 已落盘的部分回复文本一致）
+    for (let i = out.length - 1; i >= 0; i--) {
+      if (out[i]?.role !== 'user' || String(out[i].text || '').trim() !== prompt) continue;
+      const next = out[i + 1];
+      if (next?.role === 'assistant' && !matchedAssistants.has(next)) {
+        if (!partial || String(next.text || '').trim() === partial) {
+          next.status = 'interrupted';
+          cancelUnfinishedToolsInMsg(next, true);
+          matchedAssistants.add(next);
+          hit = true;
+          break;
+        }
+      } else if (i === out.length - 1) {
+        const synth = {
+          role: 'assistant',
+          status: 'interrupted',
+          text: partial,
+          thinking: '',
+          tools: [],
+          blocks: partial ? [{ type: 'text', text: partial }] : [],
+        };
+        out.push(synth);
+        matchedAssistants.add(synth);
+        hit = true;
+        break;
+      }
+    }
+
+    // 部分回复在停止瞬间尚未刷盘导致文本略短于侧车记录时，匹配最近一轮同提问消息
+    if (!hit && prompt) {
+      for (let i = out.length - 1; i >= 0; i--) {
+        if (out[i]?.role !== 'user' || String(out[i].text || '').trim() !== prompt) continue;
+        const next = out[i + 1];
+        if (next?.role === 'assistant' && !matchedAssistants.has(next) && partial.startsWith(String(next.text || '').trim())) {
+          next.status = 'interrupted';
+          cancelUnfinishedToolsInMsg(next, true);
+          matchedAssistants.add(next);
+          break;
+        }
+      }
+    }
+  }
+
+  // 兜底识别在 bridge 外部被打断 / 崩溃的轮次：只处理末尾悬空未完结的工具，跳过已确认 completed 的最新轮
+  for (let i = 0; i < out.length; i++) {
+    const m = out[i];
+    if (m?.role !== 'assistant' || matchedAssistants.has(m)) continue;
+    if (i === out.length - 1 && meta?.lastTurnStatus === 'completed') continue;
+    if (hasTrailingUnfinishedTool(m) && cancelUnfinishedToolsInMsg(m)) {
+      m.status = 'interrupted';
+    }
+  }
+
+  if (meta?.lastTurnStatus === 'interrupted' && turns.length > 0) {
+    const lastMsg = out[out.length - 1];
+    if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.status !== 'interrupted') {
+      const lastIt = turns[turns.length - 1];
+      const p = String(lastIt?.prompt || '').trim();
+      const partial = String(lastIt?.partialText || '').trim();
+      if (lastMsg?.role !== 'user' || String(lastMsg.text || '').trim() !== p) {
+        if (p) out.push({ role: 'user', text: p, images: [], blocks: [{ type: 'text', text: p }] });
+      }
+      out.push({
+        role: 'assistant',
+        status: 'interrupted',
+        text: partial,
+        thinking: '',
+        tools: [],
+        blocks: partial ? [{ type: 'text', text: partial }] : [],
+      });
+    }
+  }
+
+  return out;
+}
+
+// 最后一轮的用时 / token 挂到最后一条助手消息上（消息底部状态栏用）。只在它前面那条用户消息
+// 与记录时的提问对得上时才挂——这一轮要是在 agy 自己的界面里跑的，记录就是上一轮的，不能张冠李戴。
+export function applyLastTurnStatsMeta(messages = [], meta = {}) {
+  const st = meta?.lastTurnStats;
+  if (!st || typeof st !== 'object' || !Array.isArray(messages) || messages.length < 2) return messages;
+  const last = messages[messages.length - 1];
+  const prev = messages[messages.length - 2];
+  if (last?.role !== 'assistant' || prev?.role !== 'user') return messages;
+  const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+  const want = norm(st.prompt);
+  const got = norm(prev.text);
+  if (!want || !got || !(got.startsWith(want) || want.startsWith(got.slice(0, 200)))) return messages;
+  last.stats = {
+    ms: Number.isFinite(st.ms) ? st.ms : null,
+    tokens: Number.isFinite(st.tokens) ? st.tokens : 0,
+  };
+  return messages;
+}
+
+export function applyToolApprovalsMeta(messages = [], meta = {}) {
+  const approvals = meta?.toolApprovals;
+  if (!approvals || typeof approvals !== 'object') return messages;
+  for (const m of (Array.isArray(messages) ? messages : [])) {
+    if (m?.role !== 'assistant') continue;
+    for (const t of (m.tools || [])) {
+      if (t?.toolCallId && approvals[t.toolCallId]) {
+        t.approvalState = approvals[t.toolCallId];
+      }
+    }
+    for (const b of (m.blocks || [])) {
+      if (b?.type === 'tool' && b.tool?.toolCallId && approvals[b.tool.toolCallId]) {
+        b.tool.approvalState = approvals[b.tool.toolCallId];
+      }
+    }
+  }
+  return messages;
+}
+
+export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
+  const id = String(sessionId || '').trim();
+  if (!id) throw Object.assign(new Error('缺少会话 id'), { status: 400 });
+
+  // 桌面版建的会话交给桌面版存储进程载入（主进程载它只回放 0 条）；注册用户的会话在他自己的进程里
+  const client = acpFor(ctx, id);
+  noteSessionOwner(ctx, client, id);
+  const meta = getSessionMeta(ctx?.agyDir, id) || {};
+  if (meta.deleted) throw Object.assign(new Error('这个对话已经删除'), { status: 404 });
+  const settings = loadAgySettings(ctx?.agyDir);
+
+  // 正在跑的会话（含后台自动唤醒的被动 gen）不能 session/load（会打断这一轮或杀子代理）：
+  // 返回本进程记下的「这一轮之前」的历史，前端再挂实时流接上当前轮。
+  const passiveGen = !client.hasActiveTurn?.(id) ? getPassiveBackgroundGen(ctx?.key, id) : null;
+  if (client.hasActiveTurn?.(id) || passiveGen) {
+    let before = client.getLiveHistory?.(id) || null;
+    if (!before && passiveGen) {
+      const fullHist = client.historyUpdates?.get(id) || null;
+      if (fullHist) {
+        const base = Number.isInteger(passiveGen.historyBase) ? passiveGen.historyBase : fullHist.length;
+        before = fullHist.slice(0, base);
+      }
+    }
+    const history = reconstructHistoryMessages(before || []);
+    applyInterruptedMeta(history.messages, { ...meta, lastTurnStatus: '' });
+    applyToolApprovalsMeta(history.messages, meta);
+    applyToolOutputs(history.messages, readToolOutputs(ctx?.agyDir, id));
+    // 前几轮交付的成品附件卡照样要有（以前只有下面「不在跑」那条路挂，正在跑的会话重开后前几轮的附件卡全没了）
+    attachDeliverables(history.messages, {
+      workDir: meta.cwd || '',
+      additionalDirectories: Array.isArray(meta.additionalDirectories) ? meta.additionalDirectories : [],
+      uploads: ctx?.uploads,
+      artifactDir: sessionBrainDir(client.dataDir, id),
+    });
+    const snap = client.getMountedSnapshot?.(id) || null;
+    return {
+      sessionId: id,
+      live: true,
+      ...(passiveGen ? { backgroundWake: true } : {}),
+      historyComplete: !!before,
+      cwd: meta.cwd || '',
+      projectId: meta.projectId || null,
+      title: meta.customTitle || meta.title || history.title || snap?.title || '新对话',
+      customTitle: meta.customTitle || '',
+      messages: history.messages,
+      usage: snap?.usage || history.usage || null,
+      commands: snap?.commands?.length ? snap.commands : history.commands,
+      configOptions: snap?.configOptions || [],
+      modes: snap?.modes || null,
+      models: snap?.models || null,
+      tier: snap?.tier || null,
+      ...extractConfigSummary(snap?.configOptions || [], snap?.modes, snap?.models),
+    };
+  }
+
+  // 已存 cwd 或 ACP 列表里的真实 cwd 始终优先；外部查询参数与默认工作空间只用于本次 RPC 调用，不覆盖绑定也不落盘
+  const verifiedCwd = await resolveVerifiedSessionCwd(ctx, id);
+  let rpcCwd = verifiedCwd;
+  if (!rpcCwd && cwd) {
+    try { rpcCwd = authorizeProjectPath(ctx, cwd); } catch {}
+  }
+  if (!rpcCwd) {
+    rpcCwd = settings.defaultCwd || ctx?.cwd || process.cwd();
+  }
+
+  const desiredConfig = meta.config || {
+    model: settings.defaultModel,
+    thought_level: settings.defaultThoughtLevel,
+    mode: settings.defaultMode,
+  };
+
+  const extraDirs = Array.isArray(meta.additionalDirectories) ? meta.additionalDirectories : [];
+  const effectiveWorkDir = verifiedCwd || rpcCwd || '';
+  const { mcpServers, systemPromptAppend: effectiveSystemPrompt, toolingSig } = buildAgySessionTooling({
+    ctx, settings, cwd: effectiveWorkDir, additionalDirectories: extraDirs,
+  });
+
+  const { snapshot, updates } = await client.loadSessionWithReplay(id, {
+    cwd: verifiedCwd,
+    fallbackCwd: rpcCwd,
+    forceCwd: !!verifiedCwd,
+    mcpServers,
+    additionalDirectories: extraDirs,
+    systemPromptAppend: effectiveSystemPrompt,
+    desiredConfig,
+    toolingSig,
+  });
+
+  const history = reconstructHistoryMessages(updates);
+  applyInterruptedMeta(history.messages, meta);
+  applyToolApprovalsMeta(history.messages, meta);
+  applyToolOutputs(history.messages, readToolOutputs(ctx?.agyDir, id));
+  applyLastTurnStatsMeta(history.messages, meta);
+  attachDeliverables(history.messages, {
+    workDir: effectiveWorkDir, additionalDirectories: extraDirs, uploads: ctx?.uploads,
+    artifactDir: sessionBrainDir(client.dataDir, id),
+  });
+  const title = meta.customTitle || history.title || snapshot?.title || meta.title || '新对话';
+  if (history.title && !meta.title) {
+    noteSessionMeta(ctx?.agyDir, id, {
+      ...(verifiedCwd ? { cwd: verifiedCwd } : {}),
+      title: history.title,
+    });
+  }
+
+  const cfgSummary = extractConfigSummary(snapshot?.configOptions || [], snapshot?.modes, snapshot?.models);
+
+  // 历史载入完毕后对齐监视器基线；若该会话磁盘上仍有活着或运行中的子代理（如重启后重开），自动恢复后台监视
+  markSessionTranscriptSynced(ctx?.key, client, id);
+  if (hasProtectedSubagents(client.dataDir, id)) {
+    armSubagentMonitor(ctx, client, id);
+  }
+
+  return {
+    sessionId: id,
+    cwd: verifiedCwd || rpcCwd || '',
+    projectId: meta.projectId || null,
+    title,
+    customTitle: meta.customTitle || '',
+    messages: history.messages,
+    usage: history.usage || snapshot?.usage || null,
+    commands: history.commands.length ? history.commands : (snapshot?.commands || []),
+    configOptions: snapshot?.configOptions || [],
+    modes: snapshot?.modes || null,
+    models: snapshot?.models || null,
+    tier: snapshot?.tier || null,
+    ...cfgSummary,
+  };
+}

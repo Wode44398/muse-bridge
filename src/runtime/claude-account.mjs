@@ -15,6 +15,7 @@
 //   读不到 profile 里的 rate_limit_tier，响应头也分不出 Pro / Max 5x / Ultra（= 原 Max 20x），只能让用户标一下。
 //   login?：这个号的「完整登录」凭据（{ accessToken, refreshToken, expiresAt, scopes, email, orgUuid, … }，带 user:profile）。
 //   只给读账号级信息的功能用（重置卡，limit-resets.mjs）；跑对话仍用 token。换了 token 就清掉（可能已不是同一个订阅）。
+//   tokenFrom?：'env' = 从只经环境变量给的 CLAUDE_CODE_OAUTH_TOKEN 播种的号，令牌只在内存里，落盘留空（见 persist）。
 //   claudeActiveAccount: <id>
 // 迁移：若无 claudeAccounts 但有旧的 oauthToken，自动播种一个「默认账号」。
 
@@ -22,7 +23,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { CONFIG_PATH, OAUTH, API_KEY_FROM_CONFIG, API_KEY_SOURCE } from '../config/index.mjs';
+import { CONFIG_PATH, OAUTH, OAUTH_ENV_ONLY, API_KEY_FROM_CONFIG, API_KEY_SOURCE } from '../config/index.mjs';
 import { memberEngineBase } from './member-boundary.mjs';
 
 let accounts = [];   // [{ id, label, token }]
@@ -33,9 +34,11 @@ function loadRaw() {
 }
 
 // 只改这两个字段落盘，其余配置原样保留（别覆写 token/port 等）。
+// tokenFrom: 'env' 的号（从只经环境变量给的令牌播种）落盘时令牌留空：部署者只把它交给了进程环境，
+// 不该因为第一次启动就出现在磁盘上；下次启动从环境变量补回（init）。
 function persist() {
   const raw = loadRaw();
-  raw.claudeAccounts = accounts;
+  raw.claudeAccounts = accounts.map((a) => (a.tokenFrom === 'env' ? { ...a, token: '' } : a));
   raw.claudeActiveAccount = activeId;
   try { writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2)); } catch (e) { console.error('[claude-account] persist failed:', (e && e.message) || e); }
 }
@@ -53,13 +56,14 @@ function init() {
       .filter((a) => a && typeof a === 'object')
       // 认不出的字段原样留着、落盘时照写回去（开源路线 C14：新版本加的字段，装回旧版本也不丢）。
       // 其中 groups（[组 id]，缺省 = 所有人可用）是给将来「按组分配号」预留的，今天不参与选号（run-as.mjs accountGroups）。
-      .map((a) => ({ ...a, id: String(a.id || newId()), label: String(a.label || ''), token: String(a.token || '') }));
+      .map((a) => ({ ...a, id: String(a.id || newId()), label: String(a.label || ''), token: String(a.token || '') }))
+      .map((a) => (a.tokenFrom === 'env' && !a.token ? { ...a, token: OAUTH || '' } : a));
     activeId = (raw.claudeActiveAccount && accounts.some((a) => a.id === raw.claudeActiveAccount))
       ? raw.claudeActiveAccount : accounts[0].id;
   } else {
     // 从旧的 config.oauthToken 播种一个默认账号（token 可能为空——那就代表「用 ~/.claude
     // 里已登录的凭证」，不注入覆盖，行为与迁移前完全一致）。
-    accounts = [{ id: newId(), label: '默认账号', token: OAUTH || '' }];
+    accounts = [{ id: newId(), label: '默认账号', token: OAUTH || '', ...(OAUTH_ENV_ONLY ? { tokenFrom: 'env' } : {}) }];
     activeId = accounts[0].id;
     persist();
   }
@@ -129,7 +133,7 @@ export function updateAccount(id, { label, token, plan } = {}) {
   const a = accounts.find((x) => x.id === id);
   if (!a) return { error: '无此账号' };
   if (typeof label === 'string' && label.trim()) a.label = label.trim();
-  if (typeof token === 'string' && token.trim() && token.trim() !== a.token) { a.token = token.trim(); delete a.login; }
+  if (typeof token === 'string' && token.trim() && token.trim() !== a.token) { a.token = token.trim(); delete a.login; delete a.tokenFrom; }
   // plan 传了才动（老前端不带这个字段，别把手动标的套餐冲掉）；'' / 'auto' = 改回自动识别。
   if (typeof plan === 'string') { const v = normPlan(plan); if (v) a.plan = v; else delete a.plan; }
   persist();

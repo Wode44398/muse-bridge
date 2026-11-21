@@ -20,11 +20,13 @@
   let busy = $state(false);
 
   // 名单摘要用的显示名（勾选格本身按服务端的 agent 状态逐项渲染，跟着 AGENTS 走）。2026-11-04 Gemini 对话下线、Media Studio 接替。
-  const AGENT_LABEL = { claude: 'Claude', studio: 'Media Studio', codex: 'Codex', dimensio: 'dimensio' };
+  const AGENT_LABEL = { claude: 'Claude', studio: 'Media Studio', codex: 'Codex', agy: 'Antigravity', dimensio: 'dimensio' };
+  // 这个 agent 能不能开给这个人：支持多用户，且标了「只给完全信任档」的要他是完全信任档
+  const grantable = (a, u) => !!a && a.multiUser && (!a.fullTrust || u.tier !== 'user');
   // 某个 agent 对这个人实际生效没有：他被勾了 + 全局开着 + 支持多用户
   const agentState = (id) => sa.agentStatus.find((a) => a.id === id) || null;
   // 状态表到了以后，表里没有的 id（已下线的 Gemini 这类残留权限）不算；表还没到时照名单显示
-  const effective = (u) => (u.agents || []).filter((id) => { const a = agentState(id); return a ? a.enabled && a.multiUser : !sa.agentStatus.length; });
+  const effective = (u) => (u.agents || []).filter((id) => { const a = agentState(id); return a ? a.enabled && grantable(a, u) : !sa.agentStatus.length; });
 
   // 完全信任 = 等同管理员（L1 逻辑隔离下命令行没有可靠边界）：发码 / 建号 / 升档前都先说清楚再确认（服务端要 ack）。
   const FULL_WHAT = () => t('完全信任档有命令行、终端和浏览器，跑在服务端同一个系统账户下：能读到服务器上所有人的对话、文件和全部凭据（号池令牌、各家 API Key），等同管理员。只给你完全信任的人。');
@@ -71,7 +73,7 @@
   }
   function toggleAgent(u, id) {
     const a = agentState(id);
-    if (a && !a.multiUser) return;
+    if (a && !grantable(a, u)) return;
     const has = (u.agents || []).includes(id);
     const next = has ? u.agents.filter((x) => x !== id) : [...(u.agents || []), id];
     u.agents = next;   // 先乐观更新，loadUsers 回来再校正
@@ -205,13 +207,14 @@
           <div class="perm-h">{t('能用的 agent')}</div>
           <div class="perm-grid">
             {#each sa.agentStatus as a (a.id)}
-              {@const dis = !a.multiUser || !a.enabled}
-              {@const on = (u.agents || []).includes(a.id) && a.multiUser}
-              <button class="perm-it" class:dis disabled={!a.multiUser} onclick={() => toggleAgent(u, a.id)}>
+              {@const can = grantable(a, u)}
+              {@const dis = !can || !a.enabled}
+              {@const on = (u.agents || []).includes(a.id) && can}
+              <button class="perm-it" class:dis disabled={!can} onclick={() => toggleAgent(u, a.id)}>
                 {@render check(on, dis)}
                 <span class="perm-tx">
                   <span>{a.label}</span>
-                  <small>{!a.multiUser ? t('仅管理员（尚不支持多用户）') : !a.enabled ? t('全局已关（勾了也暂不生效）') : on ? t('可用') : t('未授权')}</small>
+                  <small>{!a.multiUser ? t('仅管理员（尚不支持多用户）') : !can ? t('只能开给完全信任档') : !a.enabled ? t('全局已关（勾了也暂不生效）') : on ? t('可用') : t('未授权')}</small>
                 </span>
               </button>
             {/each}

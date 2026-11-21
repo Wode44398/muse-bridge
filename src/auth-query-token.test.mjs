@@ -36,3 +36,10 @@ test('工具结果图片直链认 ?token=', () => {
   assert.equal(authOk(get(url)), true);
   assert.equal(authOk(get(url, 'POST')), false);
 });
+
+test('agy 产物直链认 ?token=（仅 GET）', () => {
+  const url = `/api/agy/artifact?id=s1&path=out.png&token=${MASTER}`;
+  assert.equal(queryToken(get(url)), MASTER);
+  assert.equal(authOk(get(url)), true);
+  assert.equal(authOk(get(url, 'POST')), false);
+});

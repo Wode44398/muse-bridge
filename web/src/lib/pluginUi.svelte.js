@@ -3,7 +3,8 @@
 // 原则：手机 App 不跑第三方代码。除了工作台标签（插件页面，不透明源 iframe / App 里原生干净页）之外全是【声明】——
 // 插件给标题、图标、文字，bridge 自己画；按下去调 POST /api/plugins/ui/run，由服务端执行插件的 handler。
 //
-//   GET /api/plugins/ui?lang=zh|en → { homeCards, workbench, commands, composerActions, messageActions, sessionActions, theme }
+//   GET /api/plugins/ui?lang=zh|en → { homeCards, workbench, commands, composerActions, messageActions, sessionActions, theme, apps }
+//   apps = 主页图标 + 全屏分页的插件应用，工具函数在 lib/pluginApps.svelte.js
 //   登记一变服务端推 { type: 'plugins.ui' }（插件开关 / 装卸推 plugins.changed），这里跟着重拉。
 //
 // 各插槽：主页卡片（components/PluginHomeCards）、Claude 工作台标签（lib/dock + components/dock/PluginWorkbench）、
@@ -16,12 +17,14 @@ import { isEn, t, tr } from './i18n.js';
 import { showToast } from './toast.svelte.js';
 import { uiConfirm } from './dialogs.js';
 import { prefillComposer } from './composerBridge.svelte.js';
+import { handoffToClaude } from './claudeHandoff.js';
 import { openPluginStandalone, inAndroidApp } from './pluginPanels.svelte.js';
 import { openSettings } from './settingsNav.svelte.js';
 import { isNativeDesktop, desktopOpenExternal } from './nativeDesktop.js';
 import { pluginIcon } from './pluginIcons.js';
 
-const EMPTY = () => ({ homeCards: [], workbench: [], commands: [], composerActions: [], messageActions: [], sessionActions: [], theme: {} });
+// fileHandlers = 文件「用「X」打开」：[{ plugin, pluginName, id, title, exts: ['csv', …], app: 应用键 }]
+const EMPTY = () => ({ homeCards: [], workbench: [], commands: [], composerActions: [], messageActions: [], sessionActions: [], theme: {}, apps: [], fileHandlers: [] });
 export const pluginUi = $state({ ...EMPTY(), loaded: false });
 
 const arr = (v) => (Array.isArray(v) ? v : []);
@@ -42,10 +45,17 @@ export async function loadPluginUi() {
         if (forWho !== who) continue;   // 拉的途中换了人：结果作废，循环再拉一次（again 已由 sync 置上）
         pluginUi.homeCards = arr(r?.homeCards);
         pluginUi.workbench = arr(r?.workbench);
-        pluginUi.commands = arr(r?.commands);
+        pluginUi.commands = arr(r?.commands);   // 项里的 palette（进桌面 Ctrl+K 命令面板）原样保留
         pluginUi.composerActions = arr(r?.composerActions);
         pluginUi.messageActions = arr(r?.messageActions);
         pluginUi.sessionActions = arr(r?.sessionActions);
+        // 应用项带 kind（'page' | 'view'）；缺 key 的旧形状按 plugin/id 补上，免得主页布局键对不上
+        // kind / pin（'sidebar' = Claude 侧栏固定）/ perms（页面权限子集）都原样保留，只补缺的 key
+        pluginUi.apps = arr(r?.apps).filter((a) => a && a.plugin && a.id).map((a) => (a.key ? a : { ...a, key: 'app:' + a.plugin + ':' + a.id }));
+        // 扩展名统一成小写、不带点（服务端已规范过，这里再兜一层：旧形状 match.ext 也认）
+        pluginUi.fileHandlers = arr(r?.fileHandlers).filter((h) => h && h.plugin && h.id && h.app).map((h) => ({
+          ...h, exts: arr(h.exts || h.match?.ext).map((e) => String(e || '').trim().replace(/^\./, '').toLowerCase()).filter(Boolean),
+        }));
         pluginUi.theme = r?.theme && typeof r.theme === 'object' ? r.theme : {};
         pluginUi.loaded = true;
         applyTheme(pluginUi.theme);
@@ -138,14 +148,52 @@ export function matchPluginAction(text) {
   return cmd ? { cmd, args: (m[2] || '').trim() } : null;
 }
 
+/** 进桌面 Ctrl+K 命令面板的插件命令（ctx.ui.command 声明了 palette: true 的）。 */
+export const paletteCommands = () => pluginUi.commands.filter((c) => c && c.name && c.palette === true);
+
+// ── 文件「用「X」打开」（ctx.ui.fileHandler）──────────────────────────────────
+// 只按扩展名匹配，不分大小写；不借 FilesPanel / FilesDesktop / preview 那三份 kindOf（它们彼此都不一致，插件声明的是扩展名）。
+// 处理器指向的应用这个身份看不到（被撤 / 没开）时不出这一项，免得点了只得一句「应用不可用」。
+export const fileExtOf = (name) => { const m = /\.([^./\\]+)$/.exec(String(name || '')); return m ? m[1].toLowerCase() : ''; };
+// 菜单上「用「X」打开」的 X：处理器标题（插件自定的，没有就退回插件名）
+export const fileHandlerTitle = (h) => tr(h?.title || '') || h?.pluginName || h?.plugin || '';
+export function fileHandlersFor(name) {
+  const ext = fileExtOf(name);
+  if (!ext || !pluginUi.fileHandlers.length) return [];
+  return pluginUi.fileHandlers.filter((h) => h.exts.includes(ext) && pluginUi.apps.some((a) => (a.key || 'app:' + a.plugin + ':' + a.id) === h.app));
+}
+/**
+ * 点了「用「X」打开」：先签一个文件句柄（via = 这个处理器：扩展名对得上就免授权框——点这一下本身就是同意交出这一个文件），
+ * 再带着句柄打开应用。src = { rel, ws }：ws 为空 = 身份文件根，否则是服务端认识的位置根（与 /api/file 同一套）。
+ * 只给服务端摸得到的文件：手机本地（SAF）、这台电脑的位置调用方就不该出这一项。
+ * 签句柄必须走 api.js（自动带 X-Bridge-UI，服务端只认 bridge 自己的界面调这条）。
+ */
+export async function openFileWithHandler(h, src) {
+  const name = fileHandlerTitle(h);
+  let file = null;
+  try {
+    const r = await api.post('/api/plugins/handles', { plugin: h.plugin, items: [{ rel: String(src?.rel || ''), ws: String(src?.ws || '') }], mode: 'rw', via: { fileHandler: h.id } });
+    file = Array.isArray(r?.files) ? r.files[0] || null : null;
+  } catch (e) {
+    showToast(tr((e?.body && typeof e.body === 'object' ? e.body.error : typeof e?.body === 'string' ? e.body : '') || '') || t('没能把文件交给「{name}」', { name }), 'err');
+    return false;
+  }
+  if (!file?.handle) { showToast(t('没能把文件交给「{name}」', { name }), 'err'); return false; }
+  // 动态引：pluginApps 静态引了本模块，这里再静态引回去就成环
+  const { openApp } = await import('./pluginApps.svelte.js');
+  return openApp(h.app, { context: { file } });
+}
+
 // ── 按下一个界面动作 ───────────────────────────────────────────────────────
 // kind: 'command' | 'composerAction' | 'messageAction' | 'sessionAction'；item 是 /api/plugins/ui 下发的那一项。
 // 回 { toast?, insert?, send?, open? }：insert = 换掉输入框里的文字（send 为真就顺手发出）；open 'panel' = 插件的控制面板；open 网址 = 外部打开。
-export async function runPluginUi(item, kind, args = {}) {
+// opts.handoff：调用处身边没有输入框（桌面主页的 Ctrl+K 命令面板）——insert 改走 handoffToClaude：先去 Claude 页开新对话再填，
+// 不然 prefillComposer 填进一个看不见的输入栏，人什么也没看到。
+export async function runPluginUi(item, kind, args = {}, { handoff = false } = {}) {
   if (!item) return null;
   try {
     const r = await api.post('/api/plugins/ui/run', { plugin: item.plugin, kind, id: kind === 'command' ? item.name : item.id, args: { agent: 'claude', ...args } });
-    await applyRunResult(item, r || {});
+    await applyRunResult(item, r || {}, handoff);
     return r || {};
   } catch (e) {
     showToast(tr((e?.body && typeof e.body === 'object' ? e.body.error : e?.body) || '') || t('插件动作没有执行成功'), 'err');
@@ -153,8 +201,11 @@ export async function runPluginUi(item, kind, args = {}) {
   }
 }
 
-async function applyRunResult(item, r) {
-  if (typeof r.insert === 'string') prefillComposer(r.insert, { send: r.send === true });
+async function applyRunResult(item, r, handoff = false) {
+  if (typeof r.insert === 'string') {
+    if (handoff) handoffToClaude(r.insert, { send: r.send === true });
+    else prefillComposer(r.insert, { send: r.send === true });
+  }
   if (r.open === 'panel') await openPluginPanel(item.plugin, item.pluginName);
   else if (typeof r.open === 'string' && r.open) openExternalUrl(r.open);
   if (typeof r.toast === 'string' && r.toast) showToast(r.toast);

@@ -100,7 +100,7 @@
   }
 </script>
 
-<!-- 指针手势挂在整条控件上（段按钮只给键盘用，焦点在每个 radio 按钮上）；宿主不建层叠上下文，透镜玻璃要采得到底下的卡片 -->
+<!-- 指针手势挂在整条控件上（段按钮上的按下冒泡到这里处理；按钮自己的 click 只认键盘触发的）；宿主不建层叠上下文，透镜玻璃要采得到底下的卡片 -->
 <!-- svelte-ignore a11y_interactive_supports_focus -->
 <div class="seg {size}" class:dis={disabled} role="radiogroup" aria-label={label} style:--n={n} bind:this={host}
   onpointerdown={down} onpointermove={move} onpointerup={up} onpointercancel={up}>
@@ -128,7 +128,7 @@
   .opt {
     position: relative; z-index: 1; min-width: 0; border: 0; background: none; padding: 3px 6px; cursor: pointer;
     font: inherit; font-size: 13.33px; line-height: 18px; font-weight: 500; letter-spacing: -.08px; color: var(--i-label);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 999px; pointer-events: none;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 999px;
   }
   .opt.on { font-weight: 600; }
   .opt:focus-visible { outline: 2px solid color-mix(in srgb, var(--i-accent, var(--i-blue, #0088ff)) 55%, transparent); outline-offset: -2px; }

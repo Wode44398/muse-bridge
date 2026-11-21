@@ -88,20 +88,23 @@ export async function editQueued(id) {
   restoreAttachments(it.attachments, it.files);
   return true;
 }
-// 放回输入框的附件（排队消息「编辑」与撤回插话共用）：按路径回暂存区，已在的不重复放
-function restoreAttachments(paths, files) {
-  const it = { attachments: paths, files };
-  (it.attachments || []).forEach((p, i) => {
-    if (compose.attachments.some((x) => x.path === p)) return;
+// 服务端交还的附件路径 → 输入栏暂存区同款条目（放回输入框、「立即打断」直接重发共用）
+export function attsFromPaths(paths, files) {
+  return (paths || []).map((p, i) => {
     // 引用电脑上的文件夹：放回成文件夹卡（原始文件不在了，不能再改为上传）
     const ref = parseDeviceRef(p);
     if (ref) {
-      const name = (it.files && it.files[i]) || ref.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
-      compose.attachments.push({ path: p, name, kind: 'folder', url: null, count: null, note: '', pending: false, device: { id: ref.deviceId, name: devices.list.find((d) => d.id === ref.deviceId)?.name || '' } });
-      return;
+      const name = (files && files[i]) || ref.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+      return { path: p, name, kind: 'folder', url: null, count: null, note: '', pending: false, device: { id: ref.deviceId, name: devices.list.find((d) => d.id === ref.deviceId)?.name || '' } };
     }
-    compose.attachments.push({ path: p, name: (it.files && it.files[i]) || String(p).split(/[\\/]/).pop(), kind: 'file', url: null, pending: false, local: true });
+    return { path: p, name: (files && files[i]) || String(p).split(/[\\/]/).pop(), kind: 'file', url: null, pending: false, local: true };
   });
+}
+// 放回输入框的附件（排队消息「编辑」与撤回插话共用）：按路径回暂存区，已在的不重复放
+function restoreAttachments(paths, files) {
+  for (const a of attsFromPaths(paths, files)) {
+    if (!compose.attachments.some((x) => x.path === a.path)) compose.attachments.push(a);
+  }
 }
 export function editLastQueued() {
   const list = queuedItems();
@@ -123,22 +126,33 @@ export function retractableSteers() {
   if (!m || m.status !== 'streaming') return [];
   return m.segments.filter((s) => s.kind === 'steer' && s.retractable && !s.read && !s.cancelled).reverse();
 }
-export async function retractSteer(uuid) {
+// 从这一轮里抽回一条插话（撤回 /「立即打断」共用）：成功回服务端的 { ok, message, attachments, files }，
+// 失败回 null（已写好提示、读到了的气泡转实）。how = 'retract' | 'force'，只决定气泡上显示哪个「…中」。
+export async function takeSteer(uuid, how = 'retract') {
   const sid = session.id;
-  if (!sid || !uuid || retracting.has(uuid)) return false;
-  if (composerHasDraft()) { queueState.error = tt('输入框里已有草稿，先发送或清空再撤回插话'); return false; }
+  if (!sid || !uuid || retracting.has(uuid)) return null;
   const seg = lastAssistant()?.segments.find((s) => s.kind === 'steer' && s.uuid === uuid);
   retracting.add(uuid);
-  if (seg) seg.retracting = true;
+  if (seg) seg.retracting = how;
   let r = null;
   try { r = await api.post('/api/claude/unsteer', { session: sid, uuid }); }
   catch (e) { r = (e && e.body) || { ok: false }; }
   finally { retracting.delete(uuid); if (seg) seg.retracting = false; }
   if (!r || !r.ok) {
     if (seg && r && r.reason) seg.read = true;   // CLI 抢先读到了 / 服务端已不认这条：气泡转实，不再给撤回
-    queueState.error = r && r.reason === 'read' ? tt('Claude 已经读到这条了') : r && r.reason ? tt('这条插话撤不回了') : tt('撤回没成功，请重试');
-    return false;
+    queueState.error = r && r.reason === 'read' ? tt('Claude 已经读到这条了')
+      : r && r.reason ? (how === 'force' ? tt('这条插话已经不能打断重发了') : tt('这条插话撤不回了'))
+        : (how === 'force' ? tt('打断没成功，请重试') : tt('撤回没成功，请重试'));
+    return null;
   }
+  return r;
+}
+export async function retractSteer(uuid) {
+  const sid = session.id;
+  if (!sid || !uuid || retracting.has(uuid)) return false;
+  if (composerHasDraft()) { queueState.error = tt('输入框里已有草稿，先发送或清空再撤回插话'); return false; }
+  const r = await takeSteer(uuid, 'retract');
+  if (!r) return false;
   if (session.id === sid) {
     prefillComposer(r.message || '');
     restoreAttachments(r.attachments, r.files);

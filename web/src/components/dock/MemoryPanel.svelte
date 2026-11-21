@@ -402,7 +402,7 @@
   .mm-sep { height: 1px; margin: 4px 8px; background: var(--divider); }
   .mm-mi-empty { padding: 10px; font-size: 12.5px; color: var(--muted); }
 
-  .mm-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--dk-line, var(--divider)); }
+  .mm-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--wb-line, var(--divider)); }
 
   .mm-msg { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 0 28px;
     color: var(--muted); font-size: 13.5px; text-align: center; line-height: 1.6; }
@@ -426,7 +426,7 @@
   .mm-chips button { flex: none; height: 28px; padding: 0 12px; border-radius: 999px; font-size: 12.5px; color: var(--serif); box-shadow: inset 0 0 0 1px var(--divider); }
   .mm-chips button.on { color: var(--bg); background: var(--text); box-shadow: none; }
   .mm-chips button.bad:not(.on) { color: var(--crit); }
-  .mm-res { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 20px; border-top: 1px solid var(--dk-line, var(--divider)); overscroll-behavior: contain; }
+  .mm-res { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 20px; border-top: 1px solid var(--wb-line, var(--divider)); overscroll-behavior: contain; }
   .mm-res-h { padding: 12px 8px 4px; font-size: 11.5px; color: var(--muted); }
   .mm-r { --c: oklch(var(--mm-l) var(--mm-c) var(--h, 60)); width: 100%; display: flex; align-items: flex-start; gap: 10px; padding: 10px 8px; border-radius: 11px; text-align: left; color: var(--text); }
   .mm-r.neutral { --c: var(--mm-neutral); }

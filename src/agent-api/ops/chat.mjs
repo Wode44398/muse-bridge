@@ -1,5 +1,7 @@
 // 对话与会话：项目、会话列表/搜索/读取，给 Claude 发消息、等结果、停止、回答提问与审批。
 // 全部经进程内请求走现成路由（/api/chat、/api/session…），这里只做参数翻译与结果整理。
+// sessions.* / chat.* 带 agent 参数时（如 'agy'）交给那个 agent 所在扩展的 agentOps 钩子（src/modules/registry.mjs）；
+// 不带或 'claude' 走本文件的实现，行为与没有这个参数时一样。
 
 import { defineGroup, defineOp, OpError } from '../registry.mjs';
 import { internalRequest, routeError } from '../internal.mjs';
@@ -8,6 +10,7 @@ import { sessionQuestions } from '../../runtime/questions.mjs';
 import { listQueue } from '../../runtime/claude-queue.mjs';
 import { interruptedRun, INTERRUPT_NOTE } from '../../runtime/inflight.mjs';
 import { PERMISSION_MODES } from '../../config/claude-settings.mjs';
+import { moduleAgentOps } from '../../modules/registry.mjs';
 
 defineGroup('projects', '项目', 'Claude 的项目（每个项目一个工作目录）。');
 defineGroup('sessions', '会话', 'Claude 会话的列表、搜索与读取。');
@@ -23,6 +26,21 @@ const needSid = (v) => { if (!SID_RE.test(String(v || ''))) throw new OpError('b
 // 会话从哪儿开起来的：bridge（手机 / 网页 / 桌面客户端 / 本接口）、定时任务、电脑上的 Claude Desktop / 命令行
 const ORIGIN = { phone: 'bridge', routine: 'routine', desktop: 'desktop' };
 const clip = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s; };
+
+// ---- 按 agent 分发 ----
+// 没有缺省值：不传就是 Claude，validateArgs 的结果与加这个参数之前一致
+const AGENT_PARAM = { type: 'string', max: 32, desc: '哪个 agent 的会话：不填 = Claude；"agy" = Antigravity（要 Antigravity 对你开着）' };
+const needAgent = (args) => ['agent:' + (args.agent || 'claude')];
+const otherAgent = (args) => !!args.agent && args.agent !== 'claude';
+const KIT = { OpError, internalRequest, routeError };
+async function viaAgent(ctx, args, env, verb) {
+  const ops = moduleAgentOps(args.agent);
+  if (!ops || typeof ops[verb] !== 'function') {
+    throw new OpError('bad_args', `agent「${args.agent}」不支持这个操作`, { hint: '现在能用的：claude（缺省）、agy（Antigravity）' });
+  }
+  const { agent, ...rest } = args;
+  return ops[verb](ctx, rest, env, KIT);
+}
 
 // ---- 一轮的状态：从 gen 缓冲里读 ----
 function partialText(events, max = 2000) {
@@ -175,15 +193,18 @@ defineOp({
 // ---- 会话 ----
 defineOp({
   name: 'sessions.list', title: '列出 Claude 会话',
-  desc: '按最近活动倒序。可按项目筛、看已归档的。返回里 running=正在跑、pending=在等人回答。要翻下一页把上次返回的 cursor 传回来。',
-  need: ['agent:claude'],
+  desc: '按最近活动倒序。可按项目筛、看已归档的。返回里 running=正在跑、pending=在等人回答。要翻下一页把上次返回的 cursor 传回来。'
+    + 'agent:"agy" 列 Antigravity 的对话：project 填 Antigravity 的项目 id 或文件夹绝对路径，archived=true 看已隐藏的，返回多带 cwd、favorite。',
+  need: ['agent:claude'], needFor: needAgent,
   params: {
+    agent: AGENT_PARAM,
     project: { type: 'string', desc: '只看这个项目（projects.list 的 id；临时对话用 @quick）' },
     archived: { type: 'boolean', default: false, desc: 'true = 只看已归档的' },
     limit: { type: 'integer', min: 1, max: 200, default: 30, desc: '每页条数' },
     cursor: { type: 'string', desc: '上一页返回的 cursor' },
   },
   handler: async (ctx, args, env) => {
+    if (otherAgent(args)) return viaAgent(ctx, args, env, 'list');
     const q = new URLSearchParams({ limit: String(args.limit) });
     if (args.project) q.set('project', args.project);
     if (args.archived) q.set('view', 'archived');
@@ -205,14 +226,17 @@ defineOp({
 
 defineOp({
   name: 'sessions.search', title: '全文搜索会话',
-  desc: '在 Claude 会话的标题与正文里搜关键词（不分大小写）。',
-  need: ['agent:claude'],
+  desc: '在 Claude 会话的标题与正文里搜关键词（不分大小写）。'
+    + 'agent:"agy" 搜 Antigravity 的对话（archived 管已隐藏的）；matchedIn=title / text，正文命中带 role（user / assistant）；partial=true 表示索引还没建完，过几秒再搜一次更全。',
+  need: ['agent:claude'], needFor: needAgent,
   params: {
+    agent: AGENT_PARAM,
     q: { type: 'string', required: true, max: 200, desc: '关键词' },
     limit: { type: 'integer', min: 1, max: 100, default: 20 },
     archived: { type: 'string', enum: ['include', 'exclude', 'only'], default: 'include', desc: '要不要包括已归档的' },
   },
   handler: async (ctx, args, env) => {
+    if (otherAgent(args)) return viaAgent(ctx, args, env, 'search');
     const q = new URLSearchParams({ q: args.q, limit: String(args.limit), archived: args.archived });
     const r = await internalRequest(env.identity, 'GET', '/api/claude/search?' + q);
     if (r.status !== 200 || !r.json) throw new OpError('failed', routeError(r));
@@ -229,14 +253,17 @@ defineOp({
 
 defineOp({
   name: 'sessions.read', title: '读一个会话的消息',
-  desc: '返回最近的若干条消息（用户与 Claude 交替）。Claude 的消息里 text 是正文，tools 是这条里调过的工具名。正在跑的轮还没写进记录时，用 chat.wait 看实时进度。',
-  need: ['agent:claude'],
+  desc: '返回最近的若干条消息（用户与 Claude 交替）。Claude 的消息里 text 是正文，tools 是这条里调过的工具名。正在跑的轮还没写进记录时，用 chat.wait 看实时进度。'
+    + 'agent:"agy" 读 Antigravity 的对话（正在跑的那一轮不在里面，用 chat.wait 看）。',
+  need: ['agent:claude'], needFor: needAgent,
   params: {
+    agent: AGENT_PARAM,
     sessionId: { type: 'string', required: true },
     limit: { type: 'integer', min: 1, max: 80, default: 20, desc: '最近多少条' },
     tools: { type: 'boolean', default: true, desc: '要不要列出每条用过的工具名' },
   },
   handler: async (ctx, args, env) => {
+    if (otherAgent(args)) return viaAgent(ctx, args, env, 'read');
     const sid = needSid(args.sessionId);
     const r = await internalRequest(env.identity, 'GET', '/api/session?id=' + encodeURIComponent(sid));
     if (r.status === 404) throw new OpError('not_found', '没有这个会话');
@@ -262,9 +289,12 @@ defineOp({
     '会话正在跑时，whenBusy 决定怎么办：queue（默认，排队，这一轮结束后自动发）、steer（插进正在跑的这一轮）、replace（停掉这一轮，改发这条）。',
     'Claude 在 bridge 里有完整工具（读写文件、命令行按身份、浏览器、媒体生成……）；它要你回答问题或批准工具时 status=needs_input，用 chat.answer 回。',
     '这一轮会出现在用户的界面上（会话列表、直播），和用户自己发的一样。',
+    'agent:"agy" 发给 Antigravity：project 填 Antigravity 的项目 id 或文件夹绝对路径（只对新对话），model / effort 用 Antigravity 的模型名与思考档位；',
+    '会话正在跑时只能排队（whenBusy=queue，默认）或 replace（停掉再发），不支持 steer；ultracode / permissionMode / worktree 不适用。',
   ].join(''),
-  access: 'write', slow: true, need: ['agent:claude'],
+  access: 'write', slow: true, need: ['agent:claude'], needFor: needAgent,
   params: {
+    agent: AGENT_PARAM,
     message: { type: 'string', required: true, max: 100_000, desc: '要发的内容' },
     sessionId: { type: 'string', desc: '接着哪个会话说；不填开新会话' },
     project: { type: 'string', desc: '新会话开在哪个项目（projects.list 的 id）；不填用默认项目' },
@@ -280,6 +310,7 @@ defineOp({
   returns: '{ sessionId, status: running|done|needs_input|error|queued|steered, reply?, pending?, partial?, next? }',
   example: { message: '把工作空间里的 README.md 总结成三句话', wait: 120 },
   handler: async (ctx, args, env) => {
+    if (otherAgent(args)) return viaAgent(ctx, args, env, 'send');
     const sid = args.sessionId ? needSid(args.sessionId) : undefined;
     const body = { message: args.message, agent: 'claude' };
     if (sid) body.sessionId = sid;
@@ -340,13 +371,16 @@ defineOp({
   name: 'chat.wait', title: '等一个会话的结果',
   desc: '等这个会话当前这一轮：完成（done，带 reply）、出错（error）、被停（stopped）、要人回答（needs_input，带 pending）或到点（running，带目前的 partial），先到先回。'
     + '会话没在跑时返回最后一条回答（status=idle）；上一轮被 bridge 服务中途退出（崩溃、重启）打断时 status=interrupted——'
-    + '排上了「自动继续被中断的对话」（autoResume=true）就在 timeout 内等它自动开跑再接着等，没排上的要接着做就 chat.send 发一句「继续」。',
-  slow: true, need: ['agent:claude'],
+    + '排上了「自动继续被中断的对话」（autoResume=true）就在 timeout 内等它自动开跑再接着等，没排上的要接着做就 chat.send 发一句「继续」。'
+    + 'agent:"agy" 等 Antigravity 的对话（语义相同，没有 interrupted）。',
+  slow: true, need: ['agent:claude'], needFor: needAgent,
   params: {
+    agent: AGENT_PARAM,
     sessionId: { type: 'string', required: true },
     timeout: { type: 'integer', min: 0, max: 600, default: 60, desc: '最多等几秒' },
   },
   handler: async (ctx, args, env) => {
+    if (otherAgent(args)) return viaAgent(ctx, args, env, 'wait');
     const sid = needSid(args.sessionId);
     const deadline = Date.now() + args.timeout * 1000;
     let r = await waitTurn(ctx, sid, args.timeout, env.signal);
@@ -361,13 +395,15 @@ defineOp({
 
 defineOp({
   name: 'chat.stop', title: '停止一个会话正在跑的轮',
-  desc: '默认只打断当前作答（还有后台任务时它们继续跑）；all=true 连后台任务一起停。',
-  access: 'write', need: ['agent:claude'],
+  desc: '默认只打断当前作答（还有后台任务时它们继续跑）；all=true 连后台任务一起停。agent:"agy" 停 Antigravity 的对话（排着的消息退回，不再接着发）。',
+  access: 'write', need: ['agent:claude'], needFor: needAgent,
   params: {
+    agent: AGENT_PARAM,
     sessionId: { type: 'string', required: true },
     all: { type: 'boolean', default: false, desc: '连后台任务一起停' },
   },
   handler: async (ctx, args, env) => {
+    if (otherAgent(args)) return viaAgent(ctx, args, env, 'stop');
     const sid = needSid(args.sessionId);
     const r = await internalRequest(env.identity, 'POST', '/api/stop', { sessionId: sid, ...(args.all ? { release: true } : {}) });
     if (r.status !== 200) throw new OpError('failed', routeError(r));
@@ -378,10 +414,12 @@ defineOp({
 
 defineOp({
   name: 'chat.pending', title: '列出在等人回答的提问与审批',
-  desc: '不带 sessionId = 你所有会话里在等的；带 = 只看那个会话。每项给出 id、种类（question 提问 / approval 工具审批 / plan 计划审批 / paused 安全暂停）、内容和回答方式。',
-  need: ['agent:claude'],
-  params: { sessionId: { type: 'string', desc: '只看这个会话' } },
-  handler: async (ctx, args) => {
+  desc: '不带 sessionId = 你所有会话里在等的；带 = 只看那个会话。每项给出 id、种类（question 提问 / approval 工具审批 / plan 计划审批 / paused 安全暂停）、内容和回答方式。'
+    + 'agent:"agy" 看 Antigravity 的（只有 approval 与 question 两种）。',
+  need: ['agent:claude'], needFor: needAgent,
+  params: { agent: AGENT_PARAM, sessionId: { type: 'string', desc: '只看这个会话' } },
+  handler: async (ctx, args, env) => {
+    if (otherAgent(args)) return viaAgent(ctx, args, env, 'pending');
     const sids = args.sessionId ? [needSid(args.sessionId)] : [...sessionQuestions.keysFor(ctx.key)];
     return { pending: sids.flatMap((sid) => pendingOf(ctx, sid)) };
   },
@@ -396,9 +434,11 @@ defineOp({
     '计划审批（plan）：decision = accept（可带 mode 指定之后的权限模式）/ reject / revise（带 feedback）。',
     '安全暂停（paused）：choice = retry_fallback / edit_prompt。cancel=true 表示不作答。',
     '用户的界面上同一张卡会同步消失。工具审批放行的是真操作，替用户批之前想清楚。',
+    'agent:"agy" 回答 Antigravity 的：审批 decision = once / always（都是只允许这一次）/ deny；提问用 answers 或 cancel。',
   ].join(''),
-  access: 'write', need: ['agent:claude'],
+  access: 'write', need: ['agent:claude'], needFor: needAgent,
   params: {
+    agent: AGENT_PARAM,
     id: { type: 'string', required: true, desc: '提问 / 审批的 id' },
     answers: { type: 'array', desc: '提问的答案' },
     decision: { type: 'string', enum: ['once', 'always', 'auto', 'deny', 'accept', 'reject', 'revise', 'clear'] },
@@ -408,6 +448,7 @@ defineOp({
     cancel: { type: 'boolean', default: false },
   },
   handler: async (ctx, args, env) => {
+    if (otherAgent(args)) return viaAgent(ctx, args, env, 'answer');
     const body = { qid: args.id };
     if (args.cancel) body.cancelled = true;
     else {

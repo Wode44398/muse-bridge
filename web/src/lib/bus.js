@@ -57,6 +57,9 @@ function noteHello(ev) {
     // 自定义模型清单（只给管理员）：同源跟随页回放的 hello 也带上，芯片不用等 ensureCustomModels 补拉
     if (Array.isArray(ev.claudeModels)) lastHello.claudeModels = ev.claudeModels;
     if (ev.noticesV) lastHello.noticesV = ev.noticesV;   // 服务端推会话消息通知（lib/notices.svelte.js）：跟随页也得知道
+    if (Array.isArray(ev.noticeAgents)) lastHello.noticeAgents = [...ev.noticeAgents];
+    // 扩展分页（Antigravity）在跑的轮 / 在等人的卡：跟随页只拿到连上那一刻的快照，之后靠 agy.run 事件自己续
+    if (Array.isArray(ev.ext)) lastHello.ext = ev.ext;
     return;
   }
   // 服务改了（总线整份推来）：快照里那份跟着换，免得之后才起来的跟随页回放到旧清单
@@ -75,6 +78,13 @@ function noteHello(ev) {
   } else if (ev.type === 'question') {
     lastHello.pending = lastHello.pending.filter((id) => id !== ev.sessionId);
     if (ev.pending) lastHello.pending.push(ev.sessionId);
+  } else if (ev.type === 'agy.run') {
+    // Antigravity 的在跑状态跟着续写：之后才起来的跟随页回放到的 ext 不是连上那一刻的旧账
+    const ext = Array.isArray(lastHello.ext) ? lastHello.ext : (lastHello.ext = []);
+    let e = ext.find((x) => x && x.agent === 'agy');
+    if (!e) { e = { agent: 'agy', label: 'Antigravity', runs: [], asks: [] }; ext.push(e); }
+    e.runs = (e.runs || []).filter((r) => r.sessionId !== ev.sessionId);
+    if (ev.live) e.runs.push({ sessionId: ev.sessionId, userText: ev.userText, startedAt: ev.startedAt, pending: ev.pending || '' });
   }
 }
 function post(msg) { try { chan?.postMessage(msg); } catch { /* 通道已关 */ } }

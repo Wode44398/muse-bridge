@@ -5,8 +5,9 @@
 // 聊天快照限制（去处白名单、关 eval、upload 限目录）经 opts 传进来。
 
 import * as svc from './claude-browser.mjs';
-import { EXTRA_ACTIONS, EXTRA_DESC, runExtraAction, withDialogNote } from './browser-extra.mjs';
+import { EXTRA_ACTIONS, EXTRA_DESC, runExtraAction, withDialogNote, networkList } from './browser-extra.mjs';
 import { TAB_DESC, tabsList, resolveTab, tabTag, focusTab, watchPopups } from './browser-tabs.mjs';
+import { canvasDprProbe } from './browser-dprprobe.mjs';
 import {
   VERIFY_DESC, BATCH_MAX, probePoint, probeRef, focusInfo, pageState, afterAction, hasExpect, waitExpect, runBatch,
 } from './browser-verify.mjs';
@@ -134,11 +135,16 @@ function appendNote(result, note) {
 
 /**
  * opts（Claude 快照模式用；Codex / 远程客户端不传）：
- *  - urlDenied(url) → Promise<拒绝原因|null>：去处白名单，动作前后都验
+ *  - urlDenied(url) → Promise<拒绝原因|null>：去处白名单，动作前后都验（eval 前也验）
  *  - snap：快照访客（关 eval、拒 upload）
  *  - roots：upload 允许的目录（null = 不限）
  *  - caller：发起这次调用的对话（Claude 的 session id）；空 = 认不出，不做「别的对话动过」的提示
+ *  - structured：结果对象上另挂 data（eval 的值类型 / 异常类别、network 列表、dprprobe 结论、截图的等待情况），不进给模型的文字；
+ *    给不经 MCP 的调用方（dimensio 的内部接口）按值判完成证据。MCP 通道不传，结果形状不变
+ *  - tabCloseCurrent：tab_close 不给 tab 就关当前标签（不给时仍按「找不到标签」报错）
  * onActivity({action, url})：页面变化时通知前端拉起/刷新面板。
+ * 只有这条入口认的动作（MCP 的参数表里没有，Claude / Codex 发不过来）：dprprobe(dpr?)、tab_switch（= tab_select）；
+ * screenshot 另认 settle（先等动画与字体）、wait_ms（先固定等这么久，再等动画；0 = 立刻截）、element_ref / element_selector（只截那个元素）。
  */
 export async function runBrowserAction(ws, args = {}, onActivity = null, opts = {}) {
   if (String(args?.action || '') === 'batch') {
@@ -148,8 +154,10 @@ export async function runBrowserAction(ws, args = {}, onActivity = null, opts = 
 }
 
 async function runOne(ws, args, onActivity, opts) {
-  const action = String(args.action || '');
-  const { urlDenied = null, snap = false, roots = null, caller = '' } = opts;
+  const action = String(args.action || '') === 'tab_switch' ? 'tab_select' : String(args.action || '');
+  const { urlDenied = null, snap = false, roots = null, caller = '', structured = false } = opts;
+  let data = null;   // structured 时挂到结果上（见 opts.structured）
+  const withData = (r) => { if (structured && data && r && typeof r === 'object') r.data = data; return r; };
   // pool：浏览器实例从哪来。缺省 = claude-browser.mjs（服务器上 / 客户端内置浏览器）；Web Bridge（用户自己的浏览器）
   // 传它自己的池（runtime/web-bridge.mjs poolFor），接口同名：getBrowser / existingBrowser / touchBrowser / closeBrowser / viewerReport。
   const pool = opts.pool || svc;
@@ -424,12 +432,42 @@ async function runOne(ws, args, onActivity, opts) {
         }
         case 'screenshot': {
           const stray = await strayed(b); if (stray) return stray;
+          const waitMs = args.wait_ms == null ? null : Math.max(0, Math.min(15_000, Math.round(Number(args.wait_ms) || 0)));
+          if (waitMs) await delay(waitMs);
+          const settle = (args.settle === true || waitMs > 0) && waitMs !== 0 ? await b.settleAnimations(3000) : null;
+          if (structured) data = { settle };
+          if (args.element_ref != null || args.element_selector) {
+            const r = await b.elementShot(args.element_ref != null ? { ref: args.element_ref } : { selector: args.element_selector });
+            emit(b);
+            if (structured) data.element = r.element;
+            const what = args.element_ref != null ? `ref${args.element_ref}` : `元素 ${args.element_selector}`;
+            return { content: [{ type: 'image', data: r.buf.toString('base64'), mimeType: 'image/png' }, { type: 'text', text: `${what} 的截图 ${r.element.width}×${r.element.height}（页面 CSS 区域 ${r.element.css.join(', ')}${r.element.clamped ? '，超过 10000px 的部分截掉了' : ''}）。只截了这个元素，点击坐标仍按之前那张整屏截图给。` }] };
+          }
           return shot(b, args.region, emit);
+        }
+        case 'dprprobe': {
+          if (b.webBridge) return error('这是用户自己的浏览器窗口，不在它上面改设备像素比。');
+          const dpr = args.dpr != null ? Number(args.dpr) : 2;
+          if (!(dpr > 1 && dpr <= 4)) return error('dpr 要大于 1、不超过 4（真显示器常见 1.25–3；DPR 1 什么也证明不了）');
+          const rep = await canvasDprProbe(b, dpr);
+          emit(b);
+          if (structured) data = { dprprobe: rep };
+          const head = `DPR ${dpr} 探针（${b.url}）：`;
+          if (rep.passed) return text(head + (rep.canvasCount ? `${rep.canvasCount} 个 canvas 都正常——缓冲尺寸 = 布局 × dpr，停手后不再变，页面高度正常。` : '页面里没有 <canvas>，没什么可测的。'));
+          return error(`${head}没通过：\n- ${rep.problems.join('\n- ')}`);
         }
         case 'eval': {
           // 快照下关掉：任意 JS 等于把 URL 白名单一句 location.href 绕过去。
           if (snap) return error('快照里不提供 eval——需要看页面内容请用 read_page / screenshot / console。');
-          const value = await b.eval(String(args.js || ''));
+          // 有去处限制的调用方：当前页已经在限制外（脚本跳转、定时器）就先拽回来，别在那一页上跑脚本读内容
+          { const stray = await strayed(b); if (stray) return stray; }
+          let value;
+          try { value = await b.eval(String(args.js || '')); } catch (e) {
+            // 页面里抛的（断言带细节）与语法错、超时 / 浏览器故障分开：调用方据此判它算不算一次失败的检查
+            if (structured) data = { eval: { threw: true, exception: (/^((?:[A-Z][A-Za-z]*)?Error)\b/.exec(String(e?.message || '')) || [])[1] || '' } };
+            throw e;
+          }
+          if (structured) data = { eval: { threw: false, type: value === null ? 'null' : typeof value, ...(typeof value === 'boolean' ? { value } : {}) } };
           let output; try { output = JSON.stringify(value, null, 1); } catch { output = String(value); }
           output = output ?? 'undefined';
           const note = await popped();
@@ -482,7 +520,9 @@ async function runOne(ws, args, onActivity, opts) {
           emit(b); return text(`已切到标签 ${tab.title || tab.url}\n${await tabsList(b)}`);
         }
         case 'tab_close': {
-          const tab = resolveTab(b, args.tab); if (!tab) return error(`找不到标签 ${args.tab}——先 tabs() 看当前列表`);
+          const current = opts.tabCloseCurrent && (args.tab == null || args.tab === '');
+          const tab = current ? b.tabs.find((t) => t.active) : resolveTab(b, args.tab);
+          if (!tab) return error(`找不到标签 ${args.tab}——先 tabs() 看当前列表`);
           if (b.adopted?.has(tab.id)) return error('这是用户分享给你的标签，不替他关；用完不用管它（close 只断开，标签留给用户）。');
           await b.closeTab(tab.id);
           const alive = pool.existingBrowser(ws);
@@ -514,6 +554,9 @@ async function runOne(ws, args, onActivity, opts) {
           // find/network 都把页面内容交给模型：快照下先验 URL（同 read_page）。
           const stray = await strayed(b); if (stray) return stray;
           const r = await runExtraAction(b, action, args, { roots, snap });
+          if (structured && action === 'network' && (args.id == null || String(args.id).trim() === '')) {
+            data = { network: networkList(b, args).map((e) => ({ id: e.id, url: e.url, method: e.method, status: e.status ?? null, state: e.state, error: e.error || '' })) };
+          }
           return r || error(`未知 action: ${action}`);
         }
         default: return error(`未知 action: ${action}`);
@@ -544,9 +587,9 @@ async function runOne(ws, args, onActivity, opts) {
       const last = [...result.content].reverse().find((c) => c.type === 'text');
       if (last) last.text += tag;
     }
-    return withDialogNote(appendNote(result, sharedNote(dB, caller)), dB);
+    return withData(withDialogNote(appendNote(result, sharedNote(dB, caller)), dB));
   } catch (e) {
-    return withDialogNote(appendNote(error(`浏览器操作失败：${String(e?.message || e)}`), sharedNote(dB, caller)), dB);
+    return withData(withDialogNote(appendNote(error(`浏览器操作失败：${String(e?.message || e)}`), sharedNote(dB, caller)), dB));
   }
 }
 

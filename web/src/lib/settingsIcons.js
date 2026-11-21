@@ -65,6 +65,7 @@ export function agentMark(id, dark) {
     // Media Studio（2026-11-04 起接替 Gemini 的位置）：画框里四个种类色节点由一条细线串起（标由 studio-frontend 画）
     case 'studio': return `${BASE}assets/icons/studio-${dark ? 'light' : 'dark'}.svg`;
     case 'codex': return `${BASE}assets/icons/chatgpt-${dark ? 'light' : 'dark'}.svg`;
+    case 'agy': return BASE + 'assets/icons/antigravity.svg';
     case 'dimensio': return `${BASE}assets/icons/dimensio-${dark ? 'light' : 'dark'}.svg`;
     default: return '';
   }

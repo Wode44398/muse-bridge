@@ -43,24 +43,24 @@ function fakeModule(root, id, code) {
   writeFileSync(path.join(dir, 'server', 'index.mjs'), code);
 }
 
-test('基础版（三个扩展都不在）：只剩 Claude，其余提示未安装', () => {
+test('基础版（可选扩展都不在）：只剩 Claude，其余提示未安装', () => {
   const r = probe({ BRIDGE_MODULES_SKIP: 'all' });
   assert.deepEqual(r.enabled, ['claude']);
   const others = Object.keys(r.notes).filter((id) => id !== 'claude');
-  // codex 只在私有版 / 打包版提供（公开版的克隆里没有 modules/codex），在不在都对
-  assert.deepEqual(others.filter((id) => id !== 'codex'), ['studio', 'dimensio']);
-  assert.ok(others.every((id) => ['studio', 'codex', 'dimensio'].includes(id)));
+  // codex 与 agy 只在带对应目录或打包版提供，在不在都对
+  assert.deepEqual(others.filter((id) => id !== 'codex' && id !== 'agy'), ['studio', 'dimensio']);
+  assert.ok(others.every((id) => ['studio', 'codex', 'agy', 'dimensio'].includes(id)));
   for (const id of others) assert.match(r.notes[id], /^未安装「.+」扩展$/);
 });
 
-test('数据目录里残留的 agy 扩展（已下线）：不发现、不加载', () => {
+test('数据目录里不在目录表中的残留旧扩展：不发现、不加载', () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'bridge-modroot-'));
-  const marker = path.join(root, 'agy-loaded');
+  const marker = path.join(root, 'retired-loaded');
   try {
-    fakeModule(root, 'agy', `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, '1');\nexport const runnable = () => true;\n`);
+    fakeModule(root, 'retired-ext', `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, '1');\nexport const runnable = () => true;\n`);
     const r = probe({ BRIDGE_MODULES_BUILTIN: '0', BRIDGE_MODULES_DIR: root });
     assert.deepEqual(r.enabled, ['claude']);
-    assert.equal('agy' in r.notes, false);
+    assert.equal('retired-ext' in r.notes, false);
     assert.equal(existsSync(marker), false);
   } finally {
     rmSync(root, { recursive: true, force: true });

@@ -59,6 +59,7 @@ import { forgetHistory, readSessionHistory } from './sessions/history-cache.mjs'
 import { readSessionMessages, sessionMarkdown } from './sessions/history-parse.mjs';
 import { displayTitle, locateSession } from './sessions/lookup.mjs';
 import { readSessionTitle, sessionFingerprint, trimTitle } from './sessions/transcript-text.mjs';
+import { pluginOriginOf } from './sessions/plugin-origin.mjs';
 export { sessionFingerprint, trimTitle, readSessionTitle } from './sessions/transcript-text.mjs';
 export { sessionMarkdown, readSessionMessages } from './sessions/history-parse.mjs';
 export { _historyStats, readSessionHistory } from './sessions/history-cache.mjs';
@@ -326,7 +327,7 @@ export function registerSessionRoutes(router, { authOk, identify }) {
         thinking: workingIds.has(s.id),      // a turn is generating in this conversation
         pending: sessionQuestions.hasFor(s.id, ctx.key) || hasPeerHold(ctx.key, s.id), // an AskUserQuestion is waiting here（或跨会话消息等你确认）
         origin: routineSessions.has(s.id) ? 'routine' : pluginSessions.has(s.id) ? 'plugin' : (bridgeSessions.has(s.id) ? 'phone' : 'desktop'),
-        ...(pluginSessions.has(s.id) ? { originLabel: pluginSessions.get(s.id).label || pluginSessions.get(s.id).plugin } : {}),
+        ...(pluginSessions.has(s.id) ? pluginOriginOf(pluginSessions.get(s.id)) : {}),
       }));
     res.writeHead(200, { 'Content-Type': 'application/json' });
     // prefsLast：最近一次发送用的 model/effort/fast——前端「新对话」的选择器默认（跨设备）。

@@ -61,6 +61,9 @@
 {#if open}
   <div class="pop" bind:this={popEl} style={popStyle} role="listbox">
     {#each options as o, i (o.value)}
+      {#if o.group && o.group !== options[i - 1]?.group}
+        <div class="grp-hd">{o.group}</div>
+      {/if}
       <button class="opt" class:hi={i === hi} role="option" aria-selected={o.value === value}
               onpointerenter={() => (hi = i)} onclick={() => pick(o)}>
         <span class="tick" class:on={o.value === value} aria-hidden="true">
@@ -107,4 +110,5 @@
   .opt:active { background: var(--dsk-active); }
   .tick { width: 12px; color: var(--dsk-accent); opacity: 0; flex: none; display: inline-flex; }
   .tick.on { opacity: 1; }
+  .grp-hd { padding: 6px var(--dsk-s2) 2px; font-family: var(--dsk-font); font-size: 11px; font-weight: 600; color: var(--dsk-ink-3); letter-spacing: .2px; pointer-events: none; }
 </style>

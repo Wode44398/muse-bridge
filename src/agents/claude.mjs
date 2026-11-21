@@ -39,6 +39,7 @@ import { deferResult } from './claude/bg-hold.mjs';
 import { seatTurn, stageRun, detachRun, sealRun } from './claude/lifecycle.mjs';
 import { buildQueryOptions } from './claude/options.mjs';
 import { reportRunError } from './claude/errors.mjs';
+import { takePluginOrigin } from './claude/plugin-origin.mjs';
 export { hostNudge, USER_NUDGE, REGULAR_NUDGE, NO_SHELL_MSG, mediaNudge, identityNudge } from './claude/prompts.mjs';
 export { hasClaudeLogin, chromeEngineEnv } from './claude/chrome.mjs';
 export { withinDir, absPathViolation, sandboxViolation, SHELL_DENY, sharedExtRead, maskSharedRoot, readRootDecision, sandboxFence, makeSandboxPreToolUse } from './claude/sandbox.mjs';
@@ -58,6 +59,7 @@ export async function runClaudeChat(req, res, input) {
   if (await admitTurn(plan, req, res)) return;
 
   const run = createRun(plan);
+  takePluginOrigin(run, input);
   if (!seatTurn(run, res)) return;
   stageRun(run);
   try {
@@ -111,7 +113,10 @@ export async function runClaudeChat(req, res, input) {
         sid: run.gen.sessionId || '',
       }) : null;
       if (!reportTurnError(run, msg, { apiStatus, errored, hasText, limitKind, lim, failover })) {
-        if (deferResult(run, msg)) continue;
+        // 悬停 / 中间轮：这轮还不定局，但 CLI 正闲着等后台任务——顺手取一次上下文分布（不等它，控制请求与
+        // 续轮并发无碍）。否则常挂工作流的会话、悬停后被「结束等待」或手动停掉收尾的轮次永远拿不到分布，
+        // 用量弹层只剩粗填充单色条：分色条、展开箭头、自动压缩点滑块全没（11-19）。
+        if (deferResult(run, msg)) { captureContextUsage(run, msg).catch(() => {}); continue; }
         emitDone(run, msg);
         // ultracode 轮的 effort 实况（getSettings，同 getContextUsage 的时机：result 后、break 前）。
         await settleEffort(run);

@@ -121,8 +121,9 @@ export const SESSIONS_NUDGE = NUDGE.ask;
 // 「只在我要求时」档工具表里没有 own_initiative，这里也不能叫它去提议（进 appendText → 进 warmSig，切档冷起，属预期）。
 export function childNudge(link, policy = 'ask') {
   if (!link) return '';
-  const where = link.parentAgent === 'dimensio'
-    ? `父会话是 dimensio 会话（bridge 里的另一个 agent），看不到你这里的对话，只收得到你的消息和汇报${link.projectName ? `；你在项目「${link.projectName}」里干活` : ''}。这个目录里可能还有用户或别的会话在干活：只提交你自己改的文件、而且只在任务要求时才提交；不要 stash、reset 或切换分支。`
+  const foreign = { dimensio: 'dimensio', agy: 'Antigravity' }[link.parentAgent];
+  const where = foreign
+    ? `父会话是 ${foreign} 会话（bridge 里的另一个 agent），看不到你这里的对话，只收得到你的消息和汇报${link.projectName ? `；你在项目「${link.projectName}」里干活` : ''}。这个目录里可能还有用户或别的会话在干活：只提交你自己改的文件、而且只在任务要求时才提交；不要 stash、reset 或切换分支。`
     : link.projectId
     ? `父会话在别的项目里，你被派到项目「${link.projectName || link.projectId}」里干活：父会话那边的文件你看不到，需要的信息用 send_message 问父会话。${link.branch ? `你在这个项目自己的 git worktree 里（分支 ${link.branch}），提交落在这个分支上；不要 push，合并由用户决定。` : '这个目录里可能还有用户或别的会话在干活：只提交你自己改的文件、而且只在任务要求时才提交；不要 stash、reset 或切换分支。'}`
     : link.shared

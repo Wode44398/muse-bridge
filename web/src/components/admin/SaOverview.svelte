@@ -10,6 +10,7 @@
   const server = $derived(svc.server || {});
   const auto = $derived(svc.autostart || {});
   const gens = $derived(sa.gens.length ? sa.gens : (ov?.gens || []));
+  const agy = $derived(sa.agy || ov?.agy || null);
   const liveN = $derived(liveGens(gens).length);
   const svcUnavailable = $derived(!!svc.unavailable);
   // admin.ps1 出错（查不到）：不能当成「全停了」显示「已停止」，徽标写「状态未知」
@@ -39,7 +40,7 @@
 {#if !ov}
   <div class="sa-empty">{t('正在连接本机服务…')}</div>
 {:else}
-  <div class="tiles">
+  <div class="tiles" class:four={!!agy}>
     <div class="sa-card sa-stat">
       <div class="k">{t('活跃 Agent')}</div>
       <div class="v">{liveN}</div>
@@ -55,6 +56,21 @@
       <div class="v">{(ov.routinesRunning || []).length}</div>
       <div class="x">{t('调度器 30s tick')}</div>
     </div>
+    {#if agy}
+      <div class="sa-card sa-stat">
+        <div class="k">Antigravity</div>
+        <div class="v">{agy.running ? t('运行中') : agy.stoppedAfterCrashes ? t('已停止') : t('空闲')}</div>
+        <div class="x">
+          {#if agy.running}
+            {t('{live} 轮在跑 · {mounted} 挂载', { live: agy.activeTurns || 0, mounted: agy.mountedSessions || 0 })}
+          {:else if !agy.installed}
+            {t('未安装 CLI')}
+          {:else}
+            {t('按需自动拉起')}
+          {/if}
+        </div>
+      </div>
+    {/if}
   </div>
 
   <div class="two">
@@ -144,15 +160,17 @@
 
 <style>
   .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px; }
+  .tiles.four { grid-template-columns: repeat(4, 1fr); }
   .two { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; }
   .rings { display: flex; flex-direction: column; gap: 16px; padding: 14px 18px 18px; }
   .ring-row { display: flex; align-items: center; gap: 16px; }
   .pubrow { border-top: 1px solid var(--sa-sep); }
   .rl { font-size: 14.5px; font-weight: 600; }
-  @media (max-width: 1080px) { .two { grid-template-columns: 1fr; } }
-  /* 手机：三块瓦片仍并排（数字短），缩内距；进程行藏 PID / 自启明细，免得把状态挤没 */
+  @media (max-width: 1080px) { .two { grid-template-columns: 1fr; } .tiles.four { grid-template-columns: repeat(2, 1fr); } }
+  /* 手机：三块瓦片仍并排（数字短），四块折成两行两列；进程行藏 PID / 自启明细，免得把状态挤没 */
   @media (max-width: 699px) {
     .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .tiles.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .tiles .sa-stat { padding: 12px 13px; }
     .tiles :global(.sa-stat .v) { font-size: 24px; }
     .tiles :global(.sa-stat .k) { margin-bottom: 6px; line-height: 1.35; }

@@ -84,13 +84,15 @@ import { registerUiStateRoutes } from './routes/ui-state.mjs';
 import { registerDesktopHostRoutes } from './routes/desktop-host.mjs';
 import { registerHtmlSiteRoutes } from './runtime/html-site.mjs';
 import { installLoopMonitor, trackRequest } from './runtime/loop-monitor.mjs';
-import { loadModules, getModule } from './modules/registry.mjs';
-import { requestRestart } from './runtime/service-control.mjs';
+import { loadModules, getModule, moduleBusyRuns } from './modules/registry.mjs';
+import { requestRestart, setExtraLiveProbe } from './runtime/service-control.mjs';
+import { startLiveRunsFile } from './runtime/live-runs-file.mjs';
 import { kernel, bootPlugins } from './plugins/host.mjs';
 import { registerAll } from './plugins/discover.mjs';
 import { pluginOn } from './plugins/state.mjs';
 import { pathFilter, DOCK_PLUGIN_PATH } from './plugins/catalog.mjs';
 import { registerPluginRoutes } from './routes/plugins.mjs';
+import { validTicketRequest } from './plugins/tickets.mjs';
 import { warmClientFeed } from './runtime/client-release.mjs';
 import { PROGRAM_ROOT } from './runtime/paths.mjs';
 
@@ -172,6 +174,10 @@ initClaudeCli();
 // 功能扩展（Vertex / Codex / dimensio）在挂路由、判 agent 开关之前加载完：
 // agent 能不能跑先看所属扩展在不在。没装 / 加载失败的扩展只是不可用，不影响核心。见 modules/registry.mjs。
 await loadModules();
+// 「空闲时重启」/ 装更新还要等 gen 表外的轮（dimensio 的 harness 子进程里在跑的）——以前只数 Claude / Codex / agy，把 dimensio 腰斩
+setExtraLiveProbe(moduleBusyRuns);
+// 宿主机的空闲重启脚本（scripts/idle-restart.ps1）看的全服忙闲信号：<数据根>/live-runs.json（按 agent 分开计数）
+startLiveRunsFile(ROOT);
 // 模型中心 ⇄ Media Studio 对账：要等扩展加载完才拿得到 Studio 的桥（补删 / 补推 Studio 不在时欠下的，孤儿托管服务取消托管）
 try { reconcileStudio(); } catch (e) { console.error('[model-hub] Media Studio 对账失败：', e?.message || e); }
 // 老配置（管理员的 Claude 自定义服务、Media Studio 的「地址 + Key」服务）一次性并进模型中心；dimensio 的在它的扩展加载时已经并过
@@ -190,9 +196,8 @@ const identify = makeIdentify({ authOk, getCookie, bearerToken, queryToken, reso
 const identifySnap = makeIdentify({ authOk, getCookie, bearerToken, queryToken, resolveShare, resolveSnap });
 
 const router = createRouter();
-// 带插件票据、打到插件自己接口上的请求（下面两道 Origin 守卫对它放行）
-const pluginTicketReq = (req, url) => /^Plugin\s/i.test(String(req.headers.authorization || ''))
-  && (url.pathname.startsWith('/api/plugin/') || url.pathname === '/api/plugins/page-events');
+// 带着有效插件票据、打到插件自己接口上的请求（下面两道 Origin 守卫对它放行）
+const pluginTicketReq = validTicketRequest;
 
 // 公网预览（pv-<token>.<域>）的 Host 接管是插件（preview-host）：中间件带负的 order，插件启用得晚也照样排在下面的 CORS 之前
 // （见 plugins/catalog.mjs）。维护者部署的官网（根域 / www）不在核心里，由私有 overlay 的 registerRoutes 钩子挂（同样带负 order）；
@@ -206,7 +211,7 @@ router.use((req, res, url) => {
   if (url.pathname.startsWith('/api/')) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Bridge-UI');
     res.setHeader('Access-Control-Max-Age', '86400');
     // 防 admin 令牌经 ?token= 资源链接外泄到第三方 Referer / 隧道访问日志。
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -229,7 +234,7 @@ router.use((req, res, url) => {
     // 给 agent 用的接口（src/agent-api/）：只认请求头里的凭据、不认 cookie，没有 CSRF 面，跨域整个放开（不做上面的 Origin 检查）。
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Bridge-Key');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Bridge-Key, X-Bridge-UI');
     res.setHeader('Access-Control-Max-Age', '86400');
     res.setHeader('Referrer-Policy', 'no-referrer');
   }

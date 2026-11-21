@@ -52,7 +52,7 @@ import { SPARE_MS } from './warm.mjs';
 // 一轮开跑前把「这一轮怎么起」算清楚：入参归一、各项工具开不开、追加的系统提示、CLI 的环境变量与 settings、
 // 停放复用的签名。算出来的东西装成一个对象（plan）——之后不再变，开跑、接管、收尾都照它。
 // 返回 null = 这一轮不必往下走（预热不适用，或自定义模型已经不在了、错误帧已回）。
-export async function planTurn(req, res, { message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, research, suggest, compactFrac, source, fromPhone, narrow, plain, originDevice, fromComputer, origin, autoRetry, limitReplay, limitResume, restartResume = 0, globalMax, ctx, prewarm, family, permissionMode, permissionPolicy, shape }) {
+export async function planTurn(req, res, { message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, research, suggest, compactFrac, source, fromPhone, narrow, plain, originDevice, fromComputer, origin, autoRetry, limitReplay, limitResume, restartResume = 0, globalMax, ctx, prewarm, family, permissionMode, permissionPolicy, shape, pluginOrigin }) {
   ctx = ctx || { kind: 'admin', sandbox: false, cwd: VAULT, configDir: null, key: 'admin' };
   const snap = ctx.snap || null;   // 聊天快照轮：专属 MCP/提示词/更紧的工具面
   // 新会话预热（见 SPARE_MS）：没有消息、没有 SSE 接收方，建好 query 停在第一轮之前等人接管。
@@ -348,5 +348,6 @@ export async function planTurn(req, res, { message, sessionId, model, effort, ul
     permPolicy, turnPerm, allowSkip, wantSuggest, memberCaps, modelFor, billTo, wantUltracode, phoneFsOn, phoneControlOn, browserOn, termOn, wsToolsOn,
     turnLink, deviceOn, chromeOn, chromeSplit, ext, prOn, pIn, turnInput, effModel, plug, projPolicy, appendText, routed, customFast, engineEnv, seamless,
     servedAcct, usageAcct, effortOpts, pauseOnFlag, sdkSettings, coordTools, warmDigest, warmSig, sigDiff, lateGen,
+    pageChat: !!pluginOrigin,
   };
 }

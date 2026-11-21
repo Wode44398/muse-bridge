@@ -11,7 +11,7 @@
   //      只开了 dimensio）这一页就是根——onExit 传 null（harness 据此不摆「主页」行、返回键到底交还宿主），
   //      侧栏底部挂账户行（sidebarFoot，与 Claude 页侧栏底部同一套 UserMenu），没登录不挂页面、给登录。
   import { ui, me, singleMode, prefs, savePrefs, pickTheme, applyFollowSys } from '../lib/state.svelte.js';
-  import { closePage } from '../lib/pageMorph.js';
+  import { closePage, morphElapsed } from '../lib/pageMorph.js';
   import { apiUrl, mediaUrl, mediaFallbackUrl } from '../lib/server.js';
   import { api, authHeaders } from '../lib/api.js';
   import { openPreview } from '../lib/preview.svelte.js';
@@ -26,8 +26,7 @@
   import HarnessApp from '@hx/App.svelte';
   import { drag, dropZone, dropToast } from '../lib/dragdrop.svelte.js';
   import { WS_FILE, dtHasWsFiles, wsDescriptorFrom } from '../lib/fileDrag.js';
-  import HxFilesEmbed from './dock/HxFilesEmbed.svelte';
-  import MemoryPanel from './dock/MemoryPanel.svelte';
+  import HxWorkbench from './dock/HxWorkbench.svelte';
   import { uiView, onUiView, currentDraft } from '../lib/uiReport.js';
   import { setWorkspaceHost } from '@hx/lib/workspace-collab.svelte.ts';
   import ProjectPicker from './ProjectPicker.svelte';
@@ -71,7 +70,6 @@
     onView: onUiView,
     draft: () => rooted(currentDraft(), 'rel'),
     preview: (ws, rel) => openPreview({ origin: 'cloud', rel, ws }, 0, { host: 'app' }),
-    memoryView: hxMemory,
   });
   $effect(() => () => setWorkspaceHost(null));
 
@@ -157,11 +155,13 @@
   // 卡片从入口长出来的就是这块底），落幕再挂真应用、内容淡入（.hxroot > .shell 的 hx-arrive）。
   // 挂载时机：卡片长到九成（入场弹簧 ~300ms，此后几何只剩几个像素的收尾）就挂，挂载的那一下卡顿
   // 落在看不出来的尾巴上；转场提前结束则立即挂。
-  let armed = $state(!ui.morphing);
+  let armed = $state(!ui.morphing || morphElapsed() >= 300);
   $effect(() => {
     if (armed) return;
     if (!ui.morphing) { armed = true; return; }
-    const tid = setTimeout(() => { armed = true; }, 300);
+    const wait = Math.max(0, 300 - morphElapsed());
+    if (!wait) { armed = true; return; }
+    const tid = setTimeout(() => { armed = true; }, wait);
     return () => clearTimeout(tid);
   });
   const placeholderBg = $derived(themeBg(resolveMode(hxApp.appearance)));
@@ -349,16 +349,10 @@
   }
 </script>
 
-<!-- 工作台「文件」视图由宿主提供：bridge 的 FilesPanel + 面板内查看器（见 HxFilesEmbed） -->
-<!-- p.target = dimensio 侧的定位（产物卡点开）：{ seq, rel, open } —— 落到产物所在目录
-     并自动弹出该文件的面板内预览，与 Claude 分页的产物卡同一套体验。 -->
-{#snippet hxFiles(p)}
-  <HxFilesEmbed ws={p.ws} target={p.target} onExit={p.onExit} />
-{/snippet}
-
-<!-- 工作区「记忆」：bridge 的记忆卡，来源默认 dimensio；配色令牌换成 dimensio 的（跟它的明暗档） -->
-{#snippet hxMemory(p)}
-  <div class="hx-mem"><MemoryPanel ws={p.ws} agent="dimensio" theme={ui.pageChrome ? (ui.pageChrome.dark ? 'dark' : 'light') : ''} /></div>
+<!-- 工作区外壳由宿主提供：和 Claude / Codex / Antigravity 分页同一份（见 HxWorkbench）。
+     p = dimensio 交过来的 { dk 状态口子, panel 专属卡内容, icon 图标 } -->
+{#snippet hxDock(p)}
+  <HxWorkbench dk={p.dk} panel={p.panel} icon={p.icon} />
 {/snippet}
 
 <!-- 单 agent 模式：harness 侧栏底部的账户行（Claude 页侧栏底部那一行同款；菜单里没有「主页」）。
@@ -380,7 +374,7 @@
 {#if armed && ready}
 <HarnessApp
   embedded
-  filesView={hxFiles}
+  dockView={hxDock}
   {pickWorkspace}
   {chatDrop}
   onExit={single ? null : () => closePage(ui.screen)}
@@ -448,11 +442,6 @@
   .hx-um.dark {
     --text: #f8f8f6; --st-muted: #97958c; --st-hover: rgba(255,255,255,.05); --st-hair: rgba(255,255,255,.07); --st-menu: #2c2c2a;
     --st-menu-shadow: 0 0 0 1px rgba(255,255,255,.09),0 8px 24px rgba(0,0,0,.45),0 2px 6px rgba(0,0,0,.3); }
-  /* 记忆卡：bridge 令牌映射到 dimensio 的（.hxroot 里），明暗跟 dimensio 走 */
-  .hx-mem { position: absolute; inset: 0; display: flex; flex-direction: column; padding-top: 10px;
-    --muted: var(--text3); --serif: var(--text2); --divider: var(--border); --dk-line: var(--border); --crit: var(--err);
-    --hover: color-mix(in srgb, var(--text) 5%, transparent); --hover-strong: color-mix(in srgb, var(--text) 9%, transparent);
-    --q-card: var(--surface); --q-shadow: 0 0 0 1px var(--border); }
   /* 真应用挂上来时内容淡入（接在入场转场的底板后面，不是凭空蹦出来） */
   :global(.hxroot > .shell.embedded) { animation: hx-arrive var(--mo-base) var(--ea-fade) both; }
   @keyframes -global-hx-arrive { from { opacity: 0; } }

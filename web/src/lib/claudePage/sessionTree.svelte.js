@@ -24,7 +24,12 @@ export function createSessionTree(pc) {
   const isQuickSession = (s) => !!s && pc.quickIds.has(s.projectId);
   // 刚归档、服务端列表还没反映的先藏起来（乐观，lib/sessionArchive.svelte.js 的 hidden）
   const listed = $derived(pc.sessions.filter((s) => !arch.hidden[s.id]));
-  const starred = $derived(listed.filter((s) => isStarred(s.id) && !isQuickSession(s)));
+  const starredIds = $derived(new Set(listed.filter((s) => isStarred(s.id) && !isQuickSession(s)).map((s) => s.id)));
+  // 跟随（11-19 维护者要）：收藏了一条会话，它的子会话 / 讨论串整家跟进收藏区、挂在它下面，不再留在项目组里。
+  // parentId 是顶层祖先（侧栏只缩一级），所以只认「根被收藏」；中间一层被收藏时它自己进收藏区平铺，名下的照旧跟根走。
+  const follows = (s) => !!s.parentId && starredIds.has(s.parentId) && !isQuickSession(s);
+  const starredAll = $derived(nestFamilies(listed.filter((s) => starredIds.has(s.id) || follows(s))));
+  const starred = $derived(foldFamilies(starredAll));
   // 「临时对话」区：服务端按最近活动倒序（与普通会话按 mtime 合成一列）。折着时只放最近的 1 条（10-23 维护者：其余全收进
   // 「显示更多」，只剩 1 条也不直接放出来；只有文件的那种也一并折起），「显示更多」每次再放 PAGE_STEP 条；
   // 当前打开的那条折在后面时单独补在末尾。当前这张空白对话落在临时对话里（还没发第一条）时，区首补一行占位，看得出人在哪。
@@ -75,26 +80,58 @@ export function createSessionTree(pc) {
     pc.chosenQuick = id;
     pc.openNew(id);
   }
-  const grouped = $derived.by(() => {
+  // 组里全部行（一家子已排好、还没按折叠摘掉子行）；grouped = 按折叠摘过的，分页与侧栏都认它
+  const groupedAll = $derived.by(() => {
     const map = new Map(pc.realProjects.map((p) => [p.id, []]));
     // 默认工作空间认 def 标记（服务端保证 projects[0] 是它，但侧栏顺序可以被拖乱）
     const defId = (pc.realProjects.find((p) => p.def) || pc.realProjects[0])?.id ?? null;
     for (const s of listed) {
-      if (isStarred(s.id) || isQuickSession(s)) continue;
+      if (starredIds.has(s.id) || follows(s) || isQuickSession(s)) continue;
       const key = (s.projectId && map.has(s.projectId)) ? s.projectId : defId;
       if (key != null) map.get(key).push(s);
     }
     for (const [k, list] of map) map.set(k, nestFamilies(list));
     return map;
   });
+  const grouped = $derived.by(() => {
+    const map = new Map();
+    for (const [k, list] of groupedAll) map.set(k, foldFamilies(list));
+    return map;
+  });
   // 官方 Desktop 同款子会话树：服务端给子会话带 parentId（顶层祖先，见 src/runtime/desktop-lineage.mjs），
   // 同组里根在场就把子行紧贴在根下面缩进一级；一家子的位置＝其中最新那条的位置（列表本就按 mtime 倒序，
-  // 第一次碰到哪个成员就在哪落座）。根不在本组（被收藏走了 / 不在列表里）时子会话照常平铺。
-  const childIds = $derived.by(() => {
-    const out = new Set();
-    for (const list of grouped.values()) for (const s of list) if (s.parentId && list.some((x) => x.id === s.parentId)) out.add(s.id);
-    return out;
+  // 第一次碰到哪个成员就在哪落座）。根不在本组（不在列表里）时子会话照常平铺；根被收藏了，整家跟去收藏区。
+  // childIds = 挂在根下缩进的那些行；kidCount = 根 id → 名下几条（没摘折叠前数），父行的折叠钮显示它。
+  const famInfo = $derived.by(() => {
+    const childIds = new Set(), kidCount = new Map();
+    for (const list of [starredAll, ...groupedAll.values()]) {
+      const ids = new Set(list.map((s) => s.id));
+      for (const s of list) {
+        if (!s.parentId || !ids.has(s.parentId)) continue;
+        childIds.add(s.id);
+        kidCount.set(s.parentId, (kidCount.get(s.parentId) || 0) + 1);
+      }
+    }
+    return { childIds, kidCount };
   });
+  const childIds = $derived(famInfo.childIds);
+  const kidCount = $derived(famInfo.kidCount);
+
+  // —— 子会话 / 讨论串折叠（11-19 维护者要）：父行尾一枚 chevron，收起后只剩父行、chevron 旁带上名下条数。
+  // 折叠集按根 id 记 localStorage（同项目组折叠的写法）；收藏区与项目组共用一份。当前打开的那条子行
+  // 即使折着也留在父行下面，免得切过去的会话在侧栏里「消失」。 ——
+  const FAM_LS = 'bridge-claude-fam-collapsed';
+  let famFolded = $state((() => { try { return JSON.parse(localStorage.getItem(FAM_LS)) || {}; } catch { return {}; } })());
+  function toggleFamily(e, id) {
+    e.stopPropagation();
+    if (famFolded[id]) delete famFolded[id]; else famFolded[id] = true;
+    try { localStorage.setItem(FAM_LS, JSON.stringify(famFolded)); } catch {}
+  }
+  function foldFamilies(list) {
+    if (!list.some((s) => s.parentId && famFolded[s.parentId])) return list;
+    const ids = new Set(list.map((s) => s.id));
+    return list.filter((s) => !(s.parentId && famFolded[s.parentId] && ids.has(s.parentId) && s.id !== pc.curId));
+  }
   // 项目对话（运行档位 › 项目）：它的讨论串有在等你的（审批卡 / 提问），项目行行尾亮一个红点——讨论串行滚出视野也看得见
   const projectWaiting = $derived.by(() => {
     const out = new Set();
@@ -232,6 +269,9 @@ export function createSessionTree(pc) {
     openOrphan,
     get grouped() { return grouped; },
     get childIds() { return childIds; },
+    get kidCount() { return kidCount; },
+    get famFolded() { return famFolded; },
+    toggleFamily,
     get projectWaiting() { return projectWaiting; },
     get shown() { return shown; }, set shown(v) { shown = v; },
     get paged() { return paged; },

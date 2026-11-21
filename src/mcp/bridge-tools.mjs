@@ -3,7 +3,8 @@
 // 身份就是这一轮的身份（不需要密钥），参数与返回完全一样。
 //
 // 审批（runtime/permissions.mjs）：manual 与只读操作免审批；会改东西的操作在手动模式下照常弹卡。
-// 设备与媒体这两组不从这里给：会话里已经有专用的 mcp__device__ / mcp__media__ 工具（截图等大块二进制也不适合走文本）。
+// 设备组与媒体生成不从这里给：会话里已经有专用的 mcp__device__ / mcp__media__ 工具（截图等大块二进制也不适合走文本）。
+// 媒体的设置（media.settings*）与 studio.* 的查询 / 管理照常给（2026-11-18：Claude 要能像人一样操作 Media Studio）。
 
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
@@ -14,19 +15,24 @@ import { identityOfCtx } from '../agent-api/internal.mjs';
 import { manualToc, manualChapter, manualSearch, tocMarkdown, searchMarkdown } from '../agent-api/manual.mjs';
 import '../agent-api/ops/index.mjs';   // 登记操作（服务端里 http.mjs 也会 import，模块只求值一次）
 
-const EXCLUDED = (name) => name === 'devices.run' || name.startsWith('media.');
+// studio.generate 也不给：从这里调会按「外部 agent」放行，绕过 设置 › Media Studio 里对 Claude 的开关；Claude 用 mcp__media__generate_*
+const EXCLUDED = (name) => name === 'devices.run' || /^media\.(image|video|speech|music)$/.test(name) || name === 'studio.generate';
 const MAX_TEXT = 60_000;
 
 function opList() {
   return allOps().filter((op) => !EXCLUDED(op.name)).map((op) => `${op.name}（${op.title}${op.access === 'danger' ? '，⚠' : op.access === 'write' ? '，改动' : ''}）`).join('；');
 }
 
-export function makeBridgeMcp({ ctx, getGen }) {
+// instance：别的 agent 分页（agy 的工具中枢）复用这套工具时传它的名字——操作据此按「同机 agent 实例」对待：
+// 不能改 Media Studio 的放行设置、不能管 studio 服务（ops/media.mjs、ops/studio.mjs 的 deny），反馈也写明是谁报的。
+// 不传 = Claude 自己（进程内，照旧）。
+export function makeBridgeMcp({ ctx, getGen, instance = '' }) {
   const text = (t) => ({ content: [{ type: 'text', text: t.length > MAX_TEXT ? t.slice(0, MAX_TEXT) + '\n…（太长，已截断）' : t }] });
   const err = (t) => ({ content: [{ type: 'text', text: t }], isError: true });
   // 项目会话里 ctx.cwd 是项目目录；操作一律按身份的家目录算（与外部 agent 拿同一把密钥时看到的一致）
   const identity = identityOfCtx(ctx);
   const opCtx = identity ? contextFor(identity) : null;
+  if (opCtx && instance) opCtx.agentCaller = instance;
 
   return createSdkMcpServer({
     name: 'bridge',
@@ -70,6 +76,7 @@ export function makeBridgeMcp({ ctx, getGen }) {
             const g = getGen && getGen();
             const data = await callOp(opCtx, op, args || {}, {
               via: 'mcp', origin: PUBLIC_ORIGIN || '', identity, sessionId: (g && g.sessionId) || '',
+              ...(instance ? { instance } : {}),
               signal: g && g.abort ? g.abort.signal : null,
             });
             return text(JSON.stringify(data, null, 1));

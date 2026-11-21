@@ -636,6 +636,19 @@ function shutdownForSignal() {
   hard.unref();
   void Promise.allSettled(all.map((t) => t.stop())).finally(() => process.exit(0));
 }
+// 所有 dimensio 实例眼下在跑几轮（「空闲时重启」/ 桌面客户端等空闲装更新要数上它们——以前只数 bridge 进程里的轮，
+// dimensio 的轮跑在 harness 子进程里，没算进去，空闲重启照样把它腰斩）。问不到的实例按 1 轮算：宁可多等也别打断。
+export async function busyRuns() {
+  const all = [admin, ...tenants.values()].filter((t) => t.alive());
+  const counts = await Promise.all(all.map(async (t) => {
+    const r = await t.request('GET', '/api/busy');
+    if (!r.ok) return 1;
+    const runs = Array.isArray(r.json?.runs) ? r.json.runs.length : 0;
+    return runs || (r.json?.running ? 1 : 0);
+  }));
+  return counts.reduce((a, b) => a + b, 0);
+}
+
 // 控制台「重启服务」（runtime/service-control.mjs）用：同一套排空，但不替调用方退出进程。
 export function drainHarnesses() {
   shuttingDown = true;

@@ -65,7 +65,7 @@ export const dragOutReady = (src) => !!src && canDragOut() && (!!src.paths?.leng
 
 // 元素内部的操作控件（进度条/滑杆/输入框/按钮）上起拖：既不拖出也不让 HTML5 幽灵拖起来，
 // 把事件掐掉让它们照常收到 mousemove（NeoPlayer 的拖动进度条、Composer 的移除钮）。
-const CONTROL_SEL = 'input,textarea,select,[contenteditable=""],[contenteditable="true"],[role="slider"],.pl-track,.att-x,.v-c-att-x,.hist-x';
+const CONTROL_SEL = 'input,textarea,select,[contenteditable=""],[contenteditable="true"],[role="slider"],.pl-track,.att-x,.att-rm,.v-c-att-x,.hist-x';
 
 // Svelte action：`use:dragOut={() => src}`（也接受直接传 src）。挂载即 draggable，
 // dragstart 拦下 HTML5 拖拽换成原生文件拖拽；getSrc 返回 null＝这次不拖（上传中等），

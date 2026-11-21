@@ -1,7 +1,7 @@
 <!-- Claude 页·侧栏正文（常驻列与手机抽屉共用一份）：入口行、临时对话区、收藏、项目组、已归档视图、账户卡、行尾 ⋮ 菜单。 -->
 <script>
   import ClaudeCodeWordmark from '../ClaudeCodeWordmark.svelte';
-  import { session, pluginOn } from '../../../lib/state.svelte.js';
+  import { ui, session, pluginOn } from '../../../lib/state.svelte.js';
   import { updateInfo } from '../../../lib/updateStore.svelte.js';
   import { pendingNew } from '../../../lib/chat.svelte.js';
   import { isStarred, titleFor } from '../../../lib/library.svelte.js';
@@ -13,14 +13,17 @@
   import { arch, loadArchived, openArchivedView, closeArchivedView } from '../../../lib/sessionArchive.svelte.js';
   import { relTime } from '../../../lib/format.js';
   import { pluginUi, uiIcon } from '../../../lib/pluginUi.svelte.js';   // 插件的会话动作（ctx.ui.sessionAction）
+  import { appKey as appKeyOf, appIconUrl } from '../../../lib/pluginApps.svelte.js';
+  import { appTagOf } from '../../../lib/claudePage/sessionAppTag.js';
   import { usePage } from '../../../lib/claudePage/context.js';
 
   const pc = usePage();
-  const { onSessDragStart, onSideDragEnd, onRowDragOver, onRowDragLeave, onRowDrop, sessHoldDown, sessHoldMove, sessHoldUp, rowCtx, sessionDrop, pickSession, isQuickSession, quickWarnDays, openMenu, closeDrawer, openArchived, projName, onProjDragStart, projHoldDown, projHoldMove, projHoldUp, newInProject, toggleFold, serverRest, pendIn, showMore, showLess, slideOut, newChat, NEW_KBD, openSearch, IS_MAC, openProjectModal, newQuick, openRoutines, openOrphan, showMoreQuick, openBin, projListZone, onProjDragOver, onProjDragLeave, onProjDrop, toggleUserMenu, closeMenu, menuSession, saveQuick, keepQuick, doStar, doRename, doArchive, runSessionAction, doDelete, doUnarchive, doRenameProject, menuProject, doArchiveProject, doDeleteProject } = pc;
+  const { onSessDragStart, onSideDragEnd, onRowDragOver, onRowDragLeave, onRowDrop, sessHoldDown, sessHoldMove, sessHoldUp, rowCtx, sessionDrop, pickSession, isQuickSession, quickWarnDays, openMenu, closeDrawer, openArchived, projName, onProjDragStart, projHoldDown, projHoldMove, projHoldUp, newInProject, toggleFold, serverRest, pendIn, showMore, showLess, slideOut, newChat, NEW_KBD, openSearch, IS_MAC, openProjectModal, newQuick, openRoutines, openOrphan, showMoreQuick, openBin, projListZone, onProjDragOver, onProjDragLeave, onProjDrop, toggleUserMenu, closeMenu, menuSession, saveQuick, keepQuick, doStar, doRename, doArchive, runSessionAction, doDelete, doUnarchive, doRenameProject, menuProject, doArchiveProject, doDeleteProject, openSideApp } = pc;
 </script>
 {#snippet convRow(s, indent)}
+    {@const kn = pc.kidCount.get(s.id) || 0}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="d-row" class:cur={s.id === pc.curId} class:alt={!!pc.altId && s.id === pc.altId} class:indent class:child={indent && pc.childIds.has(s.id)} class:dnd-on={drag.overKey === 'chat:claude:' + s.id || pc.rowHover === s.id}
+    <div class="d-row" class:cur={s.id === pc.curId} class:alt={!!pc.altId && s.id === pc.altId} class:indent class:child={pc.childIds.has(s.id)} class:fam={!!kn} class:folded={!!kn && !!pc.famFolded[s.id]} class:dnd-on={drag.overKey === 'chat:claude:' + s.id || pc.rowHover === s.id}
       class:lifted={pc.liftedId === s.id} draggable={pc.mouseDnd ? 'true' : 'false'} ondragstart={(e) => onSessDragStart(e, s)} ondragend={onSideDragEnd}
       ondragover={(e) => onRowDragOver(e, s)} ondragleave={(e) => onRowDragLeave(e, s)} ondrop={(e) => onRowDrop(e, s)}
       onpointerdown={(e) => sessHoldDown(e, s)} onpointermove={sessHoldMove} onpointerup={sessHoldUp} onpointercancel={sessHoldUp}
@@ -32,6 +35,10 @@
         <!-- 项目对话：标题前一枚项目字形（协调者带两条讨论串）；讨论串在等你时行尾一个红点 -->
         {#if s.shape === 'project'}<svg class="d-pj" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-label={t('项目对话')}><circle cx="8" cy="3.9" r="1.85"/><circle cx="3.9" cy="12.1" r="1.85"/><circle cx="12.1" cy="12.1" r="1.85"/><path d="M7 5.5 4.9 10.4M9 5.5l2.1 4.9"/></svg>{/if}
         <span class="d-title" use:marquee><span class="d-scroll">{tr(titleFor(s.id, s.title)) || t('（无标题）')}</span></span>
+        {#if s.app}
+          {@const appTag = appTagOf(s)}
+          {#if appTag}<span class="d-apptag" title={t('由插件应用「{app}」开的对话', { app: appTag })}>{appTag}</span>{/if}
+        {/if}
         {#if pc.projectWaiting.has(s.id)}<span class="d-pwait" title={t('有讨论串在等你')} aria-label={t('有讨论串在等你')}></span>{/if}
         <!-- 临时对话快到清理时：行尾一枚「剩 n 天」——话写全，别让人读成「n 天前」（触屏没有悬停提示；悬停时让位给 ⋮） -->
         {#if isQuickSession(s)}
@@ -39,6 +46,15 @@
           {#if qd != null}<span class="d-exp" title={t('{n} 天后清理', { n: qd })}>{qd ? t('剩 {n} 天', { n: qd }) : t('今天清理')}</span>{/if}
         {/if}
       </button>
+      <!-- 名下有子会话 / 讨论串：行尾一枚折叠钮（收起时带上条数，常显；展开时同 ⋮ 悬停才浮现） -->
+      {#if kn}
+        {@const fo = !!pc.famFolded[s.id]}
+        <button class="d-kids" class:closed={fo} aria-expanded={!fo} title={fo ? t('展开子会话（{n}）', { n: kn }) : t('收起子会话')}
+          aria-label={fo ? t('展开子会话（{n}）', { n: kn }) : t('收起子会话')} onclick={(e) => pc.toggleFamily(e, s.id)}>
+          {#if fo}<span class="d-kn">{kn}</span>{/if}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      {/if}
       <button class="d-more" aria-label={t('更多')} onclick={(e) => openMenu(e, 'session', s.id)}><span class="ic">&#xe062;</span></button>
     </div>
   {/snippet}
@@ -128,6 +144,17 @@
         <circle cx="8" cy="8" r="5.5"/><line class="hh" x1="8" y1="8" x2="10" y2="9"/><line class="mh" x1="8" y1="8" x2="8" y2="5.5"/>
       </svg>
     </span>{t('定时触发')}</button>{/if}
+  {#if pc.sideApps.length}
+    <!-- 应用：插件固定到 Claude 侧栏的应用，图标 + 名字；一个都没有整组不出 -->
+    <div class="d-sec">{tc('插件', '应用')}</div>
+    {#each pc.sideApps as a (a.key || appKeyOf(a))}
+      {@const k = a.key || appKeyOf(a)}
+      {@const src = appIconUrl(a, ui.theme === 'light')}
+      <button class="d-item" class:cur={pc.sideApp === k} onclick={() => openSideApp(a)}>
+        <span class="d-lead d-app" aria-hidden="true">{#if src && !pc.sideIconBad[k]}<img src={src} alt="" draggable="false" onerror={() => (pc.sideIconBad = { ...pc.sideIconBad, [k]: true })} />{:else}{@html uiIcon(a.icon?.name)}{/if}</span>
+        <span class="d-app-t">{a.title || a.id}</span></button>
+    {/each}
+  {/if}
   {#if arch.view}
     <!-- 已归档视图（官方 Sessions 页的 Archived 标签 / 侧栏 Status=Archived）：抽屉内整页切换，平铺、按归档时间倒序，
          每行能打开看、取消归档、删除；底部「显示更多」走服务端分页。宽屏常驻侧栏与手机抽屉同一份。 -->
@@ -290,6 +317,12 @@
   /* 新对话 / 新建临时对话：自绘 16px 描边图标（与定时触发的钟同一套尺寸） */
   .d-lead.svg { display: flex; align-items: center; justify-content: center; }
   .d-lead.svg svg { width: 16px; height: 16px; }
+  /* 侧栏应用：图片图标按 16px 圆角小方块放（同字形图标的视觉大小），内置字形是 svg */
+  .d-lead.d-app { display: flex; align-items: center; justify-content: center; }
+  .d-lead.d-app img { width: 18px; height: 18px; object-fit: contain; border-radius: 4px; }
+  .d-lead.d-app :global(svg) { width: 16px; height: 16px; }
+  .d-app-t { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .d-item.cur { background: var(--hover); color: var(--text); }
   /* 临时对话快到清理：行尾一枚「n 天」，悬停时让位给 ⋮ */
   .d-exp { flex: none; margin-left: auto; padding: 0 4px 0 6px; font-size: 12px; color: var(--warn); font-variant-numeric: tabular-nums; transition: opacity .12s ease; }
   @media (hover: hover) { .d-row:hover .d-exp, .d-row:focus-within .d-exp { opacity: 0; } }
@@ -298,6 +331,12 @@
   .d-row.cur .d-pj { color: var(--text); }
   .d-pwait { flex: none; width: 7px; height: 7px; margin: 0 6px 0 auto; border-radius: 50%; background: var(--warn); transition: opacity .12s ease; }
   @media (hover: hover) { .d-row:hover .d-pwait, .d-row:focus-within .d-pwait { opacity: 0; } }
+  /* 插件应用开的对话：行尾一枚应用名小标签（淡底、不抢标题），悬停时让位给 ⋮；后面还有等你点 / 剩 n 天时紧挨着排。
+     类名别和「应用」组的图标框 .d-lead.d-app 共用，否则这里的淡底、内边距和 margin auto 会落到图标框上 */
+  .d-apptag { flex: none; max-width: 42%; margin: 0 4px 0 auto; padding: 0 6px; height: 18px; line-height: 18px; border-radius: 5px;
+    font-size: 11px; color: var(--muted); background: color-mix(in srgb, var(--text) 8%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: opacity .12s ease; }
+  .d-apptag ~ .d-pwait, .d-apptag ~ .d-exp { margin-left: 2px; }
+  @media (hover: hover) { .d-row:hover .d-apptag, .d-row:focus-within .d-apptag { opacity: 0; } }
 
   .d-lead.ck line { transform-box: view-box; transform-origin: 8px 8px;
     transition: rotate .6s cubic-bezier(.3, .9, .4, 1); }
@@ -329,6 +368,8 @@
   /* 子会话（官方 Desktop 子会话树）：再缩 18px，左侧一根细竖线对齐父行标题起点（28+8=36px）；
      相邻子行的竖线首尾相接成一条（行间 .5px 缝用 -1px 盖住）。 */
   .d-row.indent.child { margin-left: 46px; }
+  /* 收藏区的子行（根被收藏、一家子跟过来）：那里没有 28px 缩进带，只缩 18px，竖线同样对齐父行标题起点（8px） */
+  .d-row.child:not(.indent) { margin-left: 18px; }
   .d-row.child::before { content: ''; position: absolute; left: -10px; top: -1px; bottom: -1px; width: 1px; background: var(--divider); pointer-events: none; }
   .d-recent { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 8px 2px 8px 8px; border-radius: 8px; text-align: left; color: var(--serif); font-size: 14px; }
   .d-recent:active { background: var(--hover); }
@@ -358,14 +399,25 @@
   /* 项目折叠 chevron：展开=▾ 收起=▸（旋转过渡）；桌面沿用「悬停才浮现」，但收起态常显（不然看不出折了） */
   .d-fold svg { width: 15px; height: 15px; transition: transform .16s ease; }
   .d-fold.closed svg { transform: rotate(-90deg); }
+  /* 子会话折叠钮：比 ⋮ 窄一档的胶囊，收起时 chevron 转成 ▸、前面带名下条数 */
+  .d-kids { flex: none; height: 24px; min-width: 24px; padding: 0 4px; margin-right: 2px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; gap: 1px;
+    color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; transition: color .12s ease, opacity .12s ease, right .12s ease; }
+  .d-kids:active { background: var(--hover-strong); }
+  .d-kids svg { width: 14px; height: 14px; transition: transform .16s ease; }
+  .d-kids.closed svg { transform: rotate(-90deg); }
+  .d-kn { line-height: 1; }
   /* 指针环境（桌面）：行悬停浮出底色，⋮ 平时隐身、行悬停/键盘聚焦才浮现，悬停 ⋮ 文字提亮，
      项目图标盒盖展开（ANIM 轴 0→100）——与 claude.ai 同款 */
   @media (hover: hover) {
     .d-item:hover { background: var(--hover); color: var(--text); }
     .d-item:hover .ck .hh { rotate: 30deg; }
     .d-item:hover .ck .mh { rotate: 390deg; }
-    .d-row:hover, .d-row:focus-within { background: var(--hover); }
-    .d-row:hover .d-title, .d-row:focus-within .d-title { color: var(--text); }
+    /* 底色只认键盘聚焦（:focus-visible）：鼠标点过的按钮会一直留着焦点，用 :focus-within 时
+       上一次点的那行一直浅浅亮着，和选中行同时亮两条，像高亮错了位（11-19 录屏） */
+    .d-row:hover, .d-row:has(:focus-visible) { background: var(--hover); }
+    /* 当前会话悬停时仍是选中那一档：上面那条排在 .cur 之后会盖掉它，刚点开、指针还停在上面的那行就退成浅一档 */
+    .d-row.cur:hover, .d-row.cur:has(:focus-visible) { background: var(--hover-strong); }
+    .d-row:hover .d-title, .d-row:has(:focus-visible) .d-title { color: var(--text); }
     .d-row.proj:hover .pj { --ca-anim: 100; }
     .d-more { opacity: 0; pointer-events: none; }
     .d-row:hover .d-more, .d-row:focus-within .d-more { opacity: 1; pointer-events: auto; }
@@ -379,6 +431,21 @@
       -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--mq-lf, 0px), #000 calc(100% - 44px), transparent calc(100% - 20px));
     }
     .d-title:global([data-run]) { --mq-lf: 12px; }   /* 左缘渐隐只在开滚后出现（官方行为） */
+    /* 子会话折叠钮：同 ⋮ 一样绝对定位悬浮、不占排版位。展开着＝悬停才浮现，贴在 ⋮ 左边；
+       收起着＝常显（不然看不出折了），平时贴行尾、悬停时让出 ⋮ 的位子往左挪。
+       标题让位：收起的行常年给它留 36px；悬停时跑马灯的渐隐区相应加宽（--mq-fade 同步给 lib/marquee.js 算滚动终点）。 */
+    .d-kids { position: absolute; top: 50%; transform: translateY(-50%); right: 30px; margin-right: 0; opacity: 0; pointer-events: none; }
+    .d-row:hover .d-kids, .d-row:focus-within .d-kids, .d-kids.closed { opacity: 1; pointer-events: auto; }
+    .d-kids.closed { right: 2px; }
+    .d-row:hover .d-kids.closed, .d-row:focus-within .d-kids.closed { right: 30px; }
+    .d-kids:hover { color: var(--text); }
+    .d-row.folded .d-recent { padding-right: 36px; }
+    .d-row.fam .d-title { --mq-fade: 72px; }
+    .d-row.folded .d-title { --mq-fade: 48px; }
+    .d-row.fam:hover .d-title:global([data-ov]), .d-row.fam:focus-within .d-title:global([data-ov]) {
+      mask-image: linear-gradient(to right, transparent, #000 var(--mq-lf, 0px), #000 calc(100% - var(--mq-fade)), transparent calc(100% - var(--mq-fade) + 24px));
+      -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--mq-lf, 0px), #000 calc(100% - var(--mq-fade)), transparent calc(100% - var(--mq-fade) + 24px));
+    }
   }
   .rowmenu-bd { position: fixed; inset: 0; z-index: 55; }
   .rowmenu { position: fixed; z-index: 56; min-width: 176px; max-width: 260px; max-height: 292px; overflow-y: auto; padding: 5px; background: var(--q-card); border-radius: 12px; box-shadow: var(--q-shadow); animation: rmPop .14s ease; }

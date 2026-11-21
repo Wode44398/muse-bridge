@@ -65,6 +65,9 @@ export function notePermMode(run, mode, trigger) {
   if (!mode || (mode === run.runPermMode && trigger !== 'init')) return;
   const from = run.runPermMode;
   run.runPermMode = mode;
+  // Claude 自己进的计划模式（CLI 报来的，不是用户选的）记下来路：从绕过权限进去的，出计划时不挂审批卡（permissions.mjs planGate）
+  if (mode === 'plan') { if (from !== 'plan') run.planFrom = trigger === 'cli' ? from : null; }
+  else run.planFrom = null;
   const sidM = run.gen.sessionId;
   if (!sidM || snap) return;
   if (permPolicy !== 'host') noteSessionMode(ctx, sidM, mode, { ifUnset: trigger === 'init' });
@@ -82,6 +85,7 @@ export function armPermGate(run) {
     ctx, policy: permPolicy, send: (ev) => run.send(ev), sid: () => run.gen.sessionId, currentMode: () => run.runPermMode,
     guard: ctx.sandbox ? (name, input) => ((!ctx.shell && (name === 'Bash' || name === 'PowerShell')) ? NO_SHELL_MSG : sandboxFence(ctx, name, input)) : null,
     onInterrupt: () => { run.softStopping = true; },
+    planFrom: () => run.planFrom || null,
     // 卡片作答算一次活动（挂起看门狗的静默计时从这里重新算，见 bgTick）
     onActivity: () => { run.lastMsgAt = Date.now(); },
     // 取值函数：停放复用 / 预热接管 / 挂起接力会把 limitReplay 换成眼下这条请求的（见 warmTake / handoff）

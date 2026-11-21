@@ -1,0 +1,149 @@
+/* Claude 输入栏右下角的发送 / 停止键（SendKey.svelte）。造型由 lib/claudeSendKey.js 切类名和 data-ic，这里只写「每个造型长什么样、怎么过渡过去」。
+   全是运行时类名，所以放成普通样式表而不是组件里的 scoped 样式；选择器都收在 .csk 底下。
+   设计稿与逐帧说明：bridge前端设计/claude-send-key-demo。
+
+   墨的液面是一个圆：--csk-iy 圆心高度、--csk-ir 半径，单位都是「键高」。注册成数值才能过渡。
+   裁剪用的是 clip-path，但整层只有 32×32、每次过渡 0.3 秒左右，重光栅的开销可以忽略（大面积图层不要照抄这个做法）。 */
+@property --csk-iy { syntax: "<number>"; inherits: true; initial-value: 1.66; }
+@property --csk-ir { syntax: "<number>"; inherits: true; initial-value: .62; }
+
+.csk {
+  --K: var(--csk-k, 1);                                       /* 慢放倍数：调试时在祖先上设 --csk-k */
+  --csk-h: 32px; --csk-r: 8px;
+  --csk-fill: var(--text); --csk-on: var(--bg);
+  --csk-ghost: color-mix(in srgb, var(--text) 5%, transparent);
+  --csk-soft: color-mix(in srgb, var(--text) 10%, transparent);
+  --csk-soft-hover: color-mix(in srgb, var(--text) 15%, transparent);
+  --csk-dim: color-mix(in srgb, var(--text) 40%, var(--card));   /* 要不透明：八根线叠在支点上，半透明会叠出一个亮点 */
+  --csk-clay: var(--coral, #d97757);
+  --e-out: cubic-bezier(.165, .84, .44, 1);                   /* 进场、到位 */
+  --e-in: cubic-bezier(.5, 0, .85, .45);                      /* 退场：比进场快，走得干脆 */
+  --e-snap: cubic-bezier(.32, .72, 0, 1);                     /* 挪位置 */
+  --e-conv: cubic-bezier(.55, 0, .25, 1);                     /* 墨汇成一点：先慢后快再收住 */
+  --e-rise: cubic-bezier(.4, .1, .3, 1);                      /* 墨漫上来 */
+  /* 两条回弹曲线（阻尼比 .42 / .68 的弹簧取样）：松手、长出来时用，幅度很小 */
+  --e-spring: linear(0, 0.098, 0.329, 0.607, 0.865, 1.063, 1.184, 1.232, 1.221, 1.173, 1.109, 1.047, 0.996, 0.963, 0.947, 0.947, 0.956, 0.97, 0.985, 0.998, 1.007, 1.012, 1.013, 1.011, 1.008, 1.004, 1.001, 0.999, 0.997, 0.997, 0.997, 0.998, 1);
+  --e-soft: linear(0, 0.064, 0.212, 0.391, 0.568, 0.723, 0.846, 0.937, 0.997, 1.033, 1.05, 1.054, 1.05, 1.042, 1.032, 1.023, 1.014, 1.008, 1.003, 1, 0.998, 0.997, 0.997, 0.997, 1);
+  /* 键在 38 高的工具条里上下各留 3（触屏 1）；右边补到一样的距离，键到卡片右边和下边就等宽 */
+  position: relative; display: flex; align-items: center; flex: none; height: 38px; margin-left: 2px; margin-right: 1px; cursor: default;
+}
+.csk[data-touch] { --csk-h: 36px; --csk-r: 10px; margin-right: -1px; }
+@supports not (transition-timing-function: linear(0, 1)) { .csk { --e-spring: cubic-bezier(.34, 1.56, .64, 1); --e-soft: cubic-bezier(.34, 1.3, .64, 1); } }
+
+/* 两个槽：收的时候等键先退掉再合上 */
+.csk-slot { display: flex; justify-content: flex-end; flex: none; width: 0; margin-right: 0;
+  transition: width calc(var(--K) * 180ms) var(--e-snap) calc(var(--K) * 50ms), margin-right calc(var(--K) * 180ms) var(--e-snap) calc(var(--K) * 50ms); }
+.csk-slot.on { width: var(--csk-h); transition: width calc(var(--K) * 240ms) var(--e-snap), margin-right calc(var(--K) * 240ms) var(--e-snap); }
+.csk[data-m="steer"] .csk-slot-stop { margin-right: 6px; }
+
+.csk-key { position: relative; flex: none; width: var(--csk-h); height: var(--csk-h); padding: 0; border: 0; background: none; border-radius: var(--csk-r); outline: none; cursor: pointer;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  /* 图标的时间参数：各个造型自己改这几个量 */
+  --py: 10px; --pd: 180ms; --pe: var(--e-out); --pdl: 0ms; --rd: 160ms; --re: var(--e-out); --stg: 0ms;
+  transform: scale(.7); opacity: 0; pointer-events: none;
+  transition: transform calc(var(--K) * 110ms) var(--e-in), opacity calc(var(--K) * 110ms) var(--e-in), box-shadow calc(var(--K) * 120ms) var(--e-out); }
+.csk-slot.on .csk-key { transform: none; opacity: 1; pointer-events: auto;
+  transition: transform calc(var(--K) * 380ms) var(--e-soft), opacity calc(var(--K) * 120ms) var(--e-out), box-shadow calc(var(--K) * 120ms) var(--e-out); }
+.csk-key.dis { cursor: default; }
+.csk-key::after { content: ""; position: absolute; inset: -4px; }                  /* 手指的落点比看到的大一圈 */
+.csk-key:focus-visible { box-shadow: 0 0 0 2px var(--card), 0 0 0 3.5px var(--text); }
+/* 按下：70 毫秒缩到位；松手：带一点回弹弹回来 */
+.csk-body { position: absolute; inset: 0; border-radius: inherit; transition: transform calc(var(--K) * 420ms) var(--e-spring); }
+.csk-key:not(.dis):active .csk-body, .csk-key.press .csk-body { transform: scale(.93); transition: transform calc(var(--K) * 70ms) var(--e-out); }
+
+.csk-face { position: absolute; inset: 0; border-radius: inherit; display: grid; place-items: center; pointer-events: none; }
+.csk-face.base { background: var(--csk-ghost); color: var(--csk-dim); transition: background-color calc(var(--K) * 200ms) var(--e-out), color calc(var(--K) * 180ms) var(--e-out); }
+.csk-key.soft .csk-face.base { background: var(--csk-soft); color: var(--text); }
+.csk-key.mute .csk-face.base { color: var(--muted); }
+.csk-key.bloom .csk-face.base { color: var(--csk-clay); transition: none; }        /* 换色发生在墨底下，墨退开时已经是陶土色 */
+.csk-key[data-ic="square"] .csk-face.base { transition: background-color calc(var(--K) * 200ms) var(--e-out), color calc(var(--K) * 150ms) var(--e-out) calc(var(--K) * 100ms); }   /* 线先以陶土色收回去，方块长出来时才褪成墨色 */
+.csk-face.ink { background: var(--csk-fill); color: var(--csk-on);
+  --csk-iy: 1.66; --csk-ir: .62;                                                    /* 空：圆整个在键底下面 */
+  clip-path: circle(calc(var(--csk-ir) * var(--csk-h)) at 50% calc(var(--csk-iy) * var(--csk-h)));
+  transition: --csk-iy calc(var(--K) * 200ms) var(--e-in), --csk-ir calc(var(--K) * 200ms) var(--e-in), opacity calc(var(--K) * 160ms) var(--e-out), background-color calc(var(--K) * 60ms) var(--e-out); }
+/* 满：圆顶从键底鼓出来往上走，边走边变宽，最后漫过上面两个角 */
+.csk-key.armed .csk-face.ink { --csk-iy: .72; --csk-ir: 1;
+  transition: --csk-iy calc(var(--K) * 380ms) var(--e-rise), --csk-ir calc(var(--K) * 380ms) var(--e-rise), opacity calc(var(--K) * 200ms) var(--e-out), background-color calc(var(--K) * 60ms) var(--e-out); }
+/* 附件在传：液面停在进度的位置（--csk-lv 0–1），颜色先淡着；不知道进度时慢慢爬到一半等着 */
+.csk-key.up .csk-face.ink { --csk-ir: .8; --csk-iy: calc(1.8 - var(--csk-lv, 0)); opacity: .5;
+  transition: --csk-iy calc(var(--K) * 320ms) var(--e-out), --csk-ir calc(var(--K) * 320ms) var(--e-out), opacity calc(var(--K) * 200ms) var(--e-out); }
+.csk-key.up.indet .csk-face.ink { transition: --csk-iy calc(var(--K) * 2600ms) var(--e-out), --csk-ir calc(var(--K) * 320ms) var(--e-out), opacity calc(var(--K) * 200ms) var(--e-out); }
+/* 发出去：墨往正中汇成一点，那一点就是星芒的心；收到一半开始化开，最后剩下的不是一个黑点 */
+.csk-key.conv .csk-face.ink { --csk-iy: .5; --csk-ir: .02; opacity: 0;
+  transition: --csk-iy calc(var(--K) * 240ms) var(--e-conv), --csk-ir calc(var(--K) * 240ms) var(--e-conv), opacity calc(var(--K) * 90ms) linear calc(var(--K) * 130ms); }
+
+/* 图标：八根从同一点发出的线 + 支点上的一个圆点。箭头用三根（支点在箭尖），星芒八根全开（支点在正中），方块从圆点长出来 */
+.csk-ic { width: 20px; height: 20px; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; }
+.csk-piv { transform: translate(10px, var(--py)); transition: transform calc(var(--K) * var(--pd)) var(--pe) calc(var(--K) * var(--pdl)); }
+.csk-tw { transform: rotate(var(--csk-tw, 0deg)) scale(var(--csk-ts, 1)); }        /* 星芒那两下是一格一格跳的，不过渡——终端里它就是这么走的 */
+.csk-ray { --l: 0; --o: 0; transform: rotate(var(--a)); stroke-dasharray: var(--l) 40;
+  transition: stroke-dasharray calc(var(--K) * var(--rd)) var(--re) calc(var(--K) * var(--o) * var(--stg)); }
+.csk-ray:is(.r2, .r6) { --o: 1; } .csk-ray:is(.r3, .r5) { --o: 2; } .csk-ray.r4 { --o: 3; }   /* 从箭头那三根往两边、往下依次长出来 */
+.csk-hub { fill: currentColor; stroke: none; }
+
+.csk-key[data-ic="arrow"] { --py: 4.5px; }
+.csk-key[data-ic="arrow"] .r0 { --l: 11; }
+.csk-key[data-ic="arrow"] :is(.r1, .r7) { --l: 6.7; }
+/* 从方块 / 圆点长回箭头：圆点先升上去拉出箭杆，箭头两撇晚 90 毫秒甩出来 */
+.csk-key.grow { --pd: 260ms; --pe: var(--e-snap); --pdl: 40ms; --rd: 240ms; --re: var(--e-soft); --stg: 30ms; }
+.csk-key.grow .csk-ray.r0 { --o: 1; }
+.csk-key.grow .csk-ray:is(.r1, .r7) { --o: 4; }
+/* 悬停：箭尖往上探一点、箭杆跟着变长——不是整个图标平移 */
+@media (hover: hover) {
+  .csk-key.armed[data-ic="arrow"]:not(.dis):hover { --py: 3.7px; --pd: 120ms; --rd: 120ms; }
+  .csk-key.armed[data-ic="arrow"]:not(.dis):hover .r0 { --l: 11.8; }
+  .csk-key.armed:not(.dis):hover .csk-face.ink { background: color-mix(in srgb, var(--csk-fill) 86%, var(--card)); }
+  .csk-key.soft:not(.bloom):not(.dis):hover .csk-face.base { background: var(--csk-soft-hover); }
+}
+/* 按下：箭尖往回缩一点，像把弓拉开；松手才放出去 */
+.csk-key.armed[data-ic="arrow"]:not(.dis):active, .csk-key.armed[data-ic="arrow"].press { --py: 5.4px; --pd: 70ms; --rd: 70ms; }
+.csk-key.armed[data-ic="arrow"]:not(.dis):active .r0, .csk-key.armed[data-ic="arrow"].press .r0 { --l: 10.1; }
+
+/* 稍后发送：箭头矮下去，顶上画出一道横线（从中间往两边） */
+.csk-key[data-ic="queue"] { --py: 6.8px; --pd: 260ms; --pe: var(--e-soft); }
+.csk-key[data-ic="queue"] .r0 { --l: 9.2; }
+.csk-key[data-ic="queue"] :is(.r1, .r7) { --l: 6.2; }
+.csk-bar { transform-origin: 10px 3.6px; transform: scaleX(0); opacity: 0;
+  transition: transform calc(var(--K) * 100ms) var(--e-in), opacity calc(var(--K) * 40ms) linear calc(var(--K) * 70ms); }
+.csk-key[data-ic="queue"] .csk-bar { transform: none; opacity: 1; transition: transform calc(var(--K) * 260ms) var(--e-soft), opacity calc(var(--K) * 40ms) linear; }
+.csk-key[data-ic="queue"].fresh .csk-bar { transition: transform calc(var(--K) * 200ms) var(--e-out) calc(var(--K) * 60ms), opacity calc(var(--K) * 40ms) linear calc(var(--K) * 60ms); }
+/* 停靠：箭头顶上去碰到横线，横线被顶起一点，一起弹回来 */
+.csk-key.dock { --py: 5.4px; --pd: 90ms; --pe: var(--e-in); }
+.csk-key[data-ic="queue"].dock .csk-bar { transform: translateY(-.9px); transition: transform calc(var(--K) * 90ms) var(--e-in); }
+
+/* 星芒：支点滑到正中，八根线依次长出来，长短不齐（手画的），每根到头带一点回弹 */
+.csk-key[data-ic="spark"] { --pd: 260ms; --pe: var(--e-snap); --rd: 340ms; --re: var(--e-soft); --stg: 26ms; }
+.csk-key[data-ic="spark"] .r0 { --l: 6.6; } .csk-key[data-ic="spark"] .r1 { --l: 5.4; } .csk-key[data-ic="spark"] .r2 { --l: 6.3; } .csk-key[data-ic="spark"] .r3 { --l: 5.2; }
+.csk-key[data-ic="spark"] .r4 { --l: 6.6; } .csk-key[data-ic="spark"] .r5 { --l: 5.6; } .csk-key[data-ic="spark"] .r6 { --l: 6.2; } .csk-key[data-ic="spark"] .r7 { --l: 5.3; }
+/* 方块 / 圆点：线收回支点（退场，快），方块从圆点长出来 */
+.csk-key:is([data-ic="square"], [data-ic="dot"]) { --pd: 140ms; --rd: 110ms; --re: var(--e-in); }
+.csk-sq { fill: currentColor; stroke: none; transform-origin: 10px 10px; transform: scale(.18); opacity: 0;
+  transition: transform calc(var(--K) * 110ms) var(--e-in), opacity calc(var(--K) * 30ms) linear calc(var(--K) * 90ms); }
+.csk-key[data-ic="square"] .csk-sq { transform: none; opacity: 1;
+  transition: transform calc(var(--K) * 320ms) var(--e-soft) calc(var(--K) * 50ms), opacity calc(var(--K) * 30ms) linear calc(var(--K) * 50ms); }
+/* 等待（同步中 / 正在停止）：圆点 → 小十字 → 八芒，来回呼吸，对应终端那组 · ✢ ✳ ✶ ✻ ✽ */
+.csk-key[data-ic^="w"] { --rd: 130ms; --re: linear; }
+.csk-key[data-ic="w1"] :is(.r0, .r2, .r4, .r6) { --l: 3.2; }
+.csk-key[data-ic="w2"] .csk-ray { --l: 4.3; }
+.csk-key[data-ic="w3"] :is(.r0, .r2, .r4, .r6) { --l: 6.2; } .csk-key[data-ic="w3"] :is(.r1, .r3, .r5, .r7) { --l: 3.3; }
+.csk-key[data-ic="w4"] .csk-ray { --l: 5.9; }
+.csk-key[data-ic="w5"] :is(.r0, .r2, .r4, .r6) { --l: 6.7; } .csk-key[data-ic="w5"] :is(.r1, .r3, .r5, .r7) { --l: 5.5; }
+
+/* 墨漫过箭头的那一刻，箭头被托起一下 */
+@keyframes csk-bob { 0% { transform: translateY(0); } 42% { transform: translateY(-1.1px); } 100% { transform: translateY(0); } }
+.csk-key.armed .csk-bob { animation: csk-bob calc(var(--K) * 400ms) var(--e-out) calc(var(--K) * 150ms) 1 both; }
+
+.csk.noanim, .csk.noanim * { transition: none !important; animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .csk, .csk * { transition-duration: 0s !important; transition-delay: 0s !important; animation: none !important; } }
+
+/* 长按 / 右键发送键：稍后发送 */
+.csk-menu { position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 30; width: max-content; padding: 4px; border-radius: 10px;
+  background: var(--card); box-shadow: var(--card-shadow); transform-origin: 100% 100%; animation: csk-pop 200ms var(--e-out); }
+@keyframes csk-pop { from { opacity: 0; transform: scale(.97) translateY(4px); } }
+.csk-menu button { display: grid; grid-template-columns: 20px auto auto; column-gap: 10px; align-items: center; padding: 7px 12px 8px 10px; border: 0; border-radius: 7px;
+  background: none; font: inherit; font-size: 13.5px; line-height: 20px; color: var(--text); text-align: left; cursor: pointer; }
+.csk-menu button:active { background: var(--hover); }
+@media (hover: hover) { .csk-menu button:hover { background: var(--hover); } }
+.csk-menu svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; color: var(--muted); }
+.csk-menu .kbd { justify-self: end; font-size: 11.5px; color: var(--muted); }
+.csk-menu small { grid-column: 2 / -1; font-size: 12px; line-height: 17px; color: var(--muted); }

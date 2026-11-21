@@ -246,6 +246,8 @@ export function registerDeviceRoutes(router, { identify, adminCredential = null,
   };
   const byOf = (v) => (/^[a-z]{2,16}$/.test(String(v || '')) ? String(v) : 'agent');
   const linkOfReq = (ctx, by, session) => (session ? agentDeviceLink(ctx, by, String(session)) || '' : '');
+  // 设备芯片接口的 agent 参数：只认已知的非 Claude 对话分页（不给 = Claude）
+  const linkAgent = (v) => (['agy'].includes(String(v || '')) ? String(v) : '');
   const opDevice = (d) => ({ id: d.id, name: d.name, tier: d.client?.tier || '', caps: d.client?.caps || [] });
   router.on('GET', '/api/internal/devices', (req, res, url) => {
     const who = internalCtx(req, res);
@@ -515,6 +517,12 @@ export function registerDeviceRoutes(router, { identify, adminCredential = null,
     if (!/^[0-9a-f-]{8,64}$/i.test(sid)) return json(res, 400, { error: '缺 sessionId' });
     const link = String(body.link || '');
     if (link && link !== 'none' && !owned(ctx, link)) return json(res, 404, { error: '无此设备' });
+    // agent：别的分页（Antigravity）的会话——它们的会话不在 Claude 那张偏好表里，另记一份（agent-device-links.mjs）
+    const agent = linkAgent(body.agent);
+    if (agent) {
+      setAgentDeviceLink(ctx, agent, sid, link);
+      return json(res, 200, { ok: true, sessionId: sid, agent, link: agentDeviceLink(ctx, agent, sid) || '' });
+    }
     setDeviceLink(ctx, sid, link || null);
     json(res, 200, { ok: true, sessionId: sid, link: deviceLinkFor(ctx, sid) || '' });
   });
@@ -522,6 +530,8 @@ export function registerDeviceRoutes(router, { identify, adminCredential = null,
     const ctx = accountCtx(req, res);
     if (!ctx) return;
     const sid = String(url.searchParams.get('sessionId') || '');
+    const agent = linkAgent(url.searchParams.get('agent'));
+    if (agent) return json(res, 200, { sessionId: sid, agent, link: (sid && agentDeviceLink(ctx, agent, sid)) || '' });
     json(res, 200, { sessionId: sid, link: (sid && deviceLinkFor(ctx, sid)) || '' });
   });
 

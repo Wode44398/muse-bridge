@@ -12,6 +12,9 @@
 //       { session }                  到 Claude 页打开这个会话
 //       { file }                     把工作空间里的文件推进预览（复用 handleWsx 的 preview）
 //       { folder }                   打开文件页并定位到这个文件夹（复用 handleWsx 的 goto）
+//       { app: { plugin, id } }      打开插件应用的全屏分页（也认 'plugin:id' 字符串）。插件 UI 清单还没下来时最多等约 3 秒
+//   · from（只有 agy 的 ui_open 带，服务端 modules/agy/server/routes/agy-ui-open.mjs）：{ agent:'agy', session, ws, rootRel }——
+//     file / folder 相对那个 agy 会话目录 ws；人在 agy 页就在 agy 右侧工作区文件卡里打开，别的页照常带他去看（openAgyTarget）
 // 依赖纪律：只静态 import 轻模块（state / toast / i18n / uiReport）；换页、聊天内核、设置导航一律动态 import。
 import { ui, studioInbox, screenOn, rootScreen } from './state.svelte.js';
 import { showToast } from './toast.svelte.js';
@@ -25,11 +28,11 @@ const MAX_AGE = 60_000;
 startUiBeat();
 
 // 对外的 page 名 → 前端顶层页面（ui.screen）
-const PAGE_SCREEN = { home: 'home', claude: 'claude', files: 'files', chatgpt: 'chatgpt', codex: 'chatgpt', dimensio: 'harness', studio: 'studio', vertex: 'studio', gemini: 'studio' };
+const PAGE_SCREEN = { home: 'home', claude: 'claude', files: 'files', chatgpt: 'chatgpt', codex: 'chatgpt', agy: 'agy', antigravity: 'agy', dimensio: 'harness', studio: 'studio', vertex: 'studio', gemini: 'studio' };
 const STUDIO_PAGES = new Set(['image', 'video', 'voice', 'music']);
 // 两套设置外壳都认的分区名（lib/settingsNav 的 openSettings）；外壳里没有的落首页
 const SETTINGS_SECS = new Set(['general', 'notify', 'appearance', 'language', 'account', 'about', 'connection', 'devices', 'claude', 'agents',
-  'feedback', 'phone', 'shortcuts', 'wallpaper', 'agentapi', 'agent-api', 'extensions', 'policy']);
+  'agy', 'ag-agy', 'feedback', 'phone', 'shortcuts', 'wallpaper', 'agentapi', 'agent-api', 'extensions', 'policy', 'home', 'page-grants']);
 
 const notOpen = () => { showToast(t('这个分页没有对你开放'), 'err'); return false; };
 
@@ -42,7 +45,7 @@ async function gotoScreen(screen) {
 
 // 红字报错提示的「问 Claude」（lib/toast.svelte.js）：开一个新的 Claude 对话，把报错和出错的界面填进输入框，
 // 不替用户发出去——用户补一句再发，Claude 按系统提示里「bridge 的 bug」那套诊断、确认后上报。
-const SCREEN_LABEL = { home: () => t('主页'), files: () => t('文件'), claude: () => 'Claude', studio: () => 'Media Studio', chatgpt: () => 'Codex', harness: () => 'dimensio' };
+const SCREEN_LABEL = { home: () => t('主页'), files: () => t('文件'), claude: () => 'Claude', studio: () => 'Media Studio', chatgpt: () => 'Codex', agy: () => 'Antigravity', harness: () => 'dimensio' };
 export async function askClaudeAboutError(text) {
   if (!screenOn('claude')) return false;
   const where = ui.settingsOpen ? t('设置') : (SCREEN_LABEL[ui.screen]?.() || String(ui.screen || ''));
@@ -86,6 +89,23 @@ async function openPageTarget({ page, module, section }) {
   return true;
 }
 
+// 插件应用：先等插件 UI 清单（pluginUi.loaded，冷启动刚登录时可能还在路上），找到就 openApp；
+// 回 true = 打开了；字符串 = 失败原因（回执给 agent 看）
+async function openAppTarget(spec) {
+  let plugin = '', id = '';
+  if (typeof spec === 'string') [plugin, id] = spec.trim().split(':');
+  else if (spec && typeof spec === 'object') { plugin = String(spec.plugin || ''); id = String(spec.id || ''); }
+  const NOT_FOUND = '没有这个应用，或者插件没开';   // i18n-ignore 回传给 agent 的工具结果（AI 读，服务端拼进中文工具文案）
+  if (!plugin || !id) return NOT_FOUND;
+  const [{ pluginUi }, apps] = await Promise.all([import('./pluginUi.svelte.js'), import('./pluginApps.svelte.js')]);
+  for (let waited = 0; !pluginUi.loaded && waited < 3000; waited += 100) await new Promise((r) => setTimeout(r, 100));
+  const app = apps.appByKey('app:' + plugin + ':' + id);
+  if (!app) return NOT_FOUND;
+  // 盖在页面上的层先收掉（同 gotoScreen）
+  ui.settingsOpen = false; ui.routinesOpen = false; ui.loginOpen = false;
+  return (await apps.openApp(app)) || NOT_FOUND;
+}
+
 async function openSessionTarget(id) {
   if (!screenOn('claude')) return notOpen();
   await gotoScreen('claude');
@@ -94,11 +114,45 @@ async function openSessionTarget(id) {
   return true;
 }
 // 会话消息通知（lib/notices.svelte.js）：点横幅 / 系统通知 → 打开那个会话；定时任务没有会话时打开定时任务页
-export const openSessionFromNotice = (id) => openSessionTarget(id);
+// agent：这个会话属于哪个分页（'' / 'claude' = Claude；'agy' = Antigravity，它的会话 id 是另一个命名空间）
+async function openAgySessionTarget(id) {
+  if (!screenOn('agy')) return notOpen();
+  await gotoScreen('agy');
+  const { openAgySession, agy } = await import('./agy/store.svelte.js');
+  if (agy.sessionId !== String(id)) await openAgySession(String(id));
+  return true;
+}
+export const openSessionFromNotice = (id, agent = '') => (agent === 'agy' ? openAgySessionTarget(id) : openSessionTarget(id));
 export async function openRoutinesFromNotice() {
   if (!screenOn('claude')) return notOpen();
   await gotoScreen('claude');
   ui.routinesOpen = true;
+  return true;
+}
+
+// agy 的 ui_open（ev.from.agent === 'agy'）：人在 agy 页 → 交给 agy 工作区文件卡（不弹全屏查看器、不离开对话）；
+// 在别的页 → 同其它 agent 的老路：文件进 App 级预览（按会话目录 ws 解析），文件夹去文件页（服务端已换算成相对文件根的 rootRel）。
+async function openAgyTarget(tg, from, id) {
+  const kind = tg.file ? 'file' : 'folder';
+  const rel = String(kind === 'file' ? tg.file : tg.folder);
+  const ws = String(from.ws || '');
+  if (ui.screen === 'agy') {
+    const [{ agyUiTargetOf }, { openAgyDockFiles }] = await Promise.all([import('./agy/store.svelte.js'), import('./dock.svelte.js')]);
+    const target = agyUiTargetOf({ kind, rel, ws });
+    if (!target) return '路径不完整，打不开';   // i18n-ignore 回传给 agent 的工具结果（AI 读，服务端拼进中文工具文案）
+    openAgyDockFiles(target);
+    return true;
+  }
+  if (kind === 'file') {
+    await handleWsx({ op: 'preview', id: id + ':preview', at: Date.now(), rel, ws });
+    return true;
+  }
+  if (typeof from.rootRel !== 'string') return '这个文件夹在文件页能浏览的范围之外';   // i18n-ignore 回传给 agent 的工具结果（AI 读，服务端拼进中文工具文案）
+  if (ui.screen !== 'files') {
+    await gotoScreen('files');
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  await handleWsx({ op: 'goto', id: id + ':goto', at: Date.now(), rel: '', ws: '', rootRel: from.rootRel });
   return true;
 }
 
@@ -134,16 +188,20 @@ export async function handleUiCmd(ev) {
       return;
     }
     const tg = ev.target;
+    const from = ev.from && typeof ev.from === 'object' ? ev.from : null;
     let ok = false;
     if (tg.session) ok = await openSessionTarget(tg.session);
+    else if (from?.agent === 'agy' && (tg.file || (tg.folder != null && tg.folder !== false))) ok = await openAgyTarget(tg, from, ev.id || key);
     else if (tg.file) { await handleWsx({ op: 'preview', id: (ev.id || key) + ':preview', at: Date.now(), rel: String(tg.file), ws: '' }); ok = true; }
     else if (tg.folder != null && tg.folder !== false) ok = await openFolderTarget({ id: ev.id || key }, String(tg.folder));
+    else if (tg.app) ok = await openAppTarget(tg.app);
     else if (tg.page) ok = await openPageTarget(tg);
     if (ack) {
-      ack.ok = ok !== false;
+      const why = typeof ok === 'string' ? ok : '';
+      ack.ok = ok !== false && !why;
       const p = String(tg.page || '').toLowerCase();
-      const unknown = !tg.session && !tg.file && tg.folder == null && !PAGE_SCREEN[p] && p !== 'settings' && p !== 'routines';
-      if (!ack.ok) ack.reason = unknown ? '这个界面不认识这个页面' : '这个分页对用户没开';   // i18n-ignore 回传给 agent 的工具结果（AI 读，服务端拼进中文工具文案）
+      const unknown = !tg.session && !tg.file && tg.folder == null && !tg.app && !PAGE_SCREEN[p] && p !== 'settings' && p !== 'routines';
+      if (!ack.ok) ack.reason = why || (unknown ? '这个界面不认识这个页面' : '这个分页对用户没开');   // i18n-ignore 回传给 agent 的工具结果（AI 读，服务端拼进中文工具文案）
     }
   } catch (e) {
     /* 界面指令失败不影响其它 */

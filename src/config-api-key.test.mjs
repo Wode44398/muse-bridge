@@ -105,3 +105,19 @@ test('认证失败的提示跟着 key 的状态走：在用 key 时不再让人�
   const deskTok = run(pool, { env: { BRIDGE_SUPERVISED: 'desktop' }, body: auth });
   assert.match(deskTok.hint, /^令牌过期或被撤销：.*托盘「本机服务端 › 重新配置…」里重填。$/);
 });
+
+test('只经环境变量给的 OAuth 令牌：播种进号池能用，但不写进 config.json；下次启动从环境变量补回', () => {
+  const body = `
+    const { readFileSync } = await import('node:fs');
+    const disk = JSON.parse(readFileSync(c.CONFIG_PATH, 'utf8')).claudeAccounts;
+    out.disk = disk.map((x) => ({ token: x.token, tokenFrom: x.tokenFrom || null }));
+    out.hasToken = a.listAccounts()[0].hasToken;
+    out.oauth = (a.claudeEngineEnv(null) || process.env).CLAUDE_CODE_OAUTH_TOKEN || '';`;
+  const r = run({}, { env: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-ENVONLY' }, body });
+  assert.deepEqual(r.disk, [{ token: '', tokenFrom: 'env' }]);
+  assert.equal(r.hasToken, true);
+  assert.equal(r.oauth, 'sk-ant-oat01-ENVONLY');
+  // config.json 里本来就有的 oauthToken：照旧播种落盘（迁移老配置）
+  const legacy = run({ oauthToken: 'sk-ant-oat01-OLD' }, { body });
+  assert.deepEqual(legacy.disk, [{ token: 'sk-ant-oat01-OLD', tokenFrom: null }]);
+});

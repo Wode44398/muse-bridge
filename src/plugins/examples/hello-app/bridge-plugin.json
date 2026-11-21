@@ -1,0 +1,29 @@
+{
+  "id": "hello-app",
+  "name": "你好应用（示例插件）",
+  "version": "1.1.0",
+  "description": "应用写法示例：没有服务端代码的纯页面插件——主页多一个图标，点开是一个全屏分页；页面里演示计数器（存数据）、和 Claude 对话、读写你选的文件。复制这个目录改名就是你的应用起点。",
+  "author": "claude-bridge",
+  "category": "third-party",
+  "ui": {
+    "apps": [
+      {
+        "id": "hello",
+        "title": "你好应用",
+        "titleEn": "Hello app",
+        "page": "web/app.html",
+        "icon": { "light": "web/icon-light.svg", "dark": "web/icon-dark.svg" },
+        "who": "members",
+        "order": 0
+      }
+    ]
+  },
+  "engines": {
+    "pluginApi": 3
+  },
+  "permissions": [
+    "ui",
+    "page.chat",
+    "page.files"
+  ]
+}

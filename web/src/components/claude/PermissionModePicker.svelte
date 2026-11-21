@@ -6,7 +6,7 @@
 <script>
   // 输入栏的权限模式菜单（官方 Claude Desktop 3.1623 composer 的「Mode」按钮，A1 §8）。
   // 11-11 起不再有自己的芯片：和用量环并成一颗（QuotaRing 画环、管开合，环色 = 当前档位），这里只出弹层——
-  // 上半是五档，下半是 QuotaRing 递进来的用量小节（usage 片段）。本组件常驻挂着：视图加载、Ctrl+Shift+M、首次确认框都在这。
+  // 上半是五档，下半是 QuotaRing 递进来的用量小节（usageSection 片段）。本组件常驻挂着：视图加载、Ctrl+Shift+M、首次确认框都在这。
   // 顺序固定：手动 / 接受编辑 / 计划 / 自动 / 绕过权限，每项一行说明，绕过权限警示色；Ctrl+Shift+M 打开，菜单里数字键直选。
   // 新会话草稿里选 = 记成这个文件夹的默认（plan 不记）；会话里选 = 只改这个会话（活着的 CLI 当场切）。
   // 可选列表以服务端为准（cs.permissionModes：主机开关 + 身份）；管理员看得到被主机关掉的自动 / 绕过权限（置灰，提示去设置里开）。
@@ -24,8 +24,8 @@
   import { t } from '../../lib/i18n.js';
   import { untrack } from 'svelte';
 
-  // open / dir 由环按钮那边（QuotaRing）定；ontoggle = Ctrl+Shift+M，onclose = 选完 / Esc / 点遮罩；usage = 弹层下半的用量小节
-  let { open = false, dir = 'up', ontoggle, onclose, usage } = $props();
+  // open / dir 由环按钮那边（QuotaRing）定；ontoggle = Ctrl+Shift+M，onclose = 选完 / Esc / 点遮罩；usageSection = 弹层下半的用量小节
+  let { open = false, dir = 'up', ontoggle, onclose, usageSection } = $props();
   let root = $state();
   let active = $state(0);
   let confirm = $state(null);   // { mode, kind:'auto'|'bypass', folder }
@@ -191,7 +191,7 @@
         </button>
       {/if}
      </div>
-      {#if usage}<div class="usep" aria-hidden="true"></div>{@render usage()}{/if}
+      {#if usageSection}<div class="usep" aria-hidden="true"></div>{@render usageSection()}{/if}
     </div>
   {/if}
 </div>

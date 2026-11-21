@@ -6,6 +6,8 @@ import { redactOutput } from "../redact.ts";
 import { browserAvailable } from "../headless.ts";
 import { dialogNote } from "../browser-verify.ts";
 import type { CdpSession } from "../cdp.ts";
+import { sharedBrowser } from "../bridge-runtime.ts";
+import { sharedEval } from "./browser/shared.ts";
 
 // The script may have opened a native alert/confirm (auto-answered by cdp.ts): say so at the end of the result
 function withDialog(page: CdpSession, r: ToolRunResult): ToolRunResult {
@@ -59,6 +61,7 @@ export const evalTool: Tool = {
     },
   },
   async run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolRunResult> {
+    if (sharedBrowser()) return sharedEval(args, ctx); // 嵌在 bridge 里：在 bridge 共享浏览器的那一页上求值，证据在本地按带回的值判
     const js = String(args.js ?? "").trim();
     if (!js) return fail("eval", "Eval requires `js`.");
     const page = existingBrowser(ctx.ownerId ?? ""); // 这个会话自己的浏览器（cdp.ts getBrowser）

@@ -30,8 +30,14 @@ export function authHeaders(extra) {
   return h;
 }
 
+// 「这是 bridge 自己的界面发的」：授权 / 文件句柄 / 宿主中转这几组接口只认带这个头的请求（纵深防御）。
+// 只给这几组带：自定义头会让离线 apk 的跨源请求都要过预检，旧服务端的 Allow-Headers 里没有它，全量带就是整个 App 连不上旧服务端。
+const UI_ONLY_PATH = /^\/api\/plugins\/(?:grants(?:[?#]|$)|handles(?:[?#]|$)|host-requests\/)/;
+
 async function req(method, path, body, opts) {
   const headers = authHeaders();
+  // 只加在这里、不进 authHeaders()——PluginFrame 替插件页面代发用的是 authHeaders，加进去插件页面也就带上了
+  if (UI_ONLY_PATH.test(path)) headers['X-Bridge-UI'] = '1';
   let payload = body;
   const isRaw = body instanceof Blob || body instanceof ArrayBuffer || typeof body === 'string';
   if (body != null && !isRaw) {

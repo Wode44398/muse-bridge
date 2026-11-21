@@ -3,8 +3,8 @@
   // 设备三档 + 自定义视口/横竖屏/触屏/配色 + 竖屏手机框 + agent 指针回显），Claude 分页配色皮肤。
   // 与 agent 的 mcp__browser__browser 工具共享同一 CDP 实例——agent 操作实时同屏。
   import { api } from '../../lib/api.js';
-  import { dock, readDockSse, browserSessionOf, noteBrowserMount } from '../../lib/dock.svelte.js';
-  import { isNativeDesktop, serverOnThisMachine, mountNativeBrowser, unmountNativeBrowser, onNativeOverlayChange, nativeOverlayActive, pushNativeOverlay } from '../../lib/nativeDesktop.js';
+  import { dock, readDockSse, hostOf, browserSessionOf, noteBrowserMount } from '../../lib/dock.svelte.js';
+  import { isNativeDesktop, serverOnThisMachine, mountNativeBrowser, unmountNativeBrowser, onNativeOverlayChange, nativeOverlayActive, pushNativeOverlay, nativeBrowserLayered } from '../../lib/nativeDesktop.js';
   import { apiUrl } from '../../lib/server.js';
   import { authHeaders } from '../../lib/api.js';
   import { t, tr } from '../../lib/i18n.js';
@@ -17,6 +17,8 @@
   const nativeCapable = $derived(isNativeDesktop() && serverOnThisMachine() && !readonly);
   let notInShell = $state(false);
   const nativeBrowser = $derived(nativeCapable && !notInShell);
+  // 新壳的同层浏览器：网页画在 stage 里的画布上，菜单 / 弹层天然盖在它上面，不用定格让位
+  const layeredBrowser = nativeBrowserLayered();
 
   const enc = encodeURIComponent;
   // 浏览器一个对话一份：每个请求都带上这个对话的 id（Codex 侧 / 新对话没有，服务端退回整个工作空间共用那份）
@@ -82,10 +84,16 @@
     // 整体缩小，而不是被面板宽度裁掉（旧行为：右侧留黑 + 横向滚动条）。
     const vp = { width: frameW, height: frameH };
     nativeRaf = requestAnimationFrame(() => {
-      mountNativeBrowser(active.id, stageEl, vp)
+      mountNativeBrowser(active.id, stageEl, vp, { snapshot: snapshotUrl })
         .then((ok) => { if (ok) nativeMounted = active.id; })
         .catch(() => {});
     });
+  }
+
+  // 面板被别的层压住时定格用的画面：老壳没有本地截图，走服务端那份 CDP 截图（新壳用不到这条）
+  async function snapshotUrl() {
+    const r = await fetch(apiUrl(`/api/claude/browser/snapshot?ws=${enc(dockState.ws)}${sq()}`), { headers: authHeaders(), credentials: 'same-origin', signal: AbortSignal.timeout(1500) });
+    return r.ok ? URL.createObjectURL(await r.blob()) : null;
   }
 
   // 浮层开合：让位与回归。
@@ -188,6 +196,7 @@
       } else if (ev.type === 'tabs') {
         tabs = Array.isArray(ev.tabs) ? ev.tabs : [];
         noteBrowserMount(sid, tabs.length > 0);   // 工具开关上的状态灯（总线断着时也跟得上）
+        hostOf(dockState)?.onBrowserTabs?.(tabs, true);   // 宿主自己还记着一份标签的（dimensio 的浏览器胶囊）跟着更新
         const act = tabs.find((tab) => tab.active);
         if (act && act.url && act.url !== 'about:blank' && document.activeElement !== urlEl) { url = act.url; urlInput = act.url; }
         syncNativeSurface();
@@ -290,7 +299,7 @@
   // 只是「定格」在菜单底下；菜单关了视图挂回。抓图失败也照样让位，只是底下空着。
   let frozen = $state(false);
   $effect(() => {
-    if (!nativeBrowser || !menuOpen || dead) return;
+    if (!nativeBrowser || layeredBrowser || !menuOpen || dead) return;   // 同层壳：菜单本来就盖在网页上
     let cancelled = false;
     let release = null;
     (async () => {
@@ -312,7 +321,7 @@
     return () => { cancelled = true; frozen = false; release?.(); };
   });
   // 原生模式下菜单等定格好了再出现，免得先在网页底下闪一下
-  const menuShown = $derived(menuOpen && (!nativeBrowser || frozen || dead));
+  const menuShown = $derived(menuOpen && (!nativeBrowser || layeredBrowser || frozen || dead));
   function applyCustom() {
     const w = Math.round(Number(customW)), h = Math.round(Number(customH));
     if (!(w > 0 && h > 0)) return;
@@ -336,7 +345,7 @@
       if (r?.restarted) {
         releaseNative();
         dead = true; frameW = 0; frameH = 0; agentPtr = null; url = ''; urlInput = ''; tabs = [];
-        noteBrowserMount(sid, false);
+        noteBrowserMount(sid, false); hostOf(dockState)?.onBrowserTabs?.([], false);
         urlHint = isolated ? t('已切到隔离存储，原来的标签已关闭；重新输入网址打开') : t('已切回共享登录态，原来的标签已关闭；重新输入网址打开');
         setTimeout(() => (urlHint = ''), 3200);
       }
@@ -348,7 +357,7 @@
     await api.post('/api/claude/browser/close', { ws: dockState.ws, session: sid }).catch(() => {});
     releaseNative();
     dead = true; frameW = 0; frameH = 0; agentPtr = null; url = ''; urlInput = ''; tabs = [];
-    noteBrowserMount(sid, false);
+    noteBrowserMount(sid, false); hostOf(dockState)?.onBrowserTabs?.([], false);
   }
 
   // —— 标签条：点选切换 / × 关闭 / ＋ 新建（空白页并聚焦地址栏）——
@@ -755,7 +764,7 @@
       <div class="bw-empty">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.1 3.6 8.5s-1.2 6.2-3.6 8.5M12 3.5C9.6 5.8 8.4 8.6 8.4 12s1.2 6.2 3.6 8.5"/></svg>
         <div class="bw-t1">{readonly ? t('浏览器还没打开') : t('开始浏览')}</div>
-        <div class="bw-t2">{connecting ? t('连接中…') : readonly ? t('Claude 打开网页时，画面会实时出现在这里') : t('在上方输入网址；Claude 使用浏览器时，画面也会出现在这里')}</div>
+        <div class="bw-t2">{connecting ? t('连接中…') : readonly ? t('Claude 打开网页时，画面会实时出现在这里') : t('在上方输入网址；agent 使用浏览器时，画面也会出现在这里')}</div>
         {#if sid && !readonly}
           <!-- 打开之前就能选：这个对话要不要和别的对话分开 cookie / 存储 -->
           <button class="bw-iso" class:on={isolated} disabled={isoBusy} aria-pressed={isolated}

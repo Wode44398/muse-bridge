@@ -17,7 +17,7 @@
 //     在线的设备由会话结束事件与每分钟一次的巡检当场断开。
 //
 // 别的模块要在账号结束时收自己的东西（dimensio 租户进程、终端 / 浏览器池、分享链接……）：订阅
-// accountEvents 的 'ended'（{ id, key, name, reason: 'deleted' | 'disabled' }）；降为普通另发 'downgraded'（{ id, key, name }）。
+// accountEvents 的 'ended'（{ id, key, name, reason: 'deleted' | 'disabled' }，删号时另带 data: 'purge' | 'archive'——他的数据是删还是归档）；降为普通另发 'downgraded'（{ id, key, name }）。
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, renameSync, writeFileSync, readFileSync } from 'node:fs';
 import { readdir, stat, rm } from 'node:fs/promises';
@@ -351,7 +351,7 @@ export async function deleteAccount(ref, { mode = 'purge', drainMs = 5000 } = {}
   const snapshots = await closeSnapshotsOf(key);
   await callEach(POOLS, key);
   await callEach(SHARES, key);
-  emitEnded({ id, key, name, reason: 'deleted' });
+  emitEnded({ id, key, name, reason: 'deleted', data: want });
   // ③ 账本：用过的邀请记录、用量（归档时随数据留底）、成员侧的管理员可见性与访问记录
   const invites = users.dropInvitesOf(id);
   const usage = users.dropUsage(id);

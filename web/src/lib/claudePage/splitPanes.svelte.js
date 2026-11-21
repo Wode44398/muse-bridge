@@ -46,8 +46,13 @@ export function createSplitPanes(pc) {
   const mainSide = $derived(split && split.side === 'left' ? 'right' : 'left');
   const leftBasis = $derived(`calc(${(splitR * 100).toFixed(3)}% - 3px)`);
   const paneStyle = (side) => (side === 'left' ? `order:0;flex:0 0 ${leftBasis};` : 'order:2;flex:1 1 0;');
-  // 侧栏高亮：有焦点那一格的会话是「当前」，另一格的会话浅一档
-  const curId = $derived(splitOn && paneFocus ? paneId : session.id);
+  // 侧栏高亮：有焦点那一格的会话是「当前」，另一格的会话浅一档。
+  // pickId＝本页刚在侧栏点下、还在加载的那条（pickSession 设，加载落定或 session.id 追上就清）：
+  // session.id 要等消息摆上屏才换——没缓存时得等 /api/session，大会话要大半秒，期间高亮若还停在
+  // 旧会话上，连点几条看起来就是「点的和亮的错一位」（11-19 录屏）。
+  let pickId = $state(null);
+  $effect(() => { if (pickId && session.id === pickId) pickId = null; });
+  const curId = $derived(splitOn && paneFocus ? paneId : (pickId || session.id));
   const altId = $derived(splitOn ? (paneFocus ? session.id : paneId) : null);
 
   let paneProjId = null;   // 非响应式：那一格当前会话（或空白对话）所在的项目（它的 session 消息报上来的）
@@ -259,6 +264,7 @@ export function createSplitPanes(pc) {
     get mainSide() { return mainSide; },
     get paneStyle() { return paneStyle; },
     get curId() { return curId; },
+    get pickId() { return pickId; }, set pickId(v) { pickId = v; },
     get altId() { return altId; },
     get paneProjId() { return paneProjId; }, set paneProjId(v) { paneProjId = v; },
     get postPane() { return postPane; },

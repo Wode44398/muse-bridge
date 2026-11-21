@@ -166,14 +166,19 @@ function mediaToolKind(name) {
   const m = /^mcp__media__(generate_[a-z]+)$/.exec(String(name || ''));
   return m ? MEDIA_TOOL_KIND[m[1]] || null : null;
 }
-function mediaSegFromResult(kind, input, b) {
+// 一次调用可能出多件（params 里给了张数）：回执里每个文件路径各成一段，按出现顺序、去重。
+function mediaSegsFromResult(kind, input, b) {
   const text = resultText(b);
   const prompt = String((input && (input.prompt || input.text)) || '');
   const base = { kind: 'media', id: '', mediaKind: kind, status: 'ready', elapsed: 0, error: null, prompt, dataUrl: null };
-  if (b.is_error) return { ...base, status: 'error', error: text.replace(/^[^：:\n]{0,12}失败[：:]\s*/, '').trim() || '生成失败' };
+  if (b.is_error) return [{ ...base, status: 'error', error: text.replace(/^[^：:\n]{0,12}失败[：:]\s*/, '').trim() || '生成失败' }];
   // ext：前端据此给下载名补对扩展名（Nano Banana 2.1 出 jpg、语音出 wav，不能一律猜 png / mp3）
-  const [, id, ext] = MEDIA_ID_RE.exec(text) || [];
-  return id ? { ...base, id, ext: ext.toLowerCase() } : null;
+  const seen = new Set(), out = [];
+  for (const [, id, ext] of text.matchAll(new RegExp(MEDIA_ID_RE.source, 'gi'))) {
+    if (seen.has(id)) continue;
+    seen.add(id); out.push({ ...base, id, ext: ext.toLowerCase() });
+  }
+  return out;
 }
 // 子 agent 生成的媒体：直播时 gen_media 事件推进的是主对话那一轮（截图里一整排课件配图就是
 // 子 agent 出的），但工具调用只落在 <会话>/subagents/agent-<id>.jsonl。按出现顺序收集。
@@ -194,8 +199,7 @@ function subagentMedia(file, agentId) {
       if (o.type === 'assistant' && b.type === 'tool_use') { const k = mediaToolKind(b.name); if (k && b.id) uses.set(b.id, { kind: k, input: b.input || {} }); }
       else if (o.type === 'user' && b.type === 'tool_result' && uses.has(b.tool_use_id)) {
         const u = uses.get(b.tool_use_id); uses.delete(b.tool_use_id);
-        const seg = mediaSegFromResult(u.kind, u.input, b);
-        if (seg) out.push(seg);
+        out.push(...mediaSegsFromResult(u.kind, u.input, b));
       }
     }
   }
@@ -550,6 +554,9 @@ export function makeHistoryParser(file, opts = {}) {
       }
 
       if (o.type === 'assistant') {
+        // 停止 / 回答提问打断一轮后 CLI 补写的合成回答（model '<synthetic>'，正文「No response requested.」这类）：不是模型说的，
+        // 直播时也没有。不滤就会接在被打断的那段正文后面（「48No response requested.」），插件页面的对话历史里也多出一条回复
+        if (o.message.model === '<synthetic>' && blocks.length && blocks.every((b) => b.type === 'text' && SDK_NOISE.has(String(b.text || '').trim()))) return;
         flushManual(ts);
         ensureAsm(ts);
         // 这一轮落盘时的工作目录（模型 cd 过就会变）：交付链接按它解析，见 resolveDeliverPath。
@@ -626,8 +633,7 @@ export function makeHistoryParser(file, opts = {}) {
           if (mediaByTool.has(b.tool_use_id)) {
             const u = mediaByTool.get(b.tool_use_id);
             mediaByTool.delete(b.tool_use_id);
-            const seg = mediaSegFromResult(u.kind, u.input, b);
-            if (seg) ensureAsm(ts).segments.push(seg);
+            ensureAsm(ts).segments.push(...mediaSegsFromResult(u.kind, u.input, b));
             continue;
           }
           const entry = byToolUse.get(b.tool_use_id);

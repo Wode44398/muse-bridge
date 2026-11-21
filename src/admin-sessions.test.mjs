@@ -135,3 +135,32 @@ test('显式账号会话压过残留的管理员 cookie；adopt 对齐 cookie、
   assert.ok(users.getSession(ut) && users.isAdminSession(adm, auth.gen), '切来切去都不吊销会话');
   users.revokeAdminSessions('all');
 });
+
+// 保险箱里的管理员凭据是主令牌（旧版登录存下的）：以前 adopt 什么 cookie 都不动，上一个号的 bridge_user 残留着，
+// 桌面客户端按 cookie 认人就把电脑登记到那个号名下。现在换发一张管理员会话：JSON 回给页面换上，cookie 也设成它。
+test('adopt 带主令牌：换发管理员会话、cookie 对齐到它并清掉账号 cookie', async () => {
+  users.revokeAdminSessions('all');
+  const auth = createAuth(MASTER, false, { isAdminSession: users.isAdminSession, isUserSession: (t) => !!users.getSession(t) });
+  const h = {};
+  const router = { on: (m, p, fn) => { h[m + ' ' + p] = fn; } };
+  const identify = (r) => (auth.authOk(r) ? { kind: 'admin', user: null } : { kind: 'none', user: null });
+  registerAuthRoutes(router, { ...auth, adminGen: auth.gen, identify });
+  let code = 0, headers = {}, body = '';
+  h['POST /api/auth/adopt'](req({ bearer: MASTER, cookie: 'bridge_user=leftover', method: 'POST' }),
+    { writeHead(cc, hh) { code = cc; headers = hh || {}; }, end(b) { body = b || ''; } });
+  assert.equal(code, 200);
+  const j = JSON.parse(body);
+  assert.equal(j.kind, 'admin');
+  assert.ok(j.token && j.token !== MASTER, '回的是新铸的会话令牌，不是主令牌');
+  assert.ok(users.isAdminSession(j.token, auth.gen));
+  const cookies = [].concat(headers['Set-Cookie'] || []);
+  assert.ok(cookies.some((x) => x.startsWith('bridge_auth=' + encodeURIComponent(j.token))), 'cookie 是新会话');
+  assert.ok(!cookies.some((x) => x.includes(encodeURIComponent(MASTER))), 'cookie 里不放主令牌');
+  assert.ok(cookies.some((x) => /^bridge_user=;/.test(x)), '清掉上一个号的 cookie');
+  // 只有 cookie 里有主令牌、Bearer 不是它：不换发（adopt 只对齐页面显式带来的那张）
+  code = 0; headers = {}; body = '';
+  h['POST /api/auth/adopt'](req({ bearer: 'stale', cookie: 'bridge_auth=' + encodeURIComponent(MASTER), method: 'POST' }),
+    { writeHead(cc, hh) { code = cc; headers = hh || {}; }, end(b) { body = b || ''; } });
+  assert.equal(JSON.parse(body).token, undefined);
+  users.revokeAdminSessions('all');
+});

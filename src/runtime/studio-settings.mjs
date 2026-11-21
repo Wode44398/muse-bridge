@@ -140,12 +140,12 @@ export function effectiveStudioSettings(owner) {
 
 // —— 判定 ——
 // 拼进「没让…生成媒体」：西文名两边带空格，「外部 agent」只在后面带
-const CALLER_NAME = { claude: ' Claude ', dimensio: ' dimensio ', codex: ' Codex ', api: '外部 agent ' };
+const CALLER_NAME = { claude: ' Claude ', dimensio: ' dimensio ', codex: ' Codex ', agy: ' Antigravity ', api: '外部 agent ' };
 const KIND_NAME = { image: '图片', speech: '语音', music: '音乐', video: '视频' };
 
 /**
  * 这个调用方能不能生成这种媒体：null = 能；否则一句原因。
- * caller：'claude' | 'dimensio' | 'codex' | 'api'；不认识的同机实例一律不给。
+ * caller：'claude' | 'dimensio' | 'codex' | 'agy' | 'api'；不认识的同机实例一律不给。
  */
 export function agentMediaDeny(caller, kind) {
   const v = getStudioHostSettings();

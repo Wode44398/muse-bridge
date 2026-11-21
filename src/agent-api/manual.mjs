@@ -20,7 +20,7 @@ import { pluginOn } from '../plugins/state.mjs';
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'manual');
 
 // 章节顺序；不在表里的 .md 排在后面（按文件名）。
-const ORDER = ['api', 'overview', 'claude', 'workspace', 'routines', 'studio', 'codex', 'dimensio', 'devices', 'phone', 'settings', 'plugins', 'accounts', 'recipes', 'missing'];
+const ORDER = ['api', 'overview', 'claude', 'workspace', 'routines', 'studio', 'codex', 'agy', 'dimensio', 'devices', 'phone', 'settings', 'plugins', 'accounts', 'recipes', 'missing'];
 
 // 插件带来的章节目录（ctx.manual(dir) 登记，插件停用时撤掉）。章 id 撞了核心章节的，核心优先。
 const extraDirs = new Map();   // dir → 插件 id
@@ -201,9 +201,27 @@ function sectionsOf(c, ctx, origin) {
     if (intro.replace(/^##\s+.+$/m, '').trim()) push(title, intro);
     for (const s of subs) {
       const sub = /^###\s+(.+)$/m.exec(s)[1].trim();
-      push(`${title} › ${sub}`, `## ${title} › ${s.trim().replace(/^###\s+/, '')}`);
+      const head = `${title} › ${sub}`;
+      opChunks(s.trim().replace(/^###\s+.+$/m, '').trim()).forEach((body, i) => {
+        const t = i ? `${head}（续 ${i}）` : head;
+        push(t, `## ${t}\n${body}`);
+      });
     }
   }
+  return out;
+}
+// 一个子段自己还超长（「全部操作」里操作多、说明长的组，如 plugins）：按操作条目（行首「- **`名字`**」）
+// 装箱成几段，每段都不超过 SECTION_MAX——整条操作不拆开，检索命中哪段都看得到完整的参数表，也就不会被截断。
+function opChunks(body) {
+  if (body.length + 200 <= SECTION_MAX) return [body];
+  const items = body.split(/^(?=- \*\*`)/m);
+  const out = [];
+  let cur = '';
+  for (const it of items) {
+    if (cur && cur.length + it.length + 200 > SECTION_MAX) { out.push(cur.trim()); cur = ''; }
+    cur += it;
+  }
+  if (cur.trim()) out.push(cur.trim());
   return out;
 }
 // 两字片段里的虚词（怎么、什么、能不能、帮我……）：拆句检索时不算词。

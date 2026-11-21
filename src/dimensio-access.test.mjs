@@ -29,6 +29,7 @@ test('admin 拿到这台机器上全部已启用的 agent', () => {
   const admin = contextFor({ kind: 'admin', user: null });
   assert.deepEqual(admin.agents, enabledAgents());
   assert.equal(admin.allowCodex, enabledAgents().includes('codex'));
+  assert.equal(admin.allowAgy, enabledAgents().includes('agy'));
   assert.equal(admin.allowDimensio, enabledAgents().includes('dimensio'));
 });
 
@@ -39,13 +40,15 @@ test('codex 不支持多用户：注册用户勾了也拿不到', () => {
   }
 });
 
-test('Antigravity 已下线：agent 表里没有它，残留名单也拿不到', () => {
-  assert.equal(AGENT_BY_ID.agy, undefined);
-  for (const ctx of [contextFor({ kind: 'admin', user: null }), contextFor(proUser), contextFor(plainUser)]) {
-    assert.equal(ctx.agents.includes('agy'), false);
-    assert.equal('allowAgy' in ctx, false);
-    assert.equal('agyHist' in ctx, false);
-  }
+test('agy 只开给完全信任档：这台机器开着 agy 时 pro 被勾了就有，普通档勾了也拿不到', () => {
+  assert.equal(AGENT_BY_ID.agy.multiUser, true);
+  assert.equal(AGENT_BY_ID.agy.fullTrust, true);
+  // 全局没开（没装 CLI 等）时谁都没有；开着时只看档位
+  const on = enabledAgents().includes('agy');
+  assert.equal(contextFor(proUser).allowAgy, on, '完全信任档：被勾选且全局开着才有');
+  assert.equal(contextFor(plainUser).allowAgy, false, '普通档没有命令行权限，勾了也不给');
+  assert.equal(contextFor(plainUser).agents.includes('agy'), false);
+  assert.equal(contextFor({ ...proUser, agents: ['claude'] }).allowAgy, false, '没被勾选的不给');
 });
 
 test('dimensio 按人放行，但不在默认名单里', () => {
@@ -67,6 +70,7 @@ test('公开分享/快照身份永远进不去', () => {
   const snap = contextFor({ kind: 'snap', token: 'tok', dir: process.cwd() });
   for (const ctx of [share, snap]) {
     assert.equal(ctx.allowCodex, false);
+    assert.equal(ctx.allowAgy, false);
     assert.equal(ctx.allowDimensio, false);
     assert.equal(ctx.allowStudio, false);
     assert.equal(ctx.canSnapshot, false);

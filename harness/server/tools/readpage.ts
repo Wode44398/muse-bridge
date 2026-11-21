@@ -5,6 +5,8 @@ import { fileUrlBlock } from "../sandbox.ts";
 import { redactOutput } from "../redact.ts";
 import { WEB_CONTENT_NOTE } from "./untrusted.ts";
 import { browserAvailable } from "../headless.ts";
+import { sharedBrowser } from "../bridge-runtime.ts";
+import { sharedReadPage } from "./browser/shared.ts";
 
 // ReadPage: the browser page as an accessibility tree — semantic structure
 // (roles, names, states) instead of pixels. Interactive nodes carry [refN]
@@ -53,6 +55,7 @@ export const readPageTool: Tool = {
     },
   },
   async run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolRunResult> {
+    if (sharedBrowser()) return sharedReadPage(args, ctx); // 嵌在 bridge 里：读 bridge 共享浏览器的那一页（browser/shared.ts）
     const page = existingBrowser(ctx.ownerId ?? ""); // 这个会话自己的浏览器（cdp.ts getBrowser）
     if (!page) return fail("readpage", noBrowserMessage());
     // S4（#37②）：当前页是 file:// 且过不了与 Read 同一道闸（点链接、脚本跳转绕过了导航检查）→ 不读。

@@ -31,6 +31,7 @@ import { peerHoldSessions, peerHoldsSnapshot, peerHoldsOf } from '../runtime/ses
 import { customModelsView, customOwner } from '../runtime/claude-providers.mjs';   // 自定义 API 的模型清单（hello 带上，刷新后芯片不用等打开菜单）
 import { publicRestart } from './app-update.mjs';   // hello 带「是不是正等着重启 / 装更新」（S1-5，不含凭据），省掉每次连上补拉 server-info
 import { APP_VERSION_NAME } from '../config/versions.mjs';
+import { moduleLive, moduleNoticeAgents } from '../modules/registry.mjs';   // 扩展分页（agy）在跑的轮 / 在等人的卡
 
 // 扣着跨会话消息等你确认的会话 → 通知条目（kind 'peer'；只给发送方名字，不带正文——CLI 扣着时也没给正文）。
 // 那个 CLI 多半停放着、不在 live 里，所以不按「在跑的轮」过滤。
@@ -109,6 +110,9 @@ export function registerOverviewRoutes(router, { authOk, identify }) {
       // 会话消息通知（runtime/notices.mjs）：新版手机后台服务只读这一路——按会话单独弹、带会话名，带 ageMs。
       // 上面 pushes / asks / 顶层 active 留给旧 apk。
       notices: recentNotices(ctx.key),
+      // 扩展分页（Antigravity）眼下在跑的轮与在等人的卡：[{ agent, label, runs, asks }]。上面的 active / runs / asks 只说 Claude
+      //（老客户端把它们当 Claude 会话用），别的分页单独一路——手机后台服务据此不提前收工、桌面壳据此亮指示灯。
+      ext: moduleLive(ctx),
     }));
   });
 
@@ -191,6 +195,9 @@ export function registerOverviewRoutes(router, { authOk, identify }) {
       restart: publicRestart(),
       serverVersion: APP_VERSION_NAME,
       noticesV: 1,   // 这台服务端会推 {type:'notice'}（会话消息通知）：前端据此不再自己凑「完成 / 提问」通知
+      // 哪些分页的会话消息通知由服务端发（notice 带 agent）；不在这里的分页前端照旧自己弹本机通知
+      noticeAgents: ['claude', ...moduleNoticeAgents()],
+      ext: moduleLive(ctx),
     });
     let closed = false;
     let offBus = () => {}, offWatch = () => {};

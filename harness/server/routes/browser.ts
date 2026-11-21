@@ -1,6 +1,8 @@
 // 会话浏览器面板与预览服务。
 import express from "express";
-import { emitGlobal, anySessionRunning } from "../session.ts";
+import { emitGlobal, anySessionRunning, sessionWorkspace } from "../session.ts";
+import { sharedBrowser } from "../bridge-runtime.ts";
+import { sharedBrowserOp } from "../tools/browser/shared.ts";
 import { latestService, listServices, stopService, stopServicesFor, stopAllServices } from "../services.ts";
 import { recentBrowserOwner, onBrowserMount, existingBrowser, browserMount, browserMode, setBrowserIsolated, VIEWPORT_PRESETS, getBrowser } from "../cdp.ts";
 import { SSE_PING_MS } from "./shared.ts";
@@ -28,6 +30,34 @@ export function registerBrowserRoutes(app: express.Express): void {
 
   // 挂载状态灯：会话的浏览器从「没有标签」变「有标签」（或反过来）、隔离开关变了，就经全局事件通道广播 browser_mount
   onBrowserMount((ev) => emitGlobal({ ...ev, at: Date.now() }));
+
+  // 嵌在 bridge 里（能力位 shared-browser）：会话的浏览器在 bridge 那边，面板直连 bridge 的 /api/claude/browser/*；
+  // 这里的 state / isolate 转过去（旧前端、设置项还会调），其余面板接口对这些会话没有浏览器可看（409）
+  app.get("/api/browser/state", async (req, res, next) => {
+    if (!sharedBrowser()) return next();
+    const owner = cleanBrowserOwner((req.query as Record<string, unknown>)?.sessionId);
+    try {
+      const j = await sharedBrowserOp(owner, await sessionWorkspace(owner), "state");
+      const tabs = Array.isArray(j.tabs) ? j.tabs : [];
+      res.json({ alive: Boolean(j.alive), url: j.url ?? "", tabs, mode: j.alive ? "bridge" : null, mounted: tabs.length > 0, isolated: Boolean(j.isolated), shared: true });
+    } catch (e) {
+      res.status(502).json({ error: (e as Error).message });
+    }
+  });
+  app.post("/api/browser/isolate", async (req, res, next) => {
+    if (!sharedBrowser()) return next();
+    const owner = cleanBrowserOwner(req.body?.sessionId);
+    if (!owner) {
+      res.status(400).json({ error: "sessionId is required — isolated storage is per conversation" });
+      return;
+    }
+    try {
+      const j = await sharedBrowserOp(owner, await sessionWorkspace(owner), "isolate", { on: req.body?.on === true });
+      res.json({ ok: true, isolated: Boolean(j.isolated), restarted: Boolean(j.restarted) });
+    } catch (e) {
+      res.status(502).json({ error: (e as Error).message });
+    }
+  });
 
   app.get("/api/browser/state", (req, res) => {
     const owner = browserOwnerOf(req);

@@ -12,6 +12,7 @@ import { cacheSessions, getCachedSessions } from '../cache.js';
 import { absorbLastPrefs } from '../chatPrefs.js';
 import { IS_CSNAP } from '../csnap.js';
 import { archClock, noteSessionList, noteArchiveRev, stickyArchived, dropArchivedRow, isArchivedId } from '../sessionArchive.svelte.js';
+import { appTagKey } from './sessionAppTag.js';
 
 /** @param {any} pc 页面上下文：各区段经它互相取用（getter / setter，见 ClaudePage.svelte） */
 export function createSessionList(pc) {
@@ -209,7 +210,7 @@ export function createSessionList(pc) {
   // 列表等值跳过：内容没变就不赋值——反复开抽屉/轮询刷新不再每次重建列表 DOM。
   const sameSessions = (a, b) => a.length === b.length && a.every((x, i) => {
     const y = b[i];
-    return x.id === y.id && x.title === y.title && !!x.thinking === !!y.thinking && !!x.pending === !!y.pending && (x.projectId || null) === (y.projectId || null) && (x.parentId || null) === (y.parentId || null) && (x.shape || null) === (y.shape || null);
+    return x.id === y.id && x.title === y.title && !!x.thinking === !!y.thinking && !!x.pending === !!y.pending && (x.projectId || null) === (y.projectId || null) && (x.parentId || null) === (y.parentId || null) && (x.shape || null) === (y.shape || null) && appTagKey(x) === appTagKey(y);
   });
   function applySessions(list) { if (!sameSessions(sessions, list)) sessions = list; }
   // path 也要比：存好的临时对话工作空间会被服务端挪到固定位置（id、名字不变，只换 path），工作台得跟过去。

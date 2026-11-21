@@ -8,6 +8,7 @@ import { ags } from '../agentSettings.svelte.js';
 export const AG_AUTH_HINT = {
   claude: () => t('在下面「订阅号池」里添加账号。'),
   codex: () => t('在服务器上运行一次 codex login。'),
+  agy: () => t('在运行 Bridge 的电脑上执行一次 agy 完成登录。'),
   dimensio: () => t('在下面「API Key」里给一家厂商填 Key，或接一个自定义模型服务。'),
 };
 export function agStatus(a) {

@@ -42,7 +42,7 @@ import { consentsOf, accessAllowed, ownerAllows, logAccess, deniedMessage, PROXY
 import { writeSseHeaders, sseWrite } from '../runtime/sse.mjs';
 import { setAccountDisabled, setAccountTier, deleteAccount } from '../runtime/account-lifecycle.mjs';
 import { accessState, registerAccountAdminRoutes } from './admin-accounts.mjs';
-import { serviceInfo, requestRestart, supervisor, startUpdate } from '../runtime/service-control.mjs';
+import { serviceInfo, requestRestart, supervisor, startUpdate, refreshExtraLive } from '../runtime/service-control.mjs';
 import { recentLogs } from '../runtime/log-ring.mjs';
 import { publicAccess, NO_PROBE } from '../runtime/public-access.mjs';
 import { serverUpdateInfo } from '../runtime/client-release.mjs';
@@ -191,6 +191,8 @@ export function registerAdminRoutes(router, { authOk, adminCredential = null, ad
     if (!gate(req, res)) return;
     let harnessCount = 0;
     try { harnessCount = getModule('dimensio')?.harnessEndpoints?.().length || 0; } catch {}
+    // liveTurns 要算上 dimensio 实例里在跑的轮（桌面客户端据此决定装更新前问不问、等不等）：现问一遍
+    await refreshExtraLive();
     // serverUpdate：打包形态（桌面安装包里的本机服务端）自己有没有新版（上游发布清单，见 runtime/client-release.mjs）
     J(res, { ...serviceInfo({ dataRoot: ROOT, harnessCount }), apk: apkInfo(), serverUpdate: serverUpdateInfo(), deploy: deployInfo });
   });
@@ -477,7 +479,7 @@ export function registerAdminRoutes(router, { authOk, adminCredential = null, ad
   // 看内容、代聊代答要成员自己在设置里允许，做了就在他那边记一笔。管理员自己（主机身份）的数据不经过这里。
   const consentDenied = (res, kind, why = kind) => { res.writeHead(403, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: deniedMessage(why), code: 'consent', need: kind })); };
   // 在跑的轮：没允许看内容的成员，提问原文不给（只留 key / 会话 id / 时间这些元数据）
-  const gensForAdmin = () => listGens().map((g) => (ownerAllows(g.key, 'view') ? g : { ...g, userText: '', hidden: true }));
+  const gensForAdmin = () => listGens().map((g) => (ownerAllows(String(g.key || '').replace(/^agy:/, ''), 'view') ? g : { ...g, userText: '', hidden: true }));
   // 这段对话是不是从头到尾都是管理员代发的（找不到、读不了一律按「不是」，要「查看」才能接着聊）
   async function proxyOnlySession(sid, ctx) {
     try {
@@ -584,11 +586,28 @@ export function registerAdminRoutes(router, { authOk, adminCredential = null, ad
     // 总览上的「公网访问」一行：只带摘要（完整状态与日志在 /api/admin/public-access）
     let pub = null;
     try { const s = publicAccess()?.status(); if (s) pub = { mode: s.mode, status: s.status, url: s.url, hint: s.hint, managedBy: s.managedBy, lastProbe: s.lastProbe, available: s.available }; } catch {}
-    J(res, { service: st, host: { name: os.hostname(), lan: lanIPs() }, phonePort: PHONE_PORT, gens: gensForAdmin(), routinesRunning: running, userCount: users.listUsers().length, publicAccess: pub });
+    const agy = getModule('agy')?.adminStatus?.() || null;
+    J(res, { service: st, host: { name: os.hostname(), lan: lanIPs() }, phonePort: PHONE_PORT, gens: gensForAdmin(), agy, routinesRunning: running, userCount: users.listUsers().length, publicAccess: pub });
   });
 
-  // 列所有 caller 的活跃 Claude 生成
-  router.on('GET', '/api/admin/active', (req, res) => { if (!gate(req, res)) return; J(res, { gens: gensForAdmin() }); });
+  // 列所有 caller 的活跃 Agent 生成与常驻进程摘要
+  router.on('GET', '/api/admin/active', (req, res) => {
+    if (!gate(req, res)) return;
+    J(res, { gens: gensForAdmin(), agy: getModule('agy')?.adminStatus?.() || null });
+  });
+
+  router.on('POST', '/api/admin/agy/kill', (req, res) => {
+    if (!gate(req, res)) return;
+    const mod = getModule('agy');
+    if (!mod?.killDaemon) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'Antigravity 模块未加载' }));
+      return;
+    }
+    const agy = mod.killDaemon();
+    audit(req, 'agy/kill', { target: 'agy' });
+    J(res, { ok: true, agy });
+  });
 
   // 按 key（'admin' / 'u:<name>'）中止任意用户的活跃生成（多对话并发：全停；
   // 可选 b.sessionId 只停某一轮）

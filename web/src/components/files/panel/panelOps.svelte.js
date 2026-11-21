@@ -510,6 +510,8 @@ export function createPanelOps(P) {
   }
 
   return {
+    get aiMaterial() { return aiMaterial; },
+    get aiTextContent() { return aiTextContent; },
     get canZip() { return canZip; },
     get cancelTask() { return cancelTask; },
     get closeZipDlg() { return closeZipDlg; },

@@ -1,4 +1,5 @@
-// 同机 agent 子进程的「按人设备凭据」：给注册用户的 dimensio 实例（每人一个 harness 进程）用。
+// 同机 agent 子进程的「按人设备凭据」：给注册用户的 dimensio 实例（每人一个 harness 进程）、
+// 注册用户的 Antigravity 进程（它的 bridge 工具服务与工具调用守卫）用。
 //
 // 主机密钥（host-secret.mjs）能操作管理员名下的全部设备，只能给管理员实例；注册用户的实例要的是
 // 「只能操作他自己的电脑」——所以发一把由主机密钥派生、绑死账号的令牌：
@@ -9,9 +10,10 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { ensureHostSecret } from './host-secret.mjs';
 import { userIdentity, contextFor } from './identity.mjs';
+import { AGENT_BY_ID } from '../config/agents.mjs';
 
 const PREFIX = 'dvt1';
-const AGENTS = new Set(['dimensio']);
+const AGENTS = new Set(['dimensio', 'agy']);
 const b64 = (s) => Buffer.from(String(s), 'utf8').toString('base64url');
 const unb64 = (s) => { try { return Buffer.from(String(s), 'base64url').toString('utf8'); } catch { return ''; } };
 const mac = (agent, userId) => createHmac('sha256', ensureHostSecret()).update(`bridge-agent-device-v1\n${agent}\n${userId}`).digest('base64url');
@@ -43,5 +45,7 @@ export function agentDeviceTokenCtx(token) {
   // 看的是按人授权（管理员给这个人勾没勾 dimensio）：收回授权当场失效。全局关掉 dimensio 时 bridge 本来就不再代理、
   // 也不再拉起他的实例，这里不另看全局开关（那还牵涉扩展装没装的探测，与这把令牌无关）。
   if (!(ident.agents || []).includes(agent)) return null;
+  // 只开给完全信任档的 agent（Antigravity）：降成普通档后名单里可能还留着这一项，令牌同样当场失效
+  if (AGENT_BY_ID[agent]?.fullTrust && ident.tier === 'user') return null;
   return { ctx: contextFor(ident), agent };
 }

@@ -9,6 +9,7 @@
 
 import { api, setToken } from './api.js';
 import { applyMe } from './state.svelte.js';
+import { afterSignIn } from './account.js';
 import { getServerBase } from './server.js';
 import { t } from './i18n.js';
 import './connectPair.js';
@@ -87,6 +88,7 @@ export function startPairLogin(onUpdate) {
           let a;
           try { a = await api.auth(); } catch { a = { kind: c.kind, user: c.user }; }
           applyMe(a);
+          afterSignIn();   // 桌面客户端按这次登录的账号登记设备
           emit({ status: 'done', me: a });
           return;
         }

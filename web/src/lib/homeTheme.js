@@ -41,9 +41,9 @@ export function warmThemeWallpapers() {
   idle(() => { decodeWallpaper(other).catch(() => {}); }, { timeout: 4000 });
 }
 
-// 分页里切明暗（Claude 页点标志、运行中点运行标记）：从被点的那颗标志起柔边圆波（pageMorph.morphPageTheme）。
+// 分页里切明暗（Claude / Antigravity 页点标志）：从被点的那颗标志起柔边圆波（pageMorph.morphPageTheme）。
 // 连点不拦：每一下都立刻换，上一段波直接落幕、新波从当前画面起。
-export function switchPageTheme(originEl) {
+export function switchPageTheme(originEl, opts = {}) {
   const toLight = ui.theme === 'dark';
-  return morphPageTheme(originEl, async () => { toggleTheme(); await tick(); }, { toLight }).catch(() => {});
+  return morphPageTheme(originEl, async () => { toggleTheme(); await tick(); }, { ...opts, toLight }).catch(() => {});
 }

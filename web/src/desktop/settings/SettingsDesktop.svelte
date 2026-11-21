@@ -47,6 +47,8 @@
   import { loadPage } from '../../modules/pages.js';
   import { serverOnThisMachine } from '../../lib/nativeDesktop.js';
   import Customize from '../../components/ext/Customize.svelte';
+  import HomeLayoutPanel, { HOME_GLYPH } from '../../components/settings/HomeLayoutPanel.svelte';   // 「主页」分区：Dock / 主页入口的顺序与显隐
+  import PageGrantsPanel, { PAGE_GRANTS_GLYPH } from '../../components/settings/PageGrantsPanel.svelte';   // 「页面权限」分区：插件页面拿到的权限，逐项撤销
   import PluginFrame from '../../components/ext/PluginFrame.svelte';
   import { pluginPanels, watchPluginPanels, panelTitle } from '../../lib/pluginPanels.svelte.js';
   import '../../components/pairing/ConnectQr.svelte';
@@ -84,10 +86,11 @@
   // 「关于与更新」落在「连接与更新」（版本、检查更新都在那一页），反馈落在「反馈」。
   // Gemini 设置分区 11-04 删了（Gemini 对话下线），指向它的老入口一并落到 Media Studio
   // 模型中心的老名字（独立面板时代的 cproviders、口头的 models / providers）都落到 'model-hub'
-  const SEC_ALIAS = { agents: 'ag-claude', claude: 'ag-claude', connection: 'connect', about: 'connect', feedback: 'help', localpc: 'devices', 'agent-api': 'agentapi',
+  const SEC_ALIAS = { agents: 'ag-claude', claude: 'ag-claude', agy: 'ag-agy', connection: 'connect', about: 'connect', feedback: 'help', localpc: 'devices', 'agent-api': 'agentapi',
     'ag-studio': 'studio', media: 'studio', gemini: 'studio', 'ag-gemini': 'studio', vertex: 'studio',
     modelhub: 'model-hub', models: 'model-hub', providers: 'model-hub', cproviders: 'model-hub',
-    dispatch: 'ag-claude#dispatch', 'cl-dispatch': 'ag-claude#dispatch', 'dm-dispatch': 'ag-dimensio#dispatch', 'dimensio-dispatch': 'ag-dimensio#dispatch' };
+    dispatch: 'ag-claude#dispatch', 'cl-dispatch': 'ag-claude#dispatch', 'dm-dispatch': 'ag-dimensio#dispatch', 'dimensio-dispatch': 'ag-dimensio#dispatch',
+    'home-layout': 'home', grants: 'page-grants' };
   // 单页模式（只开着一个 agent、没有主页）也用这一套（2026-10-21 起，原 claude.ai 风那套下线）：
   // 壁纸在那里没意义，藏掉；左上角也不叫「主页」。
   const single = $derived(rootScreen() !== 'home');
@@ -120,7 +123,8 @@
   const ssCtl = typeof window !== 'undefined' && typeof window.BridgeDesktop?.serverSetup?.open === 'function' ? window.BridgeDesktop.serverSetup : null;
   const dark = $derived(ui.theme !== 'light');
   const markSrc = (id) => agentMark(id, dark);
-  const svgOf = (name, w = 1.6) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${SI[name] || ''}</svg>`;
+  // 'home'（「主页」分区）不在 SI 里：由 HomeLayoutPanel 给，两套设置外壳共用一枚；'page-grants' 的盾牌同理由 PageGrantsPanel 给
+  const svgOf = (name, w = 1.6) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${SI[name] || (name === 'home' ? HOME_GLYPH : name === 'page-grants' ? PAGE_GRANTS_GLYPH : '')}</svg>`;
 
   // —— 外壳的设置上下文：分区组件从这里取当前分区、导航、搜索闪烁、明暗、桌面壳的桥和各控制器 ——
   const D = {
@@ -141,6 +145,10 @@
     [
       { key: 'general', label: t('通用'), ico: 'general' },
       { key: 'appearance', label: t('外观'), ico: 'appearance' },
+      // 主页 / Dock 上摆哪些入口（只存这台设备）；单页模式没有主页，同壁纸藏掉
+      ...(single ? [] : [{ key: 'home', label: t('主页'), ico: 'home' }]),
+      // 插件页面拿到的权限：授权跟人走（主机、成员各管各的），单页模式也有
+      ...(me.kind !== 'none' ? [{ key: 'page-grants', label: t('页面权限'), ico: 'page-grants' }] : []),
       ...(scCtl ? [{ key: 'shortcuts', label: t('快捷键'), ico: 'keys' }] : []),
     ],
     [
@@ -269,6 +277,25 @@
     ...visiblePrefItems().map((p) => ({ sec: 'ag-dimensio', id: 'dp-' + p.key, label: prefLabel(p), keys: prefDesc(p) + ' dimensio' })),
     // dimensio 的子 agent 调用策略：就地子页 ag-dimensio#dispatch（读到了 dimensio 的设置才有那一行）
     { sec: 'ag-dimensio', sub: 'dispatch', id: 'ddispatch', label: t('dimensio 的子 agent 调用策略'), keys: t('dimensio 子 agent 模型 思考深度 effort 性价比 判定线 策略 档位 跟随 Claude 工作流 StartSession dispatch policy') },
+    ...(me.kind === 'admin' ? [
+      { sec: 'ag-agy', id: 'ag-pool', label: t('Antigravity 订阅号池'), keys: t('Antigravity agy 账号 号池 切号 Google OAuth 登录 登出 订阅 用量 Pro Ultra pool account') },
+      { sec: 'ag-agy', id: 'ag-router', label: t('Antigravity 额度用尽自动换号'), keys: t('Antigravity agy 智能分派 自动换号 换号 路由 无缝 switch router') },
+      { sec: 'ag-agy', id: 'ag-def-model', label: t('Antigravity 默认模型'), keys: t('Antigravity agy 模型 Gemini Hydrogen Carbon Opus Sonnet model') },
+      { sec: 'ag-agy', id: 'ag-def-effort', label: t('Antigravity 默认思考档位'), keys: t('Antigravity agy 思考 档位 深度 thought level effort') },
+      { sec: 'ag-agy', id: 'ag-def-mode', label: t('Antigravity 默认运行模式'), keys: t('Antigravity agy 模式 接受编辑 自动 规划 mode accept-edits auto plan') },
+      { sec: 'ag-agy', id: 'ag-def-proj', label: t('Antigravity 默认项目工作空间'), keys: t('Antigravity agy 项目 工作区 目录 project workspace cwd') },
+      { sec: 'ag-agy', id: 'ag-perm', label: t('Antigravity 附加工作目录'), keys: t('Antigravity agy 权限 审批 附加目录 additionalDirectories') },
+      { sec: 'ag-agy', id: 'ag-prompt', label: t('Antigravity 系统提示追加'), keys: t('Antigravity agy 系统提示 提示词 systemPrompt append') },
+      { sec: 'ag-agy', id: 'ag-bridge-tools', label: t('Antigravity Bridge 工具协同'), keys: t('Antigravity agy Bridge 工具 生图 视频 语音 音乐 界面协同 手机文件 media ui phone tools') },
+      { sec: 'ag-agy', id: 'ag-mcp', label: t('Antigravity MCP 服务器'), keys: t('Antigravity agy MCP 服务器 连接器 工具 mcp server') },
+      { sec: 'ag-agy', id: 'ag-plugins', label: t('Antigravity CLI 插件'), keys: t('Antigravity agy 插件 安装 卸载 plugin') },
+      { sec: 'ag-agy', id: 'ag-theme', label: t('Antigravity 界面主题'), keys: t('Antigravity agy 外观 主题 Azure Daylight 深色 浅色 theme') },
+      { sec: 'ag-agy', id: 'ag-font', label: t('Antigravity 对话字号'), keys: t('Antigravity agy 字号 字体 大小 font size') },
+      { sec: 'ag-agy', id: 'ag-runtime', label: t('Antigravity 常驻进程状态'), keys: t('Antigravity agy 常驻进程 PID 重启 日志 acp daemon log') },
+      { sec: 'ag-agy', id: 'ag-update', label: t('Antigravity 检查 CLI 更新'), keys: t('Antigravity agy 更新 版本 升级 update version') },
+      { sec: 'ag-agy', id: 'ag-hidden', label: t('Antigravity 已隐藏的会话'), keys: t('Antigravity agy 隐藏 会话 恢复 hidden sessions restore') },
+      { sec: 'ag-agy', id: 'ag-debug', label: t('Antigravity 调试模式'), keys: t('Antigravity agy 调试 harness 反馈 debug feedback') },
+    ] : []),
     // Media Studio（正文是懒加载的 studio 扩展；id 对应它里面的行，搜索跳过去闪一下）。Gemini 设置分区删了，搜 Gemini / Vertex 落到这里
     { sec: 'studio', id: 'st-import', label: t('一键导入 Vertex'), keys: t('Gemini Vertex Google 云凭据 服务账号 API Key OpenRouter 本机图像模型 导入 import') },
     { sec: 'studio', id: 'st-google', label: t('Google 云凭据'), keys: t('Gemini Vertex Google Cloud 凭据 服务账号 JSON 项目 区域 gcloud ADC credentials') },
@@ -294,6 +321,8 @@
     { sec: 'devices', id: 'dv-tier', label: t('Claude 能用这台电脑吗'), keys: t('本机 设备 观察 操作 权限 档位 agent') },
     { sec: 'devices', id: 'dv-forward', label: t('端口转发'), keys: t('端口 转发 dev server 预览 本机模型') },
     { sec: 'devices', id: 'dv-web-bridge', label: t('浏览器扩展 Web Bridge'), keys: t('浏览器 扩展 插件 Edge Chrome 安装') },
+    { sec: 'home', id: 'home-layout', label: t('主页上的入口'), keys: t('主页 Dock 图标 应用 排序 隐藏 更多 home') },
+    { sec: 'page-grants', id: 'page-grants', label: t('页面权限'), keys: t('插件 页面 授权 权限 撤销 文件 对话 grants permissions') },
     { sec: 'wallpaper', id: 'flux', label: t('流体壁纸参数'), keys: t('flux 点阵 颜色 海浪') },
     { sec: 'wallpaper', id: 'wp-light', label: t('明亮壁纸'), keys: t('风景 白天 上传') },
     { sec: 'wallpaper', id: 'wp-dark', label: t('深色壁纸'), keys: t('flux 夜间 上传') },
@@ -318,8 +347,9 @@
    .filter((e) => e.id !== 'st-providers' || !(hub.ok && hub.v2 && !hub.studioErr))   // 有总览时这两样在模型中心管，并进了上面 mh 那条
    .filter((e) => e.id !== 'fbup' || (D.fb.fbUp?.admin && D.fb.fbUp.mode !== 'inbox' && !D.fb.fbUp.reason))   // 跟反馈页上开关的出现条件一致
    .filter((e) => e.id !== 'admin-access' || me.kind === 'user')
+   .filter((e) => e.sec !== 'page-grants' || me.kind !== 'none')   // 跟侧栏入口的出现条件一致，不然搜得到、点进去又被弹回通用
    .filter((e) => e.sec !== 'extensions' || (D.ag.extOk && (!D.ag.extMember || e.id === 'ext-skill')))   // 成员只有技能
-   .filter((e) => !single || (e.sec !== 'wallpaper'))
+   .filter((e) => !single || (e.sec !== 'wallpaper' && e.sec !== 'home'))
    .filter((e) => e.id !== 'auto-update' || hasSilentUpdate())
    .filter((e) => e.id !== 'server-update' || (me.kind === 'admin' && !(hasSilentUpdate() && serverOnThisMachine())))   // 跟「服务端更新」那一组的出现条件一致
    .filter((e) => e.id !== 'quitconfirm' || (D.conn.spPrefs?.managed && typeof D.conn.spPrefs.confirmQuit === 'boolean'))   // 跟「连接与更新」里那一行的出现条件一致
@@ -330,10 +360,16 @@
    .filter((e) => e.id !== 'ddispatch' || dimReady())   // 跟 dimensio 分区里那一行的出现条件一致
    .filter((e) => e.sec !== 'policy' || (ags.policyOk && ags.multiUser)));
   const SECNAME = $derived(Object.fromEntries([['account', t('账户')], ...NAV_GROUPS.flat().map((n) => [n.key, n.label])]));
-  // 选中的分区被收走（权限 / 扩展探针变化）时回到通用。模型中心例外一段时间：直达它时总览多半还没到，等两边都落定再判
+  // 选中的分区被收走（权限 / 扩展探针变化）时回到通用。模型中心例外一段时间：直达它时总览多半还没到，等两边都落定再判；
+  // 扩展同理（直达插件详情时探针还没回来），探针落定了确实没过才退
   $effect(() => {
     if (sec === 'model-hub' && !D.ag.mhSettled) return;
-    if (sec !== 'account' && NAV_GROUPS.length && !NAV_GROUPS.flat().some((n) => n.key === sec) && !sec.startsWith('ag-')) untrack(() => { sec = 'general'; clSub = ''; });
+    if (sec === 'extensions' && !D.ag.extSettled) return;
+    if (sec !== 'account' && NAV_GROUPS.length && !NAV_GROUPS.flat().some((n) => n.key === sec) && !sec.startsWith('ag-')) untrack(() => {
+      // 从「扩展」退走：没被消费的直达一并清掉——残留的 id 会在以后进「功能扩展」、PluginsPanel 一挂上时被消费，把人突然拽进那个插件
+      if (sec === 'extensions') { extensionsNav.id = null; extensionsNav.type = null; }
+      sec = 'general'; clSub = '';
+    });
   });
   const hits = $derived.by(() => {
     const q = query.trim().toLowerCase();
@@ -560,6 +596,11 @@
 
     {:else if sec.startsWith('ag-')}
       <AgentSection />
+
+    {:else if sec === 'home'}
+      <HomeLayoutPanel variant="desktop" />
+    {:else if sec === 'page-grants'}
+      <PageGrantsPanel variant="desktop" />
 
     {:else if sec === 'extensions'}
       {#key D.ag.extKey}<Customize />{/key}

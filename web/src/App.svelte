@@ -12,7 +12,7 @@
   import { onMount, untrack } from 'svelte';
   import { loadCaps } from './lib/caps.js';
   import { api } from './lib/api.js';
-  import { caps, me, ui, applyMe, agentOn, screenOn, rootScreen, applyFollowSys, hostIsServer } from './lib/state.svelte.js';
+  import { caps, me, ui, prefs, applyMe, agentOn, screenOn, rootScreen, applyFollowSys, hostIsServer } from './lib/state.svelte.js';
   import { openPage } from './lib/pageMorph.js';
   import { busStart, busStop, busOn } from './lib/bus.js';
   import { showToast, setErrorToastAction } from './lib/toast.svelte.js';
@@ -29,7 +29,7 @@
   import { isNativeDesktop, hasNativeWorkspaceOps, pushNativeOverlay } from './lib/nativeDesktop.js';
   import { pointer, layout } from './lib/layout.svelte.js';
   // Gemini / Codex / dimensio 的页面属于功能扩展：一律懒加载（modules/pages.js），基础版主包里没有它们。
-  import { loadPage } from './modules/pages.js';
+  import { loadPage, resolvedPage } from './modules/pages.js';
   import BrandTitle from './components/BrandTitle.svelte';
   import ServerConfig from './components/ServerConfig.svelte';
   import { isOffline, getServerBase, startLanAutoSwitch, onConnModeChange, initRoute, onReachabilityChange, startReachabilityWatch, offlineSince, apiUrl, onServerBaseChange } from './lib/server.js';
@@ -38,7 +38,7 @@
   import ServerSwitcher from './components/ServerSwitcher.svelte';
   import { syncDistro } from './lib/distro.js';
   import { cacheMe, getCachedMe } from './lib/cache.js';
-  import { rememberCurrent } from './lib/account.js';   // 本机账号保险箱：启动认到的身份连同令牌收进去，之后能一键切回
+  import { rememberCurrent, syncDeviceOwner } from './lib/account.js';   // 本机账号保险箱：启动认到的身份连同令牌收进去，之后能一键切回
   import Settings from './components/Settings.svelte';
   import SettingsDesktop from './desktop/settings/SettingsDesktop.svelte';
   import DesktopHome from './desktop/home/DesktopHome.svelte';
@@ -63,8 +63,11 @@
   import Toast from './components/Toast.svelte';
   import NoticeBanner from './components/NoticeBanner.svelte';
   import { initNotices } from './lib/notices.svelte.js';
+  import { registerPluginHostRelay, pluginHostReady, pluginHostIdle } from './lib/pluginHostRelay.js';   // 手机 App 插件页面的宿主中转（授权框 / 选择器 / 跳转）
   import { t } from './lib/i18n.js';
-  import { syncPluginUi } from './lib/pluginUi.svelte.js';   // 插件界面扩展（主页卡片、工作台标签、各处菜单、主题变量）
+  import { syncPluginUi, pluginUi } from './lib/pluginUi.svelte.js';   // 插件界面扩展（主页卡片、工作台标签、各处菜单、主题变量）
+  import { isAppKey, appByKey } from './lib/pluginApps.svelte.js';   // 插件应用：应用键 'app:<插件>:<应用>' 也是 ui.screen 的取值
+  import PluginAppPage from './components/apps/PluginAppPage.svelte';
 
   // —— 单 agent 模式 ——
   const root = $derived(rootScreen());
@@ -117,23 +120,38 @@
   // 分页 keep-alive 挂载闩：进过一次就保持挂载（休眠/唤醒切换，见下方 .keep）。boot 完成后错峰
   // 预挂载两个分页（各让一帧再排下一个），首次点入口的转场也全程丝滑——挂载
   // 成本在 idle 期已付清，转场揭幕只翻 display。
-  let mountClaude = $state(false), mountStudio = $state(false), mountChatGPT = $state(false);
+  let mountClaude = $state(false), mountStudio = $state(false), mountChatGPT = $state(false), mountAgy = $state(false);
   $effect(() => { if (ui.screen === 'claude' || ui.enterClaude) mountClaude = true; });
   $effect(() => { if (ui.screen === 'studio' || ui.enterStudio) mountStudio = true; });
   $effect(() => { if (ui.screen === 'chatgpt') mountChatGPT = true; });
+  $effect(() => { if (ui.screen === 'agy') mountAgy = true; });
   // 工作区协同：上报用户所在页面（agent 的 workspace.view 用）。没登录不报（接口要鉴权）；登录后补报一次。
   $effect(() => { if (me.kind !== 'none') reportUi({ page: ui.screen }); });
   // 地址自愈（S1-1）：登录后学这台服务器的身份 / 公网地址 / 候选地址，地址变了自动跟（见 lib/serverAddress.js）
   $effect(() => { if (me.kind && me.kind !== 'none') untrack(() => startAddressHeal()); });
   // 插件界面扩展：登录 / 换人就重拉 /api/plugins/ui，退出登录清空（连同插件设的主题变量）
   $effect(() => { const k = me.kind && me.kind !== 'none' ? me.kind + ':' + (me.user || '') : ''; untrack(() => syncPluginUi(k)); });
+  // dimensio 同步底板色（对齐 @hx/lib/theme.ts 的纸 #F4F1EA / 夜 #131210）：首次点开分块尚未返回时，
+  // 外层 .hx-stage 同帧落入 DOM 参与 openPage 卡片展开，避免第 0 帧无根盒直切。
+  const hxStageBg = $derived((prefs.followSys && typeof matchMedia === 'function'
+    ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+    : ui.theme) === 'light' ? '#F4F1EA' : '#131210');
+
   $effect(() => {
     if (!ui.booted || needConfig) return;
     // 预挂载只挂这个身份开着的分页（没开的 agent 连挂载成本都不付）。
     const t1 = setTimeout(() => { if (screenOn('claude')) mountClaude = true; }, 1600);
     const t2 = setTimeout(() => { if (screenOn('studio')) mountStudio = true; }, 3400);
+    // 其余已开放扩展只预热脚本分块（不挂 DOM、不打接口），首次点击即同步就位；
+    // 仅在服务端已下发 me.agents 后拉取，基础版绝不请求不存在的 chunk。
+    const t3 = setTimeout(() => {
+      if (!untrack(() => Array.isArray(me.agents))) return;
+      if (screenOn('harness')) loadPage.harness().catch(() => {});
+      if (screenOn('agy')) loadPage.agy().catch(() => {});
+      if (screenOn('chatgpt')) loadPage.chatgpt().catch(() => {});
+    }, 2400);
     warmThemeWallpapers();   // 另一套主题的壁纸空闲时先解码：第一次点 THE BRIDGE 也不用等图
-    return () => { clearTimeout(t1); clearTimeout(t2); };
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   });
 
   // agent 名单变了（管理员在设置「Agent」页开关、或在控制台改了这个人的授权）：服务端经总线推
@@ -146,12 +164,13 @@
     if (!ui.booted || needConfig || me.kind === 'none') return;
     busStart();
     initNotices();   // 会话消息通知（横幅 / 系统通知 / 铃声震动），只挂一次
+    untrack(pluginHostReady);   // 登录 + 总线就绪：取冷启动时原生记下的插件页面请求，处理排着的（只读写模块内变量，不进依赖）
     // ui.cmd：agent 经接口让用户的界面换页 / 打开会话 / 预览文件 / 弹提示（lib/agentUi.js）
     const off = busOn((ev) => {
       if (ev.type === 'agents.changed' || ev.type === 'me.changed' || ev.type === 'plugins.changed' || ev.type === 'plugins.market') refreshMe();
       else if (ev.type === 'ui.cmd') handleUiCmd(ev);
     });
-    return () => { off(); busStop(); };
+    return () => { off(); busStop(); pluginHostIdle(); };
   });
   $effect(() => {
     const s = ui.screen;
@@ -165,6 +184,59 @@
     if (screenOn(s)) return;
     untrack(() => {
       showToast(t('这个分页已被管理员关闭'), 'err');
+      ui.screen = rootScreen();
+    });
+  });
+
+  // —— 插件应用分页——
+  // 保活最近用过的两个：切走只休眠，切回来插件页的状态还在；第三个进来时最久没用的卸掉
+  // （每个都是一整个 iframe 页面，常驻太多吃内存）。
+  // 挂载列表 appKeep 和「谁最近用过」appRecent 必须分开存：appKeep 就是下面带键 {#each} 的渲染顺序，
+  // 只许往末尾追加、淘汰时只删不重排——顺序一变，Svelte 就用 before() 把某个 .keep 挪位置，
+  // iframe 一离开文档浏览上下文就被丢掉、整页重载（两个应用来回切时每次都有一个丢状态）。
+  // appRecent 不参与渲染，用普通数组（最近的在前），不进响应式，免得 effect / derived 被它带着重跑。
+  const APP_KEEP_MAX = 2;
+  let appKeep = $state([]);
+  let appRecent = [];
+  // 纯函数：s 已挂着就原样返回（同一个数组，不触发重排）；没挂着就按 appRecent 删掉最久没用的，再把 s 追加到末尾
+  function keepWith(keep, s) {
+    if (keep.includes(s)) return keep;
+    const rank = (k) => { const i = appRecent.indexOf(k); return i < 0 ? Infinity : i; };
+    let next = keep;
+    while (next.length >= APP_KEEP_MAX) {
+      const victim = next.reduce((a, b) => (rank(b) > rank(a) ? b : a));
+      next = next.filter((k) => k !== victim);
+    }
+    return [...next, s];
+  }
+  // 只读 ui.screen；appKeep 只在 untrack 里读写、且只在真变了时写，免得 effect 自己触发自己
+  $effect(() => {
+    const s = ui.screen;
+    if (!isAppKey(s)) return;
+    untrack(() => {
+      const next = keepWith(appKeep, s);
+      if (next !== appKeep) appKeep = next;
+      appRecent = [s, ...appRecent.filter((k) => k !== s && next.includes(k))];
+    });
+  });
+  // 渲染用：当前屏是应用键就立刻算进来（不等上面的 effect 下一拍），pageMorph 的 afterUpdate 在同一拍里就量得到分页根盒。
+  // 和 effect 用同一个 keepWith、同一份 appRecent（effect 还没跑，appRecent 仍是进来前的），两边算出的顺序一致，不会来回挪节点。
+  const appMounted = $derived(isAppKey(ui.screen) ? keepWith(appKeep, ui.screen) : appKeep);
+  // 撤销守卫：应用被关掉 / 插件被停用 / 换了看不到它的身份——还停在它的分页上就送回根页，并从保活里剔掉。
+  // 要分清「还没加载」（pluginUi.loaded 为假：冷启动、刚换身份，先别动）和「真的没有」。
+  // 只跟踪 ui.screen 和 pluginUi（apps 一变就重跑）；appKeep 只在 untrack 里读写、且先比较——不读写同一份被跟踪的 state。
+  $effect(() => {
+    const s = ui.screen;
+    if (!pluginUi.loaded) return;
+    const here = isAppKey(s) && !appByKey(s);
+    void pluginUi.apps;
+    untrack(() => {
+      const keep = appKeep.filter((k) => appByKey(k));   // filter 只删不重排，留下的节点不会被挪
+      if (keep.length !== appKeep.length) appKeep = keep;
+      appRecent = appRecent.filter((k) => keep.includes(k));
+      if (!here) return;
+      // 普通提示，不用 'err'：这是告知（插件停用 / 应用撤了），没有能拿去「问 Claude」诊断的报错
+      showToast(t('这个应用已经不可用了'));
       ui.screen = rootScreen();
     });
   });
@@ -186,6 +258,7 @@
 
   onMount(async () => {
     initNav();   // 垫 history 哨兵：系统侧滑逐级返回而非直接退 app
+    registerPluginHostRelay();   // 尽早挂 window.__bridgePluginHost：原生 onResume 派发时接得住，没登录就先收着
     try {
       const u = new URL(location.href);
       const pp = u.searchParams.get('pair');
@@ -232,6 +305,7 @@
       const a = await api.auth(); applyMe(a);   // 同步写快照 → 下次进 app 启动瞬间即登录态，不闪
       cacheMe(a);   // 缓存登录态（整份，含 agents / hosting），供离线进 app 看历史聊天
       rememberCurrent();
+      syncDeviceOwner();   // 桌面客户端：这台电脑的设备登记跟着此刻的账号走（多账号切换后 cookie 可能还是另一个号）
     }
     catch (e) {
       // 没登录（401）也要拿到服务器形态与开着的 agent 名单（回包体里有），单 agent 的服务器据此直接落页。
@@ -258,10 +332,20 @@
     try {
       window.BridgeDesktop?.agent?.onOpenSession?.(({ func, sessionId } = {}) => {
         if (func === 'codex') { if (screenOn('chatgpt')) ui.screen = 'chatgpt'; return; }
+        // Antigravity：新壳带 func:'agy'；老壳把它的通知当 Claude 的报过来（只认会话 id）——openNoticeTarget 自己认回是哪一页
+        if (func === 'agy') {
+          if (sessionId) import('./lib/notices.svelte.js').then((m) => m.openNoticeTarget(sessionId, '', 'agy')).catch(() => {});
+          else if (screenOn('agy')) ui.screen = 'agy';
+          return;
+        }
+        if (sessionId) {
+          ui.taskDone = false;
+          import('./lib/notices.svelte.js').then((m) => m.openNoticeTarget(sessionId, '')).catch(() => {});
+          return;
+        }
         if (!screenOn('claude')) return;
         ui.screen = 'claude';
         ui.taskDone = false;
-        if (sessionId) openSession(sessionId).catch(() => {});
       });
     } catch {}
     // 桌面壳：需要前端配合的全局快捷键动作（纯窗口层面的由主进程自己做完了）。
@@ -290,8 +374,9 @@
     ui.screen; ui.theme; ui.glassMode;   // 依赖：页面/主题切换就重算
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) {
+      const agyBg = ui.screen === 'agy' ? (ui.theme === 'light' ? '#edf1f8' : '#06080f') : '';
       const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
-      meta.content = ui.screen === 'home' ? '#0a0a0a' : (bg || '#1f1f1e');
+      meta.content = ui.screen === 'home' ? '#0a0a0a' : (agyBg || bg || '#1f1f1e');
     }
     // apk edge-to-edge：系统栏图标明暗跟随主题（主页恒深底→白图标；亮主题 claude 页→深图标）。
     try {
@@ -332,16 +417,25 @@
 {#if mountClaude && screenOn('claude')}
   <div class="keep" class:dormant={ui.screen !== 'claude'} inert={ui.screen !== 'claude'}><ClaudePage /></div>
 {/if}
-{#if mountChatGPT && screenOn('chatgpt')}
+{#if (mountChatGPT || ui.screen === 'chatgpt') && screenOn('chatgpt')}
   <div class="keep" class:dormant={ui.screen !== 'chatgpt'} inert={ui.screen !== 'chatgpt'}>
-    {#await loadPage.chatgpt() then m}<m.default />{/await}
+    {#if resolvedPage.chatgpt}{@const Page = resolvedPage.chatgpt.default}<Page />{:else}{#await loadPage.chatgpt() then m}<m.default />{/await}{/if}
   </div>
 {/if}
-{#if mountStudio && screenOn('studio')}
+{#if (mountAgy || ui.screen === 'agy') && screenOn('agy')}
+  <div class="keep" class:dormant={ui.screen !== 'agy'} inert={ui.screen !== 'agy'}>
+    {#if resolvedPage.agy}{@const Page = resolvedPage.agy.default}<Page />{:else}{#await loadPage.agy() then m}<m.default />{/await}{/if}
+  </div>
+{/if}
+{#if (mountStudio || ui.screen === 'studio') && screenOn('studio')}
   <div class="keep" class:dormant={ui.screen !== 'studio'} inert={ui.screen !== 'studio'}>
-    {#await loadPage.studio() then m}<m.default />{/await}
+    {#if resolvedPage.studio}{@const Page = resolvedPage.studio.default}<Page />{:else}{#await loadPage.studio() then m}<m.default />{/await}{/if}
   </div>
 {/if}
+<!-- 插件应用分页：最近用过的两个保活，同上面的 .keep / dormant / inert -->
+{#each appMounted as k (k)}
+  <div class="keep" class:dormant={ui.screen !== k} inert={ui.screen !== k}><PluginAppPage appKey={k} /></div>
+{/each}
 {#if ui.screen === 'files'}
   <!-- 电脑版工作空间 FilesDesktop：Explorer 级信息密度 + 右键/键盘/拖拽。桌面壳（Electron）恒走它；
        网页上「精确指针（鼠标 / 触控板）且窗口够宽（≥1024）」也走它（云端通道，判据同工作台侧栏 WorkspaceEmbed：
@@ -376,11 +470,13 @@
   <!-- 无权者即便靠陈旧的 screen 状态/深链走到这，也不渲染整页（否则页内每个请求 403，
        变成一屏「加载失败」）。真闸在服务端 /api/harness。 -->
   {#if screenOn('harness')}
-    {#await loadPage.harness() then m}<m.default />{/await}
+    <div class="hx-stage" style:background={hxStageBg}>
+      {#if resolvedPage.harness}{@const Page = resolvedPage.harness.default}<Page />{:else}{#await loadPage.harness() then m}<m.default />{/await}{/if}
+    </div>
   {:else}
     <ComingSoon name="dimensio" />
   {/if}
-{:else if ui.screen !== 'home' && ui.screen !== 'claude' && ui.screen !== 'chatgpt' && ui.screen !== 'studio'}
+{:else if ui.screen !== 'home' && ui.screen !== 'claude' && ui.screen !== 'chatgpt' && ui.screen !== 'agy' && ui.screen !== 'studio' && !isAppKey(ui.screen)}
   <ComingSoon name={ui.screen} />
 {/if}
 
@@ -474,4 +570,5 @@
     color: #f0d8a8; font: inherit; font-size: 12px; cursor: pointer;
   }
   .ob-btn:hover { background: rgba(232,192,122,.22); }
+  .hx-stage { position: fixed; inset: 0; z-index: 30; }
 </style>

@@ -9,12 +9,14 @@ import { getUiState, waitUiAck } from '../../runtime/ui-state.mjs';
 import { busPublish, busSubscribers } from '../../runtime/bus.mjs';
 import { listDevices } from '../../runtime/phone-control.mjs';
 import { phoneClients, phoneHandle, phoneName } from '../../runtime/client-origins.mjs';
+import { findApp, UI_SLOT } from '../../plugins/ui.mjs';
+import { kernel } from '../../plugins/state.mjs';
 
 defineGroup('ui', '用户界面', '看用户此刻开着的 bridge 界面，把它带到某个页面 / 会话 / 文件。');
 
 // 2026-11-04：Gemini 对话下线，vertex 页换成 Media Studio（studio）；它的 module 是四个创作页
-const PAGES = ['home', 'claude', 'files', 'routines', 'settings', 'chatgpt', 'dimensio', 'studio'];
-const PAGE_AGENT = { claude: 'claude', chatgpt: 'codex', dimensio: 'dimensio', studio: 'studio' };
+const PAGES = ['home', 'claude', 'files', 'routines', 'settings', 'chatgpt', 'agy', 'dimensio', 'studio'];
+const PAGE_AGENT = { claude: 'claude', chatgpt: 'codex', agy: 'agy', dimensio: 'dimensio', studio: 'studio' };
 const STUDIO_MODULES = ['image', 'video', 'voice', 'music'];
 
 // 等回执的上限：换页 / 开会话要加载，给宽一点；弹提示是即时的
@@ -126,11 +128,12 @@ async function deliver(ctx, pick, op, body) {
 defineOp({
   name: 'ui.open', title: '把用户的界面带到某处',
   desc: [
-    '四选一：page（页面，可带 module / section）、session（打开一个 Claude 会话）、file（把文件推进预览）、folder（文件面板定位到文件夹）。',
+    '五选一：page（页面，可带 module / section）、session（打开一个 Claude 会话）、file（把文件推进预览）、folder（文件面板定位到文件夹）、app（打开一个插件应用的全屏分页）。',
     '默认发给用户最近在用、且在前台的那个界面；client 指定某一个（ui.view 里的 client），device 指定某台手机上的 bridge（ui.view 的 device，即手机操控的设备句柄，也认设备名 / 机型），all 发给全部。',
     '结果以 confirmed / opened 为准：confirmed=true 才是界面回执过；opened=false 时 reason 说明原因；visible=false 表示打开在后台、用户此刻看不见。',
     '没收到回执时 delivered=false、confirmed=false（界面在后台 / 锁屏 / 已关，或旧版 App 不回执）——别跟用户说已经打开。用户没开着任何 bridge 界面时 delivered=false。',
-    'page 取值：', PAGES.join(' / '), '；studio（Media Studio）的 module 是创作页：', STUDIO_MODULES.join(' / '), '；settings 的 section 是设置分区（如 account、devices、agentapi（Agent 接入））。',
+    'page 取值：', PAGES.join(' / '), '；studio（Media Studio）的 module 是创作页：', STUDIO_MODULES.join(' / '), '；settings 的 section 是设置分区（如 account、devices、agentapi（Agent 接入）、home（主页图标的顺序与显隐））。',
+    'app 写成「插件id:应用id」（如 hello-app:hello）：先调 ui.apps 拿这个用户看得到的应用列表，直接用每项的 app 字段（成员身份看不到 plugins.list，只能走 ui.apps）。只认这个用户看得到、插件开着的应用。',
     '只在用户要你「带我去 / 打开给我看」时用，别擅自把用户从正在看的地方拽走。',
   ].join(''),
   access: 'write',
@@ -141,23 +144,81 @@ defineOp({
     session: { type: 'string', desc: 'Claude 会话 id' },
     file: { type: 'string', desc: '相对工作空间根的文件路径' },
     folder: { type: 'string', desc: '相对工作空间根的文件夹路径' },
+    app: { type: 'string', max: 100, desc: '插件应用：「插件id:应用id」，如 hello-app:hello' },
     client: { type: 'string', desc: '发给哪个界面（ui.view 的 client）；all = 全部' },
     device: { type: 'string', max: 64, desc: '发给哪台手机上的 bridge（ui.view 的 device，也认设备名 / 机型）；和 client 二选一' },
   },
-  handler: async (ctx, args) => {
-    const kinds = ['page', 'session', 'file', 'folder'].filter((k) => args[k] !== undefined && args[k] !== '');
-    if (kinds.length !== 1) throw new OpError('bad_args', 'page / session / file / folder 要且只要给一个');
+  handler: async (ctx, args, env = {}) => {
+    const kinds = ['page', 'session', 'file', 'folder', 'app'].filter((k) => args[k] !== undefined && args[k] !== '');
+    if (kinds.length !== 1) throw new OpError('bad_args', 'page / session / file / folder / app 要且只要给一个');
     if (args.page && PAGE_AGENT[args.page] && !(ctx.agents || []).includes(PAGE_AGENT[args.page])) {
       throw new OpError('forbidden', `「${args.page}」页对你没开`);
+    }
+    let app = null;
+    if (args.app) {
+      const m = /^([a-z][a-z0-9-]{0,47}):([a-z][a-z0-9-]{0,31})$/.exec(String(args.app).trim());
+      if (!m) throw new OpError('bad_args', 'app 要写成「插件id:应用id」，如 hello-app:hello');
+      // 先在服务端认一遍：看不到的应用别发下去让界面去碰（成员不该借 agent 打开只给主机的应用，也省一趟白等回执）
+      const hit = findApp(ctx, m[1], m[2]);
+      if (!hit) throw new OpError('not_found', '没有这个应用，或者你看不到它', { hint: '先调 ui.apps 看这个用户能打开哪些应用（app 字段原样传进来）；插件要开着' });
+      app = { plugin: hit.plugin, id: hit.id };
     }
     const target = args.page ? { page: args.page, ...(args.module ? { module: args.module } : {}), ...(args.section ? { section: args.section } : {}) }
       : args.session ? { session: String(args.session) }
         : args.file ? { file: String(args.file).replace(/\\/g, '/') }
-          : { folder: String(args.folder).replace(/\\/g, '/') };
+          : app ? { app }
+            : { folder: String(args.folder).replace(/\\/g, '/') };
     const pick = pickClient(ctx, args.client, args.device);
     if (pick.noDevice) return { delivered: false, note: NO_DEVICE, target };
     if (!pick.count) return { delivered: false, note: '用户现在没有开着的 bridge 界面（手机 app / 网页 / 桌面客户端都没在前台）', target };
-    return { ...(await deliver(ctx, pick, 'open', { target })), target };
+    // uiFrom：只由服务端内部调用方塞进 env（agy 的 ui_open，见 modules/agy/server/routes/agy-ui-open.mjs），不是参数，
+    // 外部 agent 经 HTTP / MCP 调用带不进来；前端据此把「agy 会话目录下的文件」分流到 agy 页自己的工作区卡片
+    const from = env && env.uiFrom && typeof env.uiFrom === 'object' ? { from: env.uiFrom } : {};
+    return { ...(await deliver(ctx, pick, 'open', { target, ...from })), target };
+  },
+});
+
+// 这个身份看得到的插件应用。候选 = 开着的插件清单里的 ui.apps + 插件运行时 ctx.ui.app 登记的，
+// 再逐个过 findApp（同一个判谁看得到的口子：ui.open 认不认、签票认不认都是它），保证这里列出来的 ui.open 一定打得开。
+// 走同步登记查询，不用 uiView：那个要等各插件算角标（最长 3 秒），agent 只要个清单。
+defineOp({
+  name: 'ui.apps', title: '列出能打开的插件应用',
+  desc: '列出这个用户此刻看得到的插件应用（主页上的插件图标、全屏分页），每项 { app, title, plugin, pluginName, kind }。'
+    + 'app 就是 ui.open 的 app 参数（「插件id:应用id」），原样传过去即可；kind = page（网页型）或 view（声明式）。'
+    + '成员只看得到插件对成员开放的应用（清单里 who: members），主机看得到全部；插件关着的不列。'
+    + '顺序同主页：按应用的 order（小的在前），order 一样按标题。',
+  params: {},
+  handler: async (ctx) => {
+    const seen = new Set();
+    const cand = [];
+    // 主页按 order 排（plugins/ui.mjs appsView），这里跟它一致；运行时登记的盖住清单里同 id 的，order 也取它的
+    const order = new Map();
+    const add = (plugin, id, ord) => {
+      const k = plugin + ':' + id;
+      if (!plugin || !id) return;
+      order.set(k, Number(ord) || 0);
+      if (seen.has(k)) return;
+      seen.add(k);
+      cand.push([plugin, id]);
+    };
+    for (const p of kernel.list()) {
+      if (!p || !p.active) continue;
+      const list = kernel.rawRecord(p.id)?.extra?.ui?.apps;
+      if (Array.isArray(list)) for (const a of list) if (a && typeof a.id === 'string') add(p.id, a.id, a.order);
+    }
+    for (const { item, owner } of kernel.slot(UI_SLOT).entries()) {
+      if (item && item.kind === 'app' && item.spec && typeof item.spec.id === 'string') add(owner, item.spec.id, item.spec.order);
+    }
+    const apps = [];
+    for (const [plugin, id] of cand) {
+      const hit = findApp(ctx, plugin, id);
+      if (!hit) continue;
+      const pluginName = kernel.get(plugin)?.name || plugin;
+      apps.push({ app: hit.plugin + ':' + hit.id, title: hit.title || hit.id, plugin: hit.plugin, pluginName, kind: hit.kind });
+    }
+    const ord = (x) => order.get(x.app) || 0;
+    apps.sort((a, b) => (ord(a) - ord(b)) || a.title.localeCompare(b.title, 'zh-Hans-CN'));
+    return { apps };
   },
 });
 

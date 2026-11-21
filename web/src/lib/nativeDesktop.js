@@ -106,8 +106,10 @@ export const nativeClipboardClearOwn = () => D?.clipboard?.clearOwn?.() || Promi
 
 // viewport = 期望的逻辑视口（CSS 像素）：壳按 contain 把视图缩放居中摆进 element，
 // 页面照完整视口排版后【整体缩小】，而不是被面板宽度裁掉。不传＝老行为（视图铺满）。
-export async function mountNativeBrowser(targetId, element, viewport) {
+// opts.snapshot()：壳没有本地截图（browser.capture，老壳）时的定格画面来源，回一个图片 URL（blob: 用完自动回收）。
+export async function mountNativeBrowser(targetId, element, viewport, opts = null) {
   if (!D?.browser?.mount || !targetId || !element) return false;
+  if (nativeBrowserLayered()) return attachLayered(targetId, element, viewport);
   // 全屏浮层（文件预览/灯箱）压着时让位：原生视图是 OS 级控件，恒在 DOM 之上。
   if (nativeOverlayActive()) { unmountNativeBrowser(targetId); return false; }
   const rect = element.getBoundingClientRect();
@@ -120,17 +122,16 @@ export async function mountNativeBrowser(targetId, element, viewport) {
   if (!panelShown(element)) {
     unmountNativeBrowser(targetId);
     window.__bridgeNativeMount = targetId;
-    trackPanel(targetId, element, vp, rect, true);
+    trackPanel(targetId, element, vp, rect, true, opts);
     return false;
   }
   window.__bridgeNativeMount = targetId;
-  trackPanel(targetId, element, vp, rect, false);
-  const result = await D.browser.mount(targetId, {
-    x: rect.left,
-    y: rect.top,
-    width: rect.width,
-    height: rect.height,
-  }, vp);
+  const t = trackPanel(targetId, element, vp, rect, false, opts);
+  // 面板此刻被别的层压着（设置页、菜单、弹窗……）：不挂，定格成截图，让开了由 trackTick 挂回。
+  // 返回 true——这块面板仍是这个 target 的主人，面板收尾时照样按它让位。
+  if (coveredBy(element, rect)) { freeze(t); return true; }
+  if (t.frozen) { t.frozen = false; t.gen++; }
+  const result = await place(t, rect);
   return Boolean(result?.ok);
 }
 
@@ -143,24 +144,27 @@ export async function mountNativeBrowser(targetId, element, viewport) {
 // 分页休眠（keep-alive 的 .keep.dormant = content-visibility/visibility:hidden）也算看不见：
 // 那种隐藏矩形不变、ResizeObserver 不触发，只靠尺寸判断会把视图留在主页上（10-20 维护者截图）。
 const panelShown = (el) => !el.checkVisibility || el.checkVisibility({ visibilityProperty: true });
-let tracked = null;   // { targetId, element, viewport, key, hidden, raf }
+let tracked = null;   // { targetId, element, viewport, opts, key, hidden, frozen, gen, n, img, raf }
 const rectKey = (r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`;
-function trackPanel(targetId, element, viewport, rect, hidden) {
+function trackPanel(targetId, element, viewport, rect, hidden, opts) {
   // hidden 时 key 置空：一露面矩形必然「变了」，下一帧就挂上
   const key = hidden ? '' : rectKey(rect);
   if (tracked && tracked.element === element && tracked.targetId === targetId) {
     tracked.viewport = viewport;
+    tracked.opts = opts;
     tracked.key = key;
     tracked.hidden = hidden;
-    return;
+    return tracked;
   }
   stopTracking();
-  tracked = { targetId, element, viewport, key, hidden, raf: 0 };
+  tracked = { targetId, element, viewport, opts, key, hidden, frozen: false, gen: 0, n: 0, img: null, raf: 0 };
   tracked.raf = requestAnimationFrame(trackTick);
+  return tracked;
 }
 function stopTracking() {
   if (!tracked) return;
   cancelAnimationFrame(tracked.raf);
+  clearFreeze(tracked);
   tracked = null;
 }
 function trackTick() {
@@ -176,11 +180,132 @@ function trackTick() {
   }
   t.hidden = false;
   const r = t.element.getBoundingClientRect();
-  const k = rectKey(r);
-  if (k === t.key) return;
-  t.key = k;
   if (r.width < 2 || r.height < 2) return;   // 藏起来了：让位由面板自己的尺寸监听处理
-  Promise.resolve(D.browser.mount(t.targetId, { x: r.left, y: r.top, width: r.width, height: r.height }, t.viewport)).catch(() => {});
+  const k = rectKey(r);
+  const moved = k !== t.key;
+  // 遮挡隔帧查一次；要挂到新位置之前必查（别一挂上去就糊住刚弹出来的层）
+  if ((++t.n & 1) || (moved && !t.frozen)) {
+    const covered = Boolean(coveredBy(t.element, r));
+    if (covered && !t.frozen) { freeze(t); return; }
+    if (!covered && t.frozen) { t.frozen = false; t.gen++; }   // 让开了：key 在定格时已清空，下面就挂回
+  }
+  if (t.frozen || !moved) return;
+  t.key = k;
+  place(t, r);
+}
+
+// 挂到面板矩形上。圆角跟面板走（新壳按它裁视图四角，老壳不认这个字段），挂好后撤掉定格截图。
+function place(t, r) {
+  const radius = parseFloat(getComputedStyle(t.element).borderTopLeftRadius) || 0;
+  return Promise.resolve(D.browser.mount(t.targetId, { x: r.left, y: r.top, width: r.width, height: r.height, radius }, t.viewport))
+    .catch(() => null)
+    .then((res) => {
+      // 等一帧再撤：视图先在上面合成出来，截图在底下悄悄退场，没有空档
+      if (t.img) requestAnimationFrame(() => { if (!t.frozen) clearFreeze(t); });
+      return res;
+    });
+}
+
+// —— 同层：被 DOM 压住就定格成截图 ——
+// 原生视图是 OS 级控件，恒在整页 DOM 之上，和面板卡片根本不在一个图层：设置页、菜单、弹窗盖过来时
+// 网页还顶在最上面（10-23 维护者截图：开着浏览器进设置，网页糊在设置页右半边）。
+// 让每个浮层都记得 pushNativeOverlay 不现实，所以这里自己看：面板上撒一张点阵做命中测试，最上层
+// 不是面板自己（或它的祖先）就算被压住——先抓一张当前画面摆进面板，再把原生视图收走，网页看起来
+// 就是卡片里一张会被别的层盖住的普通画面；让开了再挂回来。pointer-events:none 的层（toast 之类）
+// 命中不到，照旧被视图盖住；常驻浮在面板上、又不该让网页定格的小东西标 data-native-float。
+function coveredBy(el, r) {
+  const cols = Math.min(8, Math.max(3, Math.ceil(r.width / 140)));
+  const rows = Math.min(8, Math.max(3, Math.ceil(r.height / 140)));
+  const inset = 6;
+  const dx = (r.width - inset * 2) / (cols - 1);
+  const dy = (r.height - inset * 2) / (rows - 1);
+  for (let i = 0; i < rows; i++) {
+    for (let j = 0; j < cols; j++) {
+      const hit = document.elementFromPoint(r.left + inset + dx * j, r.top + inset + dy * i);
+      if (!hit || hit === el || el.contains(hit) || hit.contains(el)) continue;
+      if (hit.closest('[data-native-float]')) continue;
+      return hit;
+    }
+  }
+  return null;
+}
+
+function freeze(t) {
+  if (t.frozen) return;
+  t.frozen = true;
+  t.key = '';
+  const gen = ++t.gen;
+  const live = () => tracked === t && t.frozen && t.gen === gen;
+  // 先抓图再收视图：收在前面会先露出一两帧空面板；抓图期间视图还盖着刚弹出的层，
+  // 而浮层这时多半还在淡入，几乎看不出来
+  grabSnapshot(t)
+    .then((url) => (live() ? showFreeze(t, url) : dropUrl(url)))
+    .catch(() => {})
+    .finally(() => { if (live()) Promise.resolve(D.browser.unmount(t.targetId)).catch(() => {}); });
+}
+
+// 壳的本地截图优先（主进程 capturePage，几十毫秒）；老壳退到面板给的 snapshot()；最多等 400ms，
+// 抓不到就直接收视图（面板露出自己的底色）。超时后才到的图回收掉。
+function grabSnapshot(t) {
+  let late = false;
+  const job = (async () => {
+    if (D.browser.capture) {
+      const r = await D.browser.capture(t.targetId);
+      if (r?.ok && r.url) return r.url;
+    }
+    return t.opts?.snapshot ? await t.opts.snapshot() : null;
+  })().catch(() => null);
+  job.then((url) => { if (late) dropUrl(url); });
+  return Promise.race([job, new Promise((res) => setTimeout(() => { late = true; res(null); }, 400))]);
+}
+
+async function showFreeze(t, url) {
+  if (!url) return;
+  const img = t.img || document.createElement('img');
+  if (img.src) dropUrl(img.src);
+  img.alt = '';
+  img.draggable = false;
+  img.dataset.nativeFreeze = '';
+  // 与壳的摆位同一规则：contain 居中贴进面板；圆角随面板。不设 z-index——设了会跳出面板所在的层叠上下文、反压在浮层上面
+  img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;border-radius:inherit';
+  img.src = url;
+  await img.decode().catch(() => {});
+  if (tracked !== t || !t.frozen) { dropUrl(url); return; }
+  if (getComputedStyle(t.element).position === 'static') t.element.style.position = 'relative';
+  if (!img.isConnected) t.element.appendChild(img);
+  t.img = img;
+}
+
+function clearFreeze(t) {
+  const img = t.img;
+  if (!img) return;
+  t.img = null;
+  img.remove();
+  dropUrl(img.src);
+}
+
+// —— 同层浏览器（新壳，BridgeDesktop.browser.layered）——
+// 网页由壳画进面板元素里的一块 <canvas>，就是 DOM 里的普通元素：被谁盖住、跟着卡片挪、圆角、
+// 分页休眠全听 CSS。前端只要给面板打上 data-bridge-browser="<targetId>" 再 attach；
+// 下面那套位置跟踪、浮层让位、被压定格都只给老壳（WebContentsView 贴在 DOM 之上）用。
+export const nativeBrowserLayered = () => Boolean(D?.browser?.layered && D?.browser?.attach);
+async function attachLayered(targetId, element, viewport) {
+  const vp = viewport && viewport.width > 0 && viewport.height > 0 ? { width: viewport.width, height: viewport.height } : undefined;
+  // 同一块面板换了标签：属性改成新 id，壳那边拆旧画布、插新画布
+  if (element.getAttribute('data-bridge-browser') !== targetId) element.setAttribute('data-bridge-browser', targetId);
+  window.__bridgeNativeMount = targetId;
+  try { return Boolean((await D.browser.attach(targetId, vp))?.ok); } catch { return false; }
+}
+function detachLayered(targetId) {
+  for (const el of document.querySelectorAll('[data-bridge-browser]')) {
+    if (!targetId || el.getAttribute('data-bridge-browser') === targetId) el.removeAttribute('data-bridge-browser');
+  }
+  if (!targetId || window.__bridgeNativeMount === targetId) window.__bridgeNativeMount = '';
+  try { return D.browser.detach(targetId); } catch { return null; }
+}
+
+function dropUrl(url) {
+  if (typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url);
 }
 
 // —— 浮层让位（原生视图恒在 DOM 之上）——
@@ -192,11 +317,12 @@ function overlayStore() {
   if (!window.__bridgeNativeOverlay) window.__bridgeNativeOverlay = { n: 0 };
   return window.__bridgeNativeOverlay;
 }
-export const nativeOverlayActive = () => Boolean(D) && overlayStore().n > 0;
+// 同层壳里浮层天然盖在网页上面：不计数、不让位
+export const nativeOverlayActive = () => Boolean(D) && !nativeBrowserLayered() && overlayStore().n > 0;
 
 // 打开一层浮层；返回收回函数（放进 $effect 的 cleanup，重复调用安全）。
 export function pushNativeOverlay() {
-  if (!D) return () => {};
+  if (!D || nativeBrowserLayered()) return () => {};
   const store = overlayStore();
   store.n++;
   let released = false;
@@ -219,6 +345,7 @@ export function onNativeOverlayChange(fn) {
 // targetId 缺省 = 无条件全部隐藏（页面收尾等确知自己是唯一挂载者的场合）；
 // 带 targetId = 只有当前挂载的正是它时才隐藏（后台面板的礼貌让位）。
 export function unmountNativeBrowser(targetId = '') {
+  if (nativeBrowserLayered()) return detachLayered(targetId);
   if (tracked && (!targetId || tracked.targetId === targetId)) stopTracking();
   if (typeof window !== 'undefined' && (!targetId || window.__bridgeNativeMount === targetId)) window.__bridgeNativeMount = '';
   try { return D?.browser?.unmount?.(targetId); } catch { return null; }

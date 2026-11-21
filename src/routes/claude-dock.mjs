@@ -378,7 +378,7 @@ export function registerClaudeDockRoutes(router, { identify }) {
       term = { svc, t };
     } catch (e) { return fail(res, e); }
     writeSseHeaders(res);
-    sseWrite(res, { type: 'hello', cols: term.t.cols, rows: term.t.rows, exited: term.t.exited, ...(term.svc.PTY_COMPAT ? { pty: term.svc.PTY_COMPAT } : {}) });
+    sseWrite(res, { type: 'hello', cols: term.t.cols, rows: term.t.rows, exited: term.t.exited, lock: term.svc.termLock(term.t), ...(term.svc.PTY_COMPAT ? { pty: term.svc.PTY_COMPAT } : {}) });
     // 快照（屏幕镜像按 PTY 当前行列序列化）+ 实时输出，衔接处不丢不重；面板按 hello 的行列重放快照
     term.svc.attachTerm(term.t, res);
     const hb = startHeartbeat(res);
@@ -398,7 +398,10 @@ export function registerClaudeDockRoutes(router, { identify }) {
     const g = dockCtx(req, res, body.ws, { shell: true });
     if (!g) return;
     const svc = await import('../runtime/claude-term.mjs');
-    json(res, 200, { ok: svc.resizeTerm(g.ref, body.cols, body.rows) });
+    // unlock：用户在面板上把 agent 占住的尺寸要回来（交还后按面板尺寸重排）
+    if (body.unlock) svc.unlockTermSize(g.ref);
+    const r = svc.resizeTerm(g.ref, body.cols, body.rows);
+    json(res, 200, { ok: !!r, ...(r && r.lock ? { lock: r.lock } : {}) });
   });
 
   router.on('POST', '/api/claude/term/kill', async (req, res) => {

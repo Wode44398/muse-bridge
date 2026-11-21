@@ -52,6 +52,7 @@ export default {
   '停用账号': 'Disable account',
   '删除': 'Delete',
   '仅管理员（尚不支持多用户）': 'Admin only (multi-user not supported yet)',
+  '只能开给完全信任档': 'Full-trust members only',
   '全局已关（勾了也暂不生效）': 'Off globally (selecting it has no effect for now)',
   '可用': 'Available',
   '未授权': 'No access',

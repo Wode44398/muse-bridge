@@ -2,6 +2,7 @@
 // D 是外壳的设置上下文（当前分区等）。
 import { untrack } from 'svelte';
 import { me } from '../../lib/state.svelte.js';
+import { extensionsNav } from '../../lib/extensionsNav.svelte.js';
 import { ags, loadAgents, setAgentOn, loadPool, loadUsage, loadPolicy, savePolicy, deleteAccount, loadResets } from '../../lib/agentSettings.svelte.js';
 import { loadClaudeSettings } from '../../lib/claudeSettings.svelte.js';
 import { POLICY_FIELDS, policyVal } from '../../lib/settings/common.js';
@@ -13,6 +14,16 @@ export function createDeskAgents(D) {
   // 成员探的是自己的技能接口（/api/my-extensions：只有技能，见 ext/Customize 的成员模式）。
   const ext = createExtProbe();   // 探针两套外壳共用（lib/settings/common.svelte.js）
   let extKey = $state(0);   // 搜索直达某个类型时 +1，扩展分区 {#key} 重挂
+  // 「插件详情」直达（lib/extensionsNav 的 openPluginDetail，每次 seq 自增）：设置已经开在「扩展」上时 navigate 是空操作、
+  // Customize 不会重挂（它只在挂载时读一次 type），这里跟着 seq 换 key 让它重挂，才会切到「功能扩展」、由 PluginsPanel 选中那个插件。
+  // 挂载时已有的 seq 不算（这次打开设置本身就会新挂 Customize）；extSeq 是普通变量，effect 只跟 seq 走
+  let extSeq = untrack(() => extensionsNav.seq);
+  $effect(() => {
+    const s = extensionsNav.seq;
+    if (s === extSeq) return;
+    extSeq = s;
+    untrack(() => { extKey++; });
+  });
 
   // ═══ Agent：每个 agent 一个分区（ag-<id>），数据面与手机共用 lib/agentSettings.svelte.js ═══
   // 各接口都是 admin 门；非管理员全部 404/403 → 对应 ok 位为 false，那一节不出现。
@@ -57,7 +68,7 @@ export function createDeskAgents(D) {
     return savePolicy({ quota: { ...(ags.policy?.quota || {}), [k]: v === '' ? 0 : Number(v) || 0 } });
   }
   return {
-    get extOk() { return ext.ok; }, extMember: ext.member, get extKey() { return extKey; }, set extKey(v) { extKey = v; },
+    get extOk() { return ext.ok; }, get extSettled() { return ext.settled; }, extMember: ext.member, get extKey() { return extKey; }, set extKey(v) { extKey = v; },
     get mhSettled() { return hp.settled; }, get mhOn() { return hp.on; },
     get agentRows() { return list.agentRows; }, get studioOn() { return list.studioOn; }, get studioIds() { return list.studioIds; },
     get stModal() { return stModal; }, set stModal(v) { stModal = v; },

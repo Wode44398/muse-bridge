@@ -11,7 +11,8 @@
   let canvas;
   let raf = 0, gl, prog, tex, uR, uRe, uRR, uN, uTex, uTexSize, uStr;
   let texSize = [2048, 1536];
-  const glassRects = new Float32Array(20), glassRR = new Float32Array(5);
+  // 最多 8 块玻璃（主页入口上限 HOME_CAP = 8，含「更多」那格）：这里、shader 的两个数组、循环上限、syncRects 四处同改
+  const glassRects = new Float32Array(32), glassRR = new Float32Array(8);
   let glassN = 0, DPR = 1;
 
   const VS = `attribute vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }`;
@@ -19,8 +20,8 @@
 uniform vec2  R;
 uniform vec2  texSize;
 uniform sampler2D tex;
-uniform vec4  rects[5];
-uniform float rrad[5];
+uniform vec4  rects[8];
+uniform float rrad[8];
 uniform int   N;
 uniform float uStr;
 vec3 bgL(vec2 px, float lod){
@@ -34,7 +35,7 @@ float rrSDF(vec2 p, vec2 h, float r){ vec2 q = abs(p) - h + r; return length(max
 void main(){
   vec2 uvpx = vec2(gl_FragCoord.x, R.y - gl_FragCoord.y);
   vec3 col = bg(uvpx);
-  for(int i = 0; i < 5; i++){
+  for(int i = 0; i < 8; i++){
     if(i >= N) break;
     vec2 c = rects[i].xy; vec2 h = rects[i].zw; float r = rrad[i];
     vec2 dd = uvpx - c;
@@ -133,7 +134,7 @@ void main(){
   }
 
   function syncRects(){
-    glassN = Math.min(5, rects.length);
+    glassN = Math.min(8, rects.length);
     for(let i = 0; i < glassN; i++){
       const r = rects[i];
       glassRects[i*4]   = (r.x + r.w / 2) * DPR;

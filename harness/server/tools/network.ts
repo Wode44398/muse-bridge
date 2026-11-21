@@ -2,6 +2,8 @@ import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
 import { ok, fail, lenientVerify, verifyIgnored } from "./types.ts";
 import { existingBrowser, noBrowserMessage } from "../cdp.ts";
 import { browserAvailable } from "../headless.ts";
+import { sharedBrowser } from "../bridge-runtime.ts";
+import { sharedNetwork } from "./browser/shared.ts";
 
 // Network: audit the Browser page's actual HTTP traffic — every request the
 // page made (XHR/fetch/documents/assets), with status/size/failure, and full
@@ -63,6 +65,7 @@ export const networkTool: Tool = {
     },
   },
   async run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolRunResult> {
+    if (sharedBrowser()) return sharedNetwork(args, ctx); // 嵌在 bridge 里：bridge 共享浏览器录下的请求，证据在本地按带回的列表判
     const page = existingBrowser(ctx.ownerId ?? ""); // 这个会话自己的浏览器（cdp.ts getBrowser）
     if (!page) return fail("network", noBrowserMessage());
     const action = String(args.action ?? "list").trim() || "list";

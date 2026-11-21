@@ -198,6 +198,80 @@ export class CdpPageMethods {
     return buf;
   }
 
+  // 截图前等页面「停下来」：字体加载完、有限长的 CSS / JS 动画（过渡、一次性 keyframes）跑完，再等两帧（后台页 rAF
+  // 可能不跑，每帧最多等 100ms），最多 maxMs；无限循环的动画（转圈）不等。切页、点完按钮立刻截，拍到的常是半截动画。
+  // 返回等了多久、到点还有几个没跑完（那张图可能是半截的）。页面拒绝脚本（CSP 之类）就不等。
+  async settleAnimations(maxMs = 3000) {
+    const js = `(async (maxMs) => {
+      const t0 = performance.now();
+      const left = () => Math.max(0, maxMs - (performance.now() - t0));
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const frame = () => Promise.race([new Promise((r) => requestAnimationFrame(() => r())), sleep(100)]);
+      try { if (document.fonts && document.fonts.status !== "loaded") await Promise.race([document.fonts.ready, sleep(left())]); } catch {}
+      const busy = () => document.getAnimations().filter((a) => {
+        if (a.playState !== "running") return false;
+        const end = a.effect && a.effect.getComputedTiming ? a.effect.getComputedTiming().endTime : Infinity;
+        return Number.isFinite(end);
+      });
+      let running = busy();
+      while (running.length && left() > 0) {
+        await Promise.race([Promise.allSettled(running.map((a) => a.finished)), sleep(Math.min(100, left()))]);
+        running = busy();
+      }
+      await frame();
+      await frame();
+      return { waitedMs: Math.round(performance.now() - t0), stillRunning: running.length };
+    })(${Math.round(maxMs)})`;
+    try {
+      const r = await this.eval(js);
+      return { waitedMs: Number(r?.waitedMs) || 0, stillRunning: Number(r?.stillRunning) || 0 };
+    } catch { return { waitedMs: 0, stillRunning: 0 }; }
+  }
+
+  // 只截一个元素（target = { ref } | { selector }）：不在视口里先滚进来，按页面坐标截它的盒子（CSS 像素 × 设备像素比出图，
+  // 每边最多 SHOT_MAX_PX）。不改坐标基准（this.frame 不动）：点击坐标仍按最近那张整屏截图给。
+  async elementShot(target = {}) {
+    const group = 'bridge-shot';
+    try {
+      let objectId;
+      if (target.ref != null) {
+        const { backendId } = this.refInfo(Number(target.ref));
+        const { object } = await this.send('DOM.resolveNode', { backendNodeId: backendId, objectGroup: group });
+        if (!object?.objectId) throw new Error(`ref${target.ref} 对应的元素已经不在了（页面变过）——重新 read_page`);
+        objectId = object.objectId;
+      } else {
+        const sel = String(target.selector || '');
+        const r = await this.send('Runtime.evaluate', { expression: `document.querySelector(${JSON.stringify(sel)})`, objectGroup: group });
+        if (r?.exceptionDetails) throw new Error(`CSS selector 写法不对：${sel}`);
+        if (!r?.result?.objectId) throw new Error(`没有匹配 ${sel} 的元素`);
+        objectId = r.result.objectId;
+      }
+      const call = async (fn) => {
+        const r = await this.send('Runtime.callFunctionOn', { objectId, functionDeclaration: fn, returnByValue: true });
+        if (r?.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text || '页面脚本出错');
+        return r?.result?.value;
+      };
+      await call("function(){const r=this.getBoundingClientRect();if(r.top<0||r.left<0||r.bottom>innerHeight||r.right>innerWidth)this.scrollIntoView({block:r.height>innerHeight?'start':'center',inline:'center',behavior:'instant'});}");
+      await delay(60);
+      const box = await call('function(){const r=this.getBoundingClientRect();return {left:r.left,top:r.top,width:r.width,height:r.height,sx:scrollX,sy:scrollY,vw:innerWidth,vh:innerHeight,dpr:devicePixelRatio};}');
+      if (!box || box.width < 1 || box.height < 1) throw new Error(`${target.ref != null ? `ref${target.ref}` : `selector ${target.selector}`} 没有可见的盒子（display:none、尺寸为 0 或已脱离文档）`);
+      const width = Math.min(10_000, box.width);
+      const height = Math.min(10_000, box.height);
+      const dpr = box.dpr > 0 ? box.dpr : 1;
+      const scale = Math.min(1, SHOT_MAX_PX / (Math.max(width, height) * dpr));
+      const beyond = box.top < 0 || box.left < 0 || box.top + height > box.vh || box.left + width > box.vw;
+      const r = await this.send('Page.captureScreenshot', {
+        format: 'png', captureBeyondViewport: beyond,
+        clip: { x: box.left + box.sx, y: box.top + box.sy, width, height, scale },
+      });
+      if (!r?.data) throw new Error('captureScreenshot returned no data');
+      const buf = Buffer.from(r.data, 'base64');
+      return { buf, element: { css: [box.left, box.top, width, height].map(Math.round), clamped: width !== box.width || height !== box.height, ...pngSize(buf) } };
+    } finally {
+      this.send('Runtime.releaseObjectGroup', { objectGroup: group }, 5_000).catch(() => {});
+    }
+  }
+
   async reload() {
     const t0 = Date.now();
     const loaded = new Promise((res) => this.loadWaiters.push(res));

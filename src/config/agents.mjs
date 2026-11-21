@@ -12,6 +12,9 @@
 // multiUser：这个 agent 能不能开给注册用户（多租户隔离做没做完）。false 的只给管理员——
 //   codex 的工具调用在进程内部执行，绕过 bridge 的沙箱守卫，且共用主机上的登录与会话目录。
 //   dimensio 是每人一个进程、锁在自己文件夹里的租户实例，所以可以。
+//   agy 也是每人一个进程（自己的一份会话库 + 工具调用守卫，modules/agy/server/tenants.mjs），但只给「完全信任」档：
+// fullTrust：只能开给完全信任档（有命令行权限）的注册用户。agy 会执行工作目录里 .agents 下的钩子脚本，
+//   这相当于命令行权限——不能经它把命令行给了本来没有的人。
 // tool：工具型页面（Media Studio），不能拿来聊天——凡是列「可以对话的 agent」的地方（模型菜单、新建对话、定时任务引擎、
 //   扩展中心的 agent 勾选列）都要按 !a.tool 过滤，用 CHAT_AGENTS / isChatAgent。开关、按人授权、页面门控照常认它。
 
@@ -21,6 +24,7 @@ export const AGENTS = Object.freeze([
   // Media Studio（2026-11-04）：媒体创作工作室（图像 / 视频 / 配音 / 音乐）。成员能用的服务 = 自己的 Key + 管理员共享的。
   { id: 'studio', label: 'Media Studio', screen: 'studio', chat: null, multiUser: true, tool: true },
   { id: 'codex', label: 'ChatGPT · Codex', screen: 'chatgpt', chat: 'codex', multiUser: false },
+  { id: 'agy', label: 'Antigravity', screen: 'agy', chat: 'agy', multiUser: true, fullTrust: true },
   // dimensio：2026-09-28 起每个注册用户一个 harness 进程（routes/harness.mjs 实例池 + harness 租户模式），可以按人放行。
   { id: 'dimensio', label: 'dimensio', screen: 'harness', chat: null, multiUser: true },
 ]);

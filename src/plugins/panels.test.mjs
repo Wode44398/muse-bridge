@@ -11,6 +11,11 @@ const tmp = mkdtempSync(path.join(os.tmpdir(), 'bridge-plugin-panels-'));
 process.env.BRIDGE_DATA_ROOT = tmp;
 process.env.BRIDGE_PLUGINS_STATE = path.join(tmp, 'plugins.json');
 process.env.BRIDGE_PLUGINS_DIR = path.join(tmp, 'plugins');
+// 签票要求身份解得出（账号库里没有的成员不签），所以要真建一个测试成员。账号库与工作空间显式指到临时目录：
+// 只靠 BRIDGE_DATA_ROOT 推默认值时，外面 shell 里继承来的 BRIDGE_USERS_ROOT / VAULT_PATH 会盖过它，测试账号就写进真账号库了
+process.env.BRIDGE_USERS_ROOT = path.join(tmp, 'users');
+process.env.VAULT_PATH = path.join(tmp, 'vault');
+mkdirSync(process.env.VAULT_PATH, { recursive: true });
 
 const { kernel } = await import('./state.mjs');
 const { installMixins } = await import('./host.mjs');
@@ -18,14 +23,18 @@ const { normUi } = await import('./discover.mjs');
 const { createRouter } = await import('../runtime/router.mjs');
 const { registerPluginRoutes } = await import('../routes/plugins.mjs');
 const { mintTicket, resolveTicket } = await import('./tickets.mjs');
+const users = await import('../users.mjs');
+const { userIdentity } = await import('../runtime/identity.mjs');
 
 installMixins();
 const router = createRouter();
-// 测试身份：x-test 头 admin / member / 无
+let memberIdentity = null;
+// 测试身份：x-test 头 admin / member（账号库里真有）/ ghost（账号库里没有：解不出身份）/ 无
 const identify = (req) => {
   const k = req.headers['x-test'];
   if (k === 'admin') return { kind: 'admin', user: null };
-  if (k === 'member') return { kind: 'user', user: 'mem1', name: 'mem1', tier: 'user', agents: ['claude'] };
+  if (k === 'member') return memberIdentity;
+  if (k === 'ghost') return { kind: 'user', user: 'ghost1', name: 'ghost1', tier: 'user', agents: ['claude'] };
   return { kind: 'none', user: null };
 };
 kernel.provide('router', router);
@@ -49,6 +58,10 @@ async function add(id, ui, apply = () => {}) {
 let seenKind = null;
 test.before(async () => {
   await kernel.start();
+  const r = await users.createUser('panelmember', 'pw-panelmember-123', 'user');
+  assert.ok(r.ok, r.error);
+  memberIdentity = userIdentity(r.id);
+  assert.ok(memberIdentity);
   await add('hostonly', { panel: { page: 'web/index.html', title: '主机面板', icon: 'chat' } }, (ctx) => {
     ctx.route('GET', '/api/plugin/hostonly/me', (req, res) => { const c = ctx.http.user(req, res); if (!c) return; seenKind = c.kind; ctx.http.json(res, 200, { kind: c.kind }); });
     ctx.route('GET', '/api/plugin-other/x', (req, res) => { const c = ctx.http.user(req, res); if (!c) return; ctx.http.json(res, 200, { kind: c.kind }); });
@@ -81,13 +94,17 @@ test('面板列表：主机看得到全部，成员只看得到 who:members 的�
   assert.equal((await get('/api/plugins/panels')).status, 401);
 });
 
-test('签票：成员签不了主机专用插件的票、签不了设置页的票', async () => {
+test('签票：成员签不了主机专用插件的票、签不了设置页的票；账号库里没有的成员一律不签', async () => {
   const post = (h, b) => fetch(base + '/api/plugins/ticket', { method: 'POST', headers: { 'content-type': 'application/json', ...h }, body: JSON.stringify(b) });
   assert.equal((await post({ 'x-test': 'member' }, { id: 'hostonly' })).status, 403);
   assert.equal((await post({ 'x-test': 'member' }, { id: 'shared', which: 'settings' })).status, 403);
   const r = await (await post({ 'x-test': 'member' }, { id: 'shared' })).json();
   assert.match(r.ticket, /^[A-Za-z0-9_-]{20,}$/);
   assert.equal(r.page, '/plugins/shared/web/index.html');
+  // 解不出身份（账号库里已经没有这个成员）：签出来也是张废票，直接 403
+  const g = await post({ 'x-test': 'ghost' }, { id: 'shared' });
+  assert.equal(g.status, 403);
+  assert.match((await g.json()).error, /打不开这个插件的页面/);
 });
 
 test('票据：只在本插件自己的 /api/plugin/<id>/ 下认；别的插件、别的路径、过期都不认', async () => {
@@ -118,7 +135,7 @@ test('插件页面带 CSP sandbox；SDK 文件不带；插件关掉页面 404', 
 });
 
 test('独立页面事件流：带票收得到 ctx.bus.toPage 推的事件；成员的票只收 who:members 插件的', async () => {
-  const { ticket } = mintTicket('shared', { kind: 'user', user: 'mem1', name: 'mem1', tier: 'user', agents: ['claude'] });
+  const { ticket } = mintTicket('shared', memberIdentity);   // 票据按账号库现状重新认身份，得是账号库里真有的成员
   const ac = new AbortController();
   const res = await fetch(base + '/api/plugins/page-events?id=shared', { headers: { authorization: 'Plugin ' + ticket }, signal: ac.signal });
   assert.equal(res.status, 200);

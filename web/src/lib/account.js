@@ -35,7 +35,16 @@ export function forgetUser(name) {
  * （不调的话最多要等 10 分钟）。只在登录动作之后调，不在每次启动时调——吊销的设备不该自己登记回来。不在桌面壳里是空操作。
  */
 export function afterSignIn() {
-  try { globalThis.BridgeDesktop?.device?.refresh?.()?.catch?.(() => {}); } catch {}
+  // 带上此刻的登录令牌：桌面壳按它认人（以前只看 cookie，多账号切换后 cookie 可能还是另一个号，电脑就登记到那个号名下）
+  try { globalThis.BridgeDesktop?.device?.refresh?.({ token: getToken() || '' })?.catch?.(() => {}); } catch {}
+}
+
+/**
+ * 页面启动拿到身份后调：把此刻的账号报给桌面壳，这台电脑的设备登记跟着它（归属对不上就改登记）。
+ * 和 afterSignIn 不同，它不解除「被吊销后暂停登记」。老客户端没有 sync，是空操作。
+ */
+export function syncDeviceOwner() {
+  try { globalThis.BridgeDesktop?.device?.sync?.({ token: getToken() || '' })?.catch?.(() => {}); } catch {}
 }
 
 /** 当前登录的账号收进保险箱（有会话令牌才收；本机无鉴权控制台没有令牌，不收）。启动拿到身份、切换 / 添加前各调一次。 */
@@ -92,6 +101,7 @@ export async function signOut() {
   if (key) dropAccount(key);
   setToken(null);
   applyMe(null);
+  syncDeviceOwner();   // 桌面壳忘掉刚退出的那张令牌
 }
 
 // —— 快捷切换 ——
@@ -122,11 +132,16 @@ export async function switchTo(key) {
     throw Object.assign(new Error('expired'), { expired: res.status === 401 || !!fresh, user: ent.kind === 'user' ? ent.user : '' });
   }
   setToken(ent.token);
-  // 网页 / 桌面壳同源：把 cookie 换成这个号的（清掉另一种身份的残留）；离线 apk 跨源不带 cookie，失败也无妨
-  try { await api.post('/api/auth/adopt', {}); } catch {}
+  // 网页 / 桌面壳同源：把 cookie 换成这个号的（清掉另一种身份的残留）；离线 apk 跨源不带 cookie，失败也无妨。
+  // 存着的管理员凭据是主令牌（旧版登录留下的）时，服务端换发一张管理员登录令牌回来：换上它，cookie 才对得齐
+  let tok = ent.token;
+  try {
+    const r = await api.post('/api/auth/adopt', {});
+    if (r && typeof r.token === 'string' && r.token) { tok = r.token; setToken(tok); }
+  } catch {}
   applyMe(fresh);
   try { cacheMe(fresh); } catch {}
-  upsertAccount(fresh, ent.token);
+  upsertAccount(fresh, tok);
   afterSignIn();
   setTimeout(() => location.reload(), 0);
   return true;

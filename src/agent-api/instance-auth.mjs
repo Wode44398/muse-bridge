@@ -17,7 +17,8 @@ import { looksLikeAgentDeviceToken, agentDeviceTokenCtx } from '../runtime/agent
 import { contextFor } from '../runtime/identity.mjs';
 import { identityOfCtx } from './internal.mjs';
 
-/** 实例调不到的操作：设备组（操作电脑用实例自己的 Device* 工具）。媒体组由 设置 › Media Studio 按实例放行（ops/media.mjs）。 */
+/** 实例调不到的操作：设备组（操作电脑用实例自己的 Device* 工具）。媒体组与 studio 组的生成由 设置 › Media Studio 按实例放行，
+ *  studio 组的服务与个人设置管理不给实例（ops/media.mjs、ops/studio.mjs）。 */
 export const instanceExcluded = (name) => /^devices\./.test(String(name || ''));
 
 function isHostSecret(tok) {
@@ -30,6 +31,10 @@ function isHostSecret(tok) {
 const opDeny = (op) => (instanceExcluded(op.name)
   ? `同机 agent 实例不从这里调「${op.group}」组：操作电脑用实例自己的 Device* 工具`
   : null);
+
+// 主机密钥调用方允许自报的同机受管实例名；未列出的值（如 'api'、'claude' 或未知串）一律归为 'host'，
+// 防止持主机密钥的本地进程借请求头冒充其他身份类型绕过 Media Studio 白名单或设置修改限制。
+const KNOWN_HOST_AGENTS = new Set(['dimensio', 'codex', 'agy']);
 
 /**
  * 认请求头里的凭据是不是同机实例的。
@@ -50,12 +55,13 @@ export function instanceCaller(req, tok) {
     instance = hit.agent;
   } else {
     identity = { kind: 'admin', user: null };
-    // 主机密钥也给 Codex 的 stdio MCP：是谁只看它自报的 X-Bridge-Agent（只用来标日志 / 上报来源，不影响权限）
-    const said = String(req.headers['x-bridge-agent'] || '');
-    instance = /^[a-z]{2,16}$/.test(said) ? said : 'host';
+    // 主机密钥由同机受管实例（dimensio / codex / agy 的本地进程或 stdio MCP）共用，按请求头 X-Bridge-Agent
+    // 区分具体实例（用于日志来源及 设置 › Media Studio 的按实例白名单）；只认已知同机实例名，其余归为 'host'。
+    const said = String(req.headers['x-bridge-agent'] || '').trim();
+    instance = KNOWN_HOST_AGENTS.has(said) ? said : 'host';
   }
   const ctx = contextFor(identity);
   ctx.opDeny = opDeny;
-  ctx.agentCaller = instance;   // 'dimensio' / 'codex' / 'host'：媒体组按它查 设置 › Media Studio
+  ctx.agentCaller = instance;   // 'dimensio' / 'codex' / 'agy' / 'host'：媒体组按它查 设置 › Media Studio
   return { identity, ctx, key: null, instance };
 }

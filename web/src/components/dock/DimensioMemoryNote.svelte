@@ -161,7 +161,7 @@
 <style>
   .dn { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--text); animation: dnIn .16s ease; }
   @keyframes dnIn { from { opacity: 0; transform: translateX(10px); } }
-  .dn-head { flex: none; display: flex; align-items: center; gap: 4px; padding: 0 12px 8px 4px; border-bottom: 1px solid var(--dk-line, var(--divider)); }
+  .dn-head { flex: none; display: flex; align-items: center; gap: 4px; padding: 0 12px 8px 4px; border-bottom: 1px solid var(--wb-line, var(--divider)); }
   .dn-t { flex: 1; min-width: 0; font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .dn-ib { flex: none; width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center; color: var(--serif); }
   .dn-ib svg { width: 18px; height: 18px; }
@@ -184,7 +184,7 @@
   .dn-f input, .dn-f textarea, .dn-reason { font: inherit; font-size: 13.5px; color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent);
     border: 0; border-radius: 9px; padding: 8px 10px; outline: none; box-shadow: inset 0 0 0 1px var(--divider); }
   .dn-f textarea { font-family: Consolas, 'Cascadia Mono', Menlo, monospace; font-size: 12.5px; resize: vertical; min-height: 160px; }
-  .dn-foot { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px calc(10px + var(--sab, 0px)); border-top: 1px solid var(--dk-line, var(--divider)); }
+  .dn-foot { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px calc(10px + var(--sab, 0px)); border-top: 1px solid var(--wb-line, var(--divider)); }
   .dn-acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .dn-acts.end { justify-content: flex-end; margin-top: 8px; }
   .dn-sp { flex: 1; }

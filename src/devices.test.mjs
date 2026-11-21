@@ -175,6 +175,12 @@ test('会话连接接口：只能连自己的设备，none 与清空都行', asy
   assert.equal((await get('/api/devices/link?sessionId=' + sid, H)).body.link, mine.body.device.id);
   assert.equal((await post('/api/devices/link', { sessionId: sid, link: 'none' }, H)).body.link, 'none');
   assert.equal((await post('/api/devices/link', { sessionId: sid, link: '' }, H)).body.link, '');
+  // 别的分页（Antigravity）的会话另记一份，不占 Claude 那张表；别人的设备同样连不上
+  assert.equal((await post('/api/devices/link', { sessionId: sid, agent: 'agy', link: other.body.device.id }, H)).code, 404);
+  assert.equal((await post('/api/devices/link', { sessionId: sid, agent: 'agy', link: mine.body.device.id }, H)).body.link, mine.body.device.id);
+  assert.equal((await get('/api/devices/link?agent=agy&sessionId=' + sid, H)).body.link, mine.body.device.id);
+  assert.equal((await get('/api/devices/link?sessionId=' + sid, H)).body.link, '', 'agy 的连接不该出现在 Claude 的会话上');
+  assert.equal((await post('/api/devices/link', { sessionId: sid, agent: 'agy', link: '' }, H)).body.link, '');
   // 存在 dave 自己的数据目录里，erin 读不到
   assert.equal(deviceLinkFor({ dataDir: path.join(tmp, 'users', 'erin', '.bridge') }, sid), null);
 });

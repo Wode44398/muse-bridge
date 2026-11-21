@@ -27,7 +27,7 @@
   import { usePage } from '../../../lib/claudePage/context.js';
 
   const pc = usePage();
-  const { saveCurQuick, onScroll, keepCurQuick } = pc;
+  const { saveCurQuick, onScroll, onWheel, onTouchStart, onTouchEnd, keepCurQuick } = pc;
 
   // 官方 /code 落地页问候（cc43287c9 nz，What’s up next, {name}?）
   const greetName = $derived(me.user ? t('{name}，接下来做什么？', { name: me.user }) : t('接下来做什么？'));
@@ -67,7 +67,7 @@
 {:else}
   <!-- 首尾两条渐隐带 = claude.ai /code 转录滚动区原件（app.css .scroll-fade-strip-*）：sticky + 负 margin
        不占位，不改 scrollHeight，onScroll/atBottom 的粘底判定不受影响；尺寸与底带钉位见下方 .scroll 规则。 -->
-  <div class="scroll" bind:this={pc.scrollEl} onscroll={onScroll}>
+  <div class="scroll" bind:this={pc.scrollEl} onscroll={onScroll} onwheel={onWheel} ontouchstart={onTouchStart} ontouchend={onTouchEnd} ontouchcancel={onTouchEnd}>
     <div class="scroll-fade-strip-top" aria-hidden="true"></div>
     <Thread />
     <div class="scroll-fade-strip-bottom" aria-hidden="true"></div>

@@ -8,6 +8,7 @@ import { IS_CSNAP } from './csnap.js';
 import { serverHosted } from './deployFlags.js';
 import { AGENT_IDS, screenAgents } from '../../../src/config/agents.mjs';
 import { pickRootScreen } from './rootScreen.js';
+import { normalizeLayout } from './homeLayoutCore.js';
 
 // The current Claude conversation + whether a turn is streaming.
 export const session = $state({
@@ -102,7 +103,7 @@ export const caps = $state({ loaded: false, data: null });
 // 回来后经 applyMe 校正（仅 token 真失效才退登录）。快照非凭证（真鉴权靠 token），伪造无害。
 function legacyAgents(m) {
   if (!m || !m.kind || m.kind === 'none') return null;   // 不知道 → 全显示（旧行为）
-  return ['claude', 'gemini', ...((m.kind !== 'user' || m.allowCodex) ? ['codex'] : []), ...(m.allowDimensio ? ['dimensio'] : [])];
+  return ['claude', 'gemini', ...((m.kind !== 'user' || m.allowCodex) ? ['codex'] : []), ...(m.allowAgy ? ['agy'] : []), ...(m.allowDimensio ? ['dimensio'] : [])];
 }
 function normMe(m) {
   const kind = (m && m.kind) || 'none';
@@ -110,7 +111,7 @@ function normMe(m) {
     kind, user: m?.user || null, tier: m?.tier || null,
     // 账号 id 与 owner 键：本机账号保险箱（lib/accountVault.js）据此认「是不是同一个号」
     uid: m?.uid || null, key: m?.key || null,
-    allowCodex: !!m?.allowCodex, allowDimensio: !!m?.allowDimensio,
+    allowCodex: !!m?.allowCodex, allowAgy: !!m?.allowAgy, allowDimensio: !!m?.allowDimensio,
     agents: Array.isArray(m?.agents) ? m.agents.filter((id) => AGENT_IDS.includes(id)) : legacyAgents(m),
     tokenHashed: !!m?.tokenHashed,
     hosting: m?.hosting === 'server' ? 'server' : 'host',
@@ -233,11 +234,12 @@ export function toggleGlassMode() { setHomeMode(ui.glassMode === 'A' ? 'B' : 'A'
 // promptSuggest: 输入建议（Claude 每轮回复完预测下一句，输入框空着时显示，Tab 填入；默认开，与官方同）
 // claudeMark: Claude 运行标记——'clay'=新版 Claude Code 的活动标记（默认）/ 'sprite'=新版 claude.ai 聊天页（星形→节点）/ 'classic'=原来的 claude.ai 星标五态
 // compactFrac: Claude 自动压缩点（用量弹层计量条上的滑块）= 占模型窗口的比例，null = 默认（CLI 自定）
+// homeLayout: 主页入口的顺序与隐藏（{ order, hidden }，lib/homeLayoutCore 清洗；只存本机，不进账号）
 const PREFS_KEY = 'bridge-prefs';
 const fracOk = (v) => (typeof v === 'number' && v > 0 && v < 1 ? v : null);
 function loadPrefs() {
-  try { const p = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null'); if (p) return { followSys: !!p.followSys, followPage: !!p.followPage, noEnterAnim: !!p.noEnterAnim, fullResMedia: !!p.fullResMedia, promptSuggest: p.promptSuggest !== false, worktree: !!p.worktree, claudeMark: p.claudeMark === 'classic' || p.claudeMark === 'sprite' ? p.claudeMark : 'clay', compactFrac: fracOk(p.compactFrac) }; } catch {}
-  return { followSys: false, followPage: false, noEnterAnim: false, fullResMedia: false, promptSuggest: true, worktree: false, claudeMark: 'clay', compactFrac: null };
+  try { const p = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null'); if (p) return { followSys: !!p.followSys, followPage: !!p.followPage, noEnterAnim: !!p.noEnterAnim, fullResMedia: !!p.fullResMedia, promptSuggest: p.promptSuggest !== false, worktree: !!p.worktree, claudeMark: p.claudeMark === 'classic' || p.claudeMark === 'sprite' ? p.claudeMark : 'clay', compactFrac: fracOk(p.compactFrac), homeLayout: normalizeLayout(p.homeLayout) }; } catch {}
+  return { followSys: false, followPage: false, noEnterAnim: false, fullResMedia: false, promptSuggest: true, worktree: false, claudeMark: 'clay', compactFrac: null, homeLayout: normalizeLayout(null) };
 }
 export const prefs = $state(loadPrefs());
 
@@ -246,7 +248,7 @@ export const prefs = $state(loadPrefs());
 // 工作台与归属芯片据此指向 worktree，而不是项目的主检出。
 export const sessionWt = $state({});
 export function savePrefs() {
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ followSys: prefs.followSys, followPage: prefs.followPage, noEnterAnim: prefs.noEnterAnim, fullResMedia: prefs.fullResMedia, promptSuggest: prefs.promptSuggest, worktree: prefs.worktree, claudeMark: prefs.claudeMark, compactFrac: prefs.compactFrac })); } catch {}
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ followSys: prefs.followSys, followPage: prefs.followPage, noEnterAnim: prefs.noEnterAnim, fullResMedia: prefs.fullResMedia, promptSuggest: prefs.promptSuggest, worktree: prefs.worktree, claudeMark: prefs.claudeMark, compactFrac: prefs.compactFrac, homeLayout: normalizeLayout(prefs.homeLayout) })); } catch {}
 }
 
 // 按主页明暗系统的叫法手动切（点 THE BRIDGE、设置页选壁纸槽）：全局明暗统一，等价于 pickTheme。

@@ -14,7 +14,11 @@
 //   POST /api/plugins/action   {id, action, args?}   插件详情页的动作按钮（ctx.action）
 //   GET  /api/plugins/options?id=&field=     配置字段的动态选项（内置来源 claude.models / users… 或插件 ctx.configOptions）
 //   GET  /api/plugins/log?id=&name=&lines=   托管子进程（ctx.process）的日志尾巴；name=plugin = 插件自己的日志（ctx.log，&level=warn|error 过滤）
-//   GET  /plugins/<id>/web/<path>           第三方插件自带的页面（web/），插件开着才给；免登录（同 /app 静态资源）
+//   GET  /plugins/<id>/web/<path>           第三方插件自带的页面（web/），插件开着才给；免登录（同 /app 静态资源）；html 与 svg / xml 带 CSP sandbox
+//   GET  /api/plugins/ui                    界面扩展（主页卡片、应用图标……）；POST /api/plugins/ticket 签插件票（面板 / 设置 / 工作台 / 应用）
+//   GET|POST /api/plugin/<id>/_bridge/<op>[/<子操作>]   插件页面的设置（只给主机）与页面宿主能力（kv / grants / chat / files / host）
+//   GET  /api/plugins/grants?plugin=  POST /api/plugins/grants {plugin, perm, allow}   页面权限的授权（只有 bridge 自己的界面能调）
+//   POST /api/plugins/handles {plugin, items, mode?}   给选择器里选中的文件签句柄；GET|POST /api/plugins/host-requests/<req>[/complete] 手机 App 的宿主请求中转
 //
 // 授权账号（schema 里 type:'user' + grant:'chat' 的字段）：新选上主机本人或 pro 档账号时，config 要带 confirmGrant:true，
 // 否则回 409 { needConfirm: { accounts } }，前端弹确认后重发。
@@ -27,7 +31,7 @@ import { fileURLToPath } from 'node:url';
 import { kernel, setPluginUpdatesProvider } from '../plugins/state.mjs';
 import { installFromArchive, uninstallPlugin, linkLocal, reloadPlugin, pluginWebDir, PluginError } from '../plugins/discover.mjs';
 import { requireCtx, contextFor } from '../runtime/identity.mjs';
-import { mintTicket, resolveTicket, ticketOf } from '../plugins/tickets.mjs';
+import { mintTicket, resolveTicket, resolveTicketInfo, revokeTicket, ticketOf, claimsTicket, watchKernelTickets } from '../plugins/tickets.mjs';
 import { subscribePage } from '../plugins/panel.mjs';
 import { identityOfCtx as identityOfContext } from '../agent-api/internal.mjs';
 import { can } from '../runtime/principal.mjs';
@@ -43,7 +47,14 @@ import { marketOverview, installFromMarket, rollbackInstalled, restoreBuiltinVer
 import { rollbackTarget } from '../plugins/discover.mjs';
 import { FEATURES } from '../config/index.mjs';
 import { pluginLogs } from '../plugins/logs.mjs';
-import { uiView, runUi } from '../plugins/ui.mjs';
+import { uiView, runUi, findApp, canUsePluginPages } from '../plugins/ui.mjs';
+// viewApp / findFileHandler 按命名空间取、用时判在不在：ui.mjs 少了哪个导出也只是那条路由用不了，不至于整个模块加载失败
+import * as uiMod from '../plugins/ui.mjs';
+import { kvGet, kvList, kvSet } from '../plugins/page-kv.mjs';
+import { grantsView, grantsList, setGrant } from '../plugins/page-grants.mjs';
+import { signHandles, useHandle, statHandle, streamHandle, writeHandle, WRITE_MAX } from '../plugins/page-files.mjs';
+import { createHostRequest, waitHostRequest, hostRequestView, completeHostRequest } from '../plugins/page-host.mjs';
+import { chatStart, chatSend, chatStop, chatSessions, chatHistory, chatEvents, chatWatch } from '../plugins/page-chat.mjs';
 
 const MAX_ZIP = 50 * 1024 * 1024;
 
@@ -153,6 +164,8 @@ const MIME = {
 
 export function registerPluginRoutes(router, { identify }) {
   setPluginUpdatesProvider(() => pendingUpdates(kernel));
+  // 插件从开变关（或卸掉）就作废它的页面票：重新启用后旧页面拿旧票也进不来（bootPlugins 也挂，同一个内核只挂一次）
+  watchKernelTickets(kernel);
   const admin = (req, res) => {
     const ctx = requireCtx(identify, req, res);
     if (!ctx) return null;
@@ -345,20 +358,44 @@ export function registerPluginRoutes(router, { identify }) {
       json(res, 200, await runUi(c, { plugin: String(b.plugin || ''), kind: String(b.kind || ''), id: String(b.id || ''), args: b.args }));
     } catch (e) { json(res, e.status || 400, { error: String(e?.message || e) }); }
   });
+  // 声明式应用（kind:'view'）的首屏：{ plugin, id, state } → { tree, state }（plugins/ui.mjs 的 viewApp）。
+  // 找不到应用 / 插件没开 / 这个身份看不到 → 404；state 太大 → 413；别的参数问题 400——状态码由 viewApp 抛的 status 定。
+  router.on('POST', '/api/plugins/ui/view', async (req, res) => {
+    const c = requireCtx(identify, req, res);
+    if (!c) return;
+    try {
+      if (typeof uiMod.viewApp !== 'function') throw new PluginError(501, '这个版本还不支持声明式应用');
+      const b = await body(req);
+      json(res, 200, await uiMod.viewApp(c, { plugin: String(b.plugin || ''), id: String(b.id || ''), state: b.state }));
+    } catch (e) {
+      const status = e?.status || (e?.message === 'body too large' ? 413 : 400);
+      json(res, status, { error: status === 413 && e?.message === 'body too large' ? '请求体太大了' : String(e?.message || e) });
+    }
+  });
 
   // 签一张插件票（独立打开页面用：新窗口、手机 App 的干净页面）。返回 { ticket, expiresIn, page }。
-  // which: 'panel'（缺省）| 'settings' | 'workbench'（带 page：Claude 工作台标签，四期）
+  // which: 'panel'（缺省）| 'settings' | 'workbench'（带 page：Claude 工作台标签）| 'app'（带 app：插件应用的全屏分页）
   router.on('POST', '/api/plugins/ticket', async (req, res) => {
     const c = requireCtx(identify, req, res);
     if (!c) return;
     try {
       const b = await body(req);
+      // 解不出身份（账号库里已经没有这个成员、或不是主机 / 成员的调用方）就不签：签出来也是张废票，页面调接口全是 401
+      const ident = identityOfContext(c);
+      if (b.which === 'app') {
+        const id = String(b.id || '');
+        const hit = ident && kernel.isActive(id) ? findApp(c, id, String(b.app || '')) : null;
+        if (!hit || hit.kind !== 'page') throw new PluginError(403, '打不开这个应用');
+        json(res, 200, { ...mintTicket(id, ident, { app: hit.id }), page: '/plugins/' + id + '/' + hit.page });
+        return;
+      }
+      if (!ident) throw new PluginError(403, '打不开这个插件的页面');
       if (b.which === 'workbench') {
         const id = String(b.id || '');
         const want = String(b.page || '').replace(/^\/+/, '');
         const hit = (await uiView(c)).workbench.find((w) => w.plugin === id && w.page === want);
         if (!hit || !kernel.isActive(id)) throw new PluginError(403, '打不开这个插件的页面');
-        json(res, 200, { ...mintTicket(id, identityOfContext(c)), page: '/plugins/' + id + '/' + hit.page });
+        json(res, 200, { ...mintTicket(id, ident), page: '/plugins/' + id + '/' + hit.page });
         return;
       }
       const p = kernel.get(String(b.id || ''));
@@ -366,7 +403,7 @@ export function registerPluginRoutes(router, { identify }) {
       const ui = p.extra.ui;
       const page = b.which === 'settings' && ui.settings ? ui.settings : (ui.panel?.page || ui.settings);
       if (b.which === 'settings' && !can(c, 'server.manage')) throw new PluginError(403, '只有服务器主机能改插件设置');
-      json(res, 200, { ...mintTicket(p.id, identityOfContext(c)), page: '/plugins/' + p.id + '/' + page });
+      json(res, 200, { ...mintTicket(p.id, ident), page: '/plugins/' + p.id + '/' + page });
     } catch (e) { fail(res, e); }
   });
 
@@ -374,31 +411,62 @@ export function registerPluginRoutes(router, { identify }) {
   router.on('GET', '/api/plugins/page-events', (req, res, url) => {
     const id = url.searchParams.get('id') || '';
     const tok = ticketOf(req);
-    const ident = tok && kernel.isActive(id) ? resolveTicket(tok, id) : null;
-    if (!ident) { json(res, 401, { error: 'plugin ticket expired' }); return; }
+    const snap = tok && kernel.isActive(id) ? resolveTicket(tok, id) : null;
+    if (!snap) { json(res, 401, { error: 'plugin ticket expired' }); return; }
+    // 票上是签票那一刻的身份：按账号库现状重解析（同 _bridge）。账号停用 / 删了 → 401 并当场作废票，账号恢复了旧票也不复活
+    const ident = snap.kind === 'admin' || snap.kind === 'user' ? identityOfContext(contextFor(snap)) : null;
+    if (!ident) { revokeTicket(tok); json(res, 401, { error: 'plugin ticket expired' }); return; }
     const c = contextFor(ident);
-    subscribePage(id, res, { admin: can(c, 'server.manage'), keepAlive: () => !!resolveTicket(tok, id) });
+    // 连着期间也复核：账号被停用后，下一次保活检查就断开（不能凭一张已签出的票一直收推给页面的消息）
+    const keepAlive = () => {
+      const now = resolveTicket(tok, id);
+      if (!now) return false;
+      if (identityOfContext(contextFor(now))) return true;
+      revokeTicket(tok);
+      return false;
+    };
+    subscribePage(id, res, { admin: can(c, 'server.manage'), keepAlive });
   });
 
-  // 插件页面自己的设置与动作（SDK 的 bridge.config / bridge.options / bridge.action / bridge.status）：
-  //   /api/plugin/<id>/_bridge/{config,options,actions,action,status}
+  // 插件页面经 bridge 用的接口（SDK 的 bridge.*）：/api/plugin/<id>/_bridge/<op>[/<子操作>]
   // 挂在插件自己的路径下（宿主代发与插件票据都只放行 /api/plugin/<本插件>/），前缀路由——插件自己挂的精确路径优先。
-  // 只给服务器主机：成员能开的面板（ui.who=members）也改不了插件设置、按不了动作按钮。
+  // 两类 op，分开判权：
+  //   · 设置与动作（config / options / actions / action / status）：只给服务器主机——成员能开的面板（ui.who=members）
+  //     也改不了插件设置、按不了动作按钮；
+  //   · 页面宿主能力（kv / grants / chat/* / files/* / host/*）：给能用这个插件页面的人（canUsePluginPages：
+  //     主机；成员要这个插件有对成员开放的页面）。主机专用的插件，成员拿票或经宿主代发都够不着。
+  // 每个能力自己还要再判：声明并授过权（page.chat / page.files）、会话 / 句柄 / 中转请求属于这个插件和这个人。
+  const HOST_OPS = new Set(['config', 'options', 'actions', 'action', 'status']);
+  const PAGE_OPS = new Set(['kv', 'grants', 'chat', 'files', 'host']);
   router.prefix(['GET', 'POST'], '/api/plugin/', async (req, res, url) => {
-    const m = /^\/api\/plugin\/([a-z][a-z0-9-]{0,47})\/_bridge\/([a-z]+)$/.exec(url.pathname);
+    const m = /^\/api\/plugin\/([a-z][a-z0-9-]{0,47})\/_bridge\/([a-z][a-z0-9-]{0,31})(?:\/([a-z][a-z0-9-]{0,31}))?$/.exec(url.pathname);
     if (!m) { json(res, 404, { error: 'not found' }); return; }
-    const [, id, op] = m;
+    const [, id, op, sub = ''] = m;
     if (!kernel.isActive(id)) { json(res, 404, { error: '插件没开着' }); return; }
     const tok = ticketOf(req);
     let who;
-    if (tok) {
-      const ident = resolveTicket(tok, id);
-      if (!ident) { json(res, 401, { error: 'plugin ticket expired' }); return; }
+    let ident = null;   // 内部请求（/api/chat 等）用的身份；票据路径在这里现解析，cookie 路径到 pageOp 里再按需拼
+    let ticketApp = null;
+    // 自称带票却解析不出（格式不对）也走票据分支、回 401：退回 cookie 那头的话，NO_AUTH 实例上就成了主机身份
+    if (tok || claimsTicket(req)) {
+      const info = resolveTicketInfo(tok, id);
+      if (!info) { json(res, 401, { error: 'plugin ticket expired' }); return; }
+      // contextFor 把认不出的身份兜底成主机——票上只该是主机或成员，别的一律不认
+      const k = info.identity && info.identity.kind;
+      if (k !== 'admin' && k !== 'user') { json(res, 403, { error: '这个身份用不了插件页面' }); return; }
+      // 票上是签票那一刻的身份快照，最长能续 12 小时：每次都按账号库现状重解析一遍。账号停用 / 删了就拿不到，
+      // 当场作废这张票（cookie 那头此刻已经失效，这里不能还认）；档位、agent 勾选改过的也以现在的为准。
+      ident = identityOfContext(contextFor(info.identity));
+      if (!ident) { revokeTicket(tok); json(res, 401, { error: 'plugin ticket expired' }); return; }
       who = contextFor(ident);
+      ticketApp = info.app || null;
     } else {
       who = requireCtx(identify, req, res);
       if (!who) return;
     }
+    if (who.kind !== 'admin' && who.kind !== 'user') { json(res, 403, { error: '这个身份用不了插件页面' }); return; }
+    if (PAGE_OPS.has(op)) { await pageOp(req, res, url, who, ident, id, op, sub, ticketApp); return; }
+    if (!HOST_OPS.has(op) || sub) { json(res, 404, { error: 'not found' }); return; }
     if (!can(who, 'server.manage')) { json(res, 403, { error: '只有服务器主机能改插件设置' }); return; }
     try {
       if (op === 'config' && req.method === 'GET') {
@@ -435,6 +503,149 @@ export function registerPluginRoutes(router, { identify }) {
     } catch (e) { json(res, e.status || 400, { error: String(e?.message || e) }); }
   });
 
+  // 页面能力的错误：没同意带 needGrant（SDK 据此先弹授权框再重试），没声明带 undeclared + perm（不带 needGrant，弹框也是白弹）；
+  // 读请求体超限 413。已经开始回字节（SSE、文件流）就只能断开。
+  const pageFail = (res, e) => {
+    if (res.headersSent) { try { res.end(); } catch {} return; }
+    const status = e?.status || (e?.message === 'body too large' ? 413 : 400);
+    json(res, status, {
+      error: status === 413 && e?.message === 'body too large' ? '请求体太大了' : String(e?.message || e),
+      ...(e?.needGrant ? { needGrant: e.needGrant } : {}), ...(e?.undeclared ? { undeclared: true, ...(e.perm ? { perm: e.perm } : {}) } : {}),
+    });
+  };
+
+  // 页面宿主能力。who = 已判过「能用这个插件页面」的身份；ident = 票据路径已按账号库现解析的身份
+  //（cookie 路径为 null）；ticketApp = 票据上的应用 id（嵌入模式为 null）。
+  async function pageOp(req, res, url, who, ident, id, op, sub, ticketApp) {
+    if (!canUsePluginPages(who, id)) { json(res, 403, { error: '你用不了这个插件的页面' }); return; }
+    const M = req.method;
+    const q = (k) => url.searchParams.get(k) || '';
+    // 内部请求（/api/chat 等）要的身份：票据路径用上面现解析的；cookie 路径（登录态刚验过）从账号库现拼
+    const identity = () => {
+      const i = ident || identityOfContext(who);
+      if (!i) throw new PluginError(403, '认不出你的身份（账号可能已停用），重新登录再试');
+      return i;
+    };
+    const nope = () => json(res, 404, { error: 'not found' });
+    try {
+      if (op === 'kv' && !sub) {
+        if (M === 'GET') {
+          const key = url.searchParams.get('key');
+          json(res, 200, key == null ? { keys: await kvList(id, who.key) } : { value: await kvGet(id, who.key, key) });
+        } else {
+          const b = await body(req);
+          await kvSet(id, who.key, b.key, b.value);
+          json(res, 200, { ok: true });
+        }
+      } else if (op === 'grants' && !sub && M === 'GET') {
+        json(res, 200, grantsView(id, who.key));
+      } else if (op === 'files') {
+        if (!['stat', 'read', 'write'].includes(sub) || (sub === 'write') !== (M === 'POST')) { nope(); return; }
+        const rec = useHandle(q('h'), id, who.key);
+        if (sub === 'stat') json(res, 200, statHandle(rec));
+        else if (sub === 'read') streamHandle(rec, res);
+        else {
+          // 先判能不能写再收字节（别白收 50MB）；只读的身份（档位降了）签过的 rw 句柄也不让写
+          if (rec.mode !== 'rw' || who.readOnly) throw new PluginError(403, '这个文件是只读打开的，不能存回');
+          json(res, 200, await writeHandle(rec, await readRaw(req, WRITE_MAX)));
+        }
+      } else if (op === 'chat') {
+        if (sub === 'start' && M === 'POST') json(res, 200, await chatStart(who, identity(), id, await body(req), ticketApp));
+        else if (sub === 'send' && M === 'POST') json(res, 200, await chatSend(who, identity(), id, await body(req)));
+        else if (sub === 'stop' && M === 'POST') json(res, 200, await chatStop(who, identity(), id, await body(req)));
+        else if (sub === 'events' && M === 'GET') chatEvents(who, id, q('session'), res);
+        else if (sub === 'sessions' && M === 'GET') json(res, 200, await chatSessions(who, id, q('app')));
+        else if (sub === 'watch' && M === 'POST') json(res, 200, chatWatch(who, id, await body(req)));
+        else if (sub === 'history' && M === 'GET') json(res, 200, await chatHistory(who, identity(), id, q('session')));
+        else nope();
+      } else if (op === 'host') {
+        if (sub === 'request' && M === 'POST') {
+          const b = await body(req);
+          // 应用 id：票据上的为准；嵌入模式用请求体里的（只认本插件确有、这个身份看得到的应用）
+          const app = ticketApp || (typeof b.app === 'string' && findApp(who, id, b.app) ? b.app : null);
+          json(res, 200, createHostRequest(who, id, app, b.type, b.payload));
+        } else if (sub === 'wait' && M === 'GET') {
+          // 页面断开就提前收掉这次长轮询
+          const ac = new AbortController();
+          res.on('close', () => ac.abort());
+          const r = await waitHostRequest(q('req'), id, who.key, { signal: ac.signal });
+          if (!res.writableEnded && !res.destroyed) json(res, 200, r);
+        } else nope();
+      } else nope();
+    } catch (e) { pageFail(res, e); }
+  }
+
+  // ---- 页面宿主能力：只给 bridge 自己的界面（登录态）----
+  // 这几条在 /api/plugins/ 下：插件页面经宿主代发或带票据都只放行 /api/plugin/<本插件>/，够不着——
+  // 页面只能「提出」要授权 / 要选文件，点「允许」、选哪几个文件，一律是使用者在 bridge 自己画的界面里做的。
+  const member = (req, res) => {
+    const c = requireCtx(identify, req, res);
+    if (!c) return null;
+    if (c.kind !== 'admin' && c.kind !== 'user') { json(res, 403, { error: '这个身份用不了插件页面' }); return null; }
+    return c;
+  };
+  // 纵深防御：「允许」「签文件句柄」「中转请求」只认 bridge 自己界面发的请求——web/src/lib/api.js 的 req()
+  // 会带 X-Bridge-UI: 1，而 PluginFrame 替插件页面代发时用的 authHeaders() 不带。万一哪天代发的路径白名单写宽了、
+  // 或有别的同源页面拿着登录态来调，也点不了这几个按钮。先验登录再验这个头：没登录的（含只带插件票的）照旧 401。
+  const memberUi = (req, res) => {
+    const c = member(req, res);
+    if (!c) return null;
+    if (String(req.headers['x-bridge-ui'] || '') !== '1') { json(res, 403, { error: '只能从 bridge 自己的界面调用' }); return null; }
+    return c;
+  };
+
+  // 页面权限的授权：GET → { declared, granted }；POST { plugin, perm, allow } → { ok: true, granted }
+  router.on('GET', '/api/plugins/grants', (req, res, url) => {
+    const c = member(req, res);
+    if (!c) return;
+    // 不带 plugin：设置 › 页面权限 的总览（这个身份能管的每个插件一行）
+    if (!url.searchParams.has('plugin')) { json(res, 200, grantsList(c)); return; }
+    const id = url.searchParams.get('plugin') || '';
+    if (!kernel.has(id)) { json(res, 404, { error: '没有这个插件' }); return; }
+    json(res, 200, grantsView(id, c.key));
+  });
+  router.on('POST', '/api/plugins/grants', async (req, res) => {
+    const c = memberUi(req, res);
+    if (!c) return;
+    try {
+      const b = await body(req);
+      json(res, 200, { ok: true, granted: setGrant(c, String(b.plugin || ''), String(b.perm || ''), b.allow === true) });
+    } catch (e) { pageFail(res, e); }
+  });
+
+  // 给选择器里选中的文件签句柄：{ plugin, items: [{ rel, ws? }], mode?, via? } → { files: [{ handle, name, size, mime, mode }] }
+  // via: { fileHandler: '<处理器 id>' }（文件列表里「用 X 打开」）：扩展名对得上这个处理器就免授权框，仍要声明 page.files
+  router.on('POST', '/api/plugins/handles', async (req, res) => {
+    const c = memberUi(req, res);
+    if (!c) return;
+    try {
+      const b = await body(req);
+      const plugin = String(b.plugin || '');
+      let via = null;
+      if (b.via != null) {
+        const hid = b.via && typeof b.via === 'object' ? String(b.via.fileHandler || '') : '';
+        if (!hid) throw new PluginError(400, 'via 要写成 { fileHandler: "<处理器 id>" }');
+        if (typeof uiMod.findFileHandler !== 'function') throw new PluginError(501, '这个版本还不支持「用插件打开」');
+        via = uiMod.findFileHandler(c, plugin, hid);
+        if (!via) throw new PluginError(404, '这个插件没有这个文件处理器（或你用不了它）');
+      }
+      json(res, 200, { files: signHandles(c, plugin, b.items, b.mode === 'r' ? 'r' : 'rw', { via }) });
+    } catch (e) { pageFail(res, e); }
+  });
+
+  // 手机 App 的宿主请求中转（主界面那一头）：GET <req> 看要做什么；POST <req>/complete { result } 交回结果
+  router.prefix(['GET', 'POST'], '/api/plugins/host-requests/', async (req, res, url) => {
+    const m = /^\/api\/plugins\/host-requests\/([A-Za-z0-9_-]{16,64})(\/complete)?$/.exec(url.pathname);
+    if (!m || (req.method === 'POST') !== !!m[2]) { json(res, 404, { error: 'not found' }); return; }
+    const c = memberUi(req, res);
+    if (!c) return;
+    try {
+      if (!m[2]) { json(res, 200, hostRequestView(m[1], c)); return; }
+      const b = await body(req);
+      json(res, 200, completeHostRequest(m[1], c, b.result));
+    } catch (e) { pageFail(res, e); }
+  });
+
   // 插件页面：/plugins/<id>/web/<相对路径>（空路径给面板页）。SDK：/plugins/_sdk/<文件>（核心自带，所有插件页面共用）。
   router.prefix('GET', '/plugins/', (req, res, url) => {
     const sdk = /^\/plugins\/_sdk\/(bridge-plugin\.(?:js|css))$/.exec(url.pathname);
@@ -456,6 +667,9 @@ export function registerPluginRoutes(router, { identify }) {
 // 读不到 bridge 的 cookie、localStorage，也不能带着访问者的登录态调 /api/*（成员打开主机装的插件页面时尤其要紧）。
 // 调插件自己的接口靠票据（plugins/tickets.mjs）或宿主代发。
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals';
+// svg / xml 直接打开也是文档、里面能写脚本：插件应用的图标就在 web/ 下，有人把图标地址发给你点开，不能让它跑脚本。
+// 这类只给光秃秃的 sandbox（不带 allow-scripts）；当 <img> 用时 CSP 不管事，图标照常显示。
+const XML_DOC = /^(image\/svg\+xml|application\/xml|text\/xml|application\/xhtml\+xml)\b/;
 const SDK_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'plugins', 'sdk');
 
 function serveFile(res, file, { sandbox }) {
@@ -463,13 +677,14 @@ function serveFile(res, file, { sandbox }) {
   try { st = statSync(file); } catch { json(res, 404, { error: 'not found' }); return; }
   if (!st.isFile()) { json(res, 404, { error: 'not found' }); return; }
   const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
+  const csp = !sandbox ? null : type.startsWith('text/html') ? SANDBOX_CSP : XML_DOC.test(type) ? 'sandbox' : null;
   res.writeHead(200, {
     'Content-Type': type,
     'Content-Length': st.size,
     'Cache-Control': 'no-cache',
     'Access-Control-Allow-Origin': '*',
     'X-Content-Type-Options': 'nosniff',
-    ...(sandbox && type.startsWith('text/html') ? { 'Content-Security-Policy': SANDBOX_CSP } : {}),
+    ...(csp ? { 'Content-Security-Policy': csp } : {}),
   });
   createReadStream(file).pipe(res);
 }

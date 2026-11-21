@@ -52,6 +52,8 @@ export const STUDIO_SETTINGS = Object.freeze([
     label: 'dimensio', desc: '经 bridge 的操作接口生成；图片和语音按权限档审批，视频和音乐每次先问你' },
   { key: 'codexMedia', group: 'agents', type: 'bool', default: false, scope: 'host', agent: 'codex',
     label: 'ChatGPT · Codex', desc: '经 bridge 的操作接口生成；视频和音乐每次先问你' },
+  { key: 'agyMedia', group: 'agents', type: 'bool', default: true, scope: 'host', agent: 'agy',
+    label: 'Antigravity', desc: '对话里通过 Bridge 工具生成图片、视频、语音、音乐' },
   { key: 'apiMedia', group: 'agents', type: 'bool', default: true, scope: 'host',
     label: '外部 agent', desc: '拿着「Agent 接入」里生成的密钥来调用的 agent 和脚本' },
 
@@ -142,7 +144,7 @@ export function studioSettingVisible(key, values, agentIds, scope = 'host') {
 // 媒体种类 ↔ 开关键（工具名、操作名都归到这四种）
 export const STUDIO_KIND_KEY = Object.freeze({ image: 'agentImage', speech: 'agentSpeech', music: 'agentMusic', video: 'agentVideo' });
 // 调用方 ↔ 开关键：'claude' 是 Claude 的媒体工具；同机实例按自报名；'api' 是拿 agent 密钥来的外部调用
-export const STUDIO_CALLER_KEY = Object.freeze({ claude: 'claudeMedia', dimensio: 'dimensioMedia', codex: 'codexMedia', api: 'apiMedia' });
+export const STUDIO_CALLER_KEY = Object.freeze({ claude: 'claudeMedia', dimensio: 'dimensioMedia', codex: 'codexMedia', agy: 'agyMedia', api: 'apiMedia' });
 
 // 安全阈值 → Google 的 HarmBlockThreshold；'default' = 不发这一类，跟 Google 的默认
 export const SAFETY_THRESHOLD = Object.freeze({ off: 'OFF', high: 'BLOCK_ONLY_HIGH', medium: 'BLOCK_MEDIUM_AND_ABOVE', low: 'BLOCK_LOW_AND_ABOVE' });

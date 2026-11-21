@@ -97,7 +97,8 @@ export async function handleWsx(ev) {
         for (const fn of fsSubs) { try { fn(ev.rel || null); } catch {} }
         break;
       case 'goto': {
-        const rootRel = await wsRelToRootRel(ev.rel || '', ev.ws || '');
+        // rootRel：调用方已换算好的「相对文件根」（agy 的 ui_open 由服务端算，见 agentUi.openAgyTarget）；没带照旧按 ws 换算
+        const rootRel = typeof ev.rootRel === 'string' ? ev.rootRel : await wsRelToRootRel(ev.rel || '', ev.ws || '');
         if (rootRel == null) return;   // 工作空间在文件根之外：面板去不了，静默放弃
         if (gotoSubs.size) { for (const fn of gotoSubs) { try { fn(rootRel); } catch {} } }
         else {
@@ -148,7 +149,7 @@ async function captureNow() {
   const cap = window.BridgeDesktop?.app?.capture;
   if (cap) {
     // 预览开着就只截预览区域，否则截整窗（capturePage 的 rect 用 CSS 像素，与 BCR 同系）
-    const el = document.querySelector('.mv-root') || document.querySelector('.dk-embed');
+    const el = document.querySelector('.mv-root') || document.querySelector('.wb-embed');
     const r = el?.getBoundingClientRect();
     const rect = r && r.width > 60 && r.height > 60
       ? { x: Math.max(0, Math.round(r.x)), y: Math.max(0, Math.round(r.y)), width: Math.round(r.width), height: Math.round(r.height) }

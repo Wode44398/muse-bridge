@@ -51,6 +51,15 @@ export async function browserFind(b, args = {}) {
 }
 
 // ── network ─────────────────────────────────────────────────────────────
+/** network() 列表那几条（query 按 url 子串过滤、取最近 lines 条，旧→新）。 */
+export function networkList(b, args = {}) {
+  const q = String(args.query || '').toLowerCase();
+  const n = Math.max(1, Math.min(200, Number(args.lines) || 30));
+  let entries = b.networkEntries() || [];
+  if (q) entries = entries.filter((e) => String(e.url || '').toLowerCase().includes(q));
+  return entries.slice(-n);
+}
+
 export async function browserNetwork(b, args = {}) {
   const id = args.id != null ? String(args.id).trim() : '';
   if (id) {
@@ -70,10 +79,7 @@ export async function browserNetwork(b, args = {}) {
     return text(`${head}\n\n${out}`);
   }
   const q = String(args.query || '').toLowerCase();
-  const n = Math.max(1, Math.min(200, Number(args.lines) || 30));
-  let entries = b.networkEntries() || [];
-  if (q) entries = entries.filter((e) => String(e.url || '').toLowerCase().includes(q));
-  entries = entries.slice(-n);
+  const entries = networkList(b, args);
   if (!entries.length) return text(q ? `没有 url 含「${q}」的请求（本标签共录得 ${b.networkEntries().length} 条）` : '(还没有捕获到请求——navigate 之后再看)');
   const rows = entries.map((e) => {
     const st = e.state === 'failed' ? `FAILED(${e.error})` : e.state === 'pending' ? 'pending' : String(e.status ?? '?');

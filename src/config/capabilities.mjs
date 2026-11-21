@@ -430,6 +430,35 @@ export const CAPABILITIES = {
     ],
     defaults: { model: 'gpt-6.1-sol', effort: 'medium', serviceTier: null },
   },
+  agy: {
+    // 真实可用列表以 ACP session/new 返回的 configOptions 为准；此处仅在守护进程尚未握手时作前端初始展示。
+    models: [
+      { id: 'gemini-4-neon', name: 'Gemini 4 Neon', family: 'gemini', efforts: ['low', 'medium', 'high', 'xhigh'] },
+      { id: 'gemini-4-carbon', name: 'Gemini 4 Carbon', family: 'gemini', efforts: ['low', 'medium', 'high'] },
+      { id: 'gemini-4-argon', name: 'Gemini 4 Argon', family: 'gemini', efforts: ['low', 'medium', 'high'] },
+      { id: 'gemini-4-hydrogen', name: 'Gemini 4 Hydrogen', family: 'gemini', efforts: ['low', 'medium', 'high', 'xhigh'] },
+      { id: 'gemini-pro-orchestrator-neon', name: 'Orchestrator (Neon)', family: 'gemini', efforts: [] },
+      { id: 'gemini-pro-orchestrator', name: 'Orchestrator (Carbon)', family: 'gemini', efforts: [] },
+      { id: 'gemini-pro-orchestrator-argon', name: 'Orchestrator (Argon)', family: 'gemini', efforts: [] },
+      { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', family: 'gemini', efforts: ['low', 'medium', 'high'] },
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (Thinking)', family: 'claude', efforts: [] },
+      { id: 'claude-opus-4-6-thinking', name: 'Claude Opus 4.6 (Thinking)', family: 'claude', efforts: [] },
+      { id: 'gpt-oss-120b-medium', name: 'GPT-OSS 120B (Medium)', family: 'gpt-oss', efforts: [] },
+    ],
+    efforts: [
+      { id: 'low', name: 'Low' },
+      { id: 'medium', name: 'Medium' },
+      { id: 'high', name: 'High' },
+      { id: 'xhigh', name: 'XHigh' },
+    ],
+    modes: [
+      { id: 'default', name: 'Default', description: 'Ask before edits and commands, per your permission settings.' },
+      { id: 'accept-edits', name: 'Accept edits', description: 'Approve file edits in the workspace without asking.' },
+      { id: 'auto', name: 'Auto', description: 'Approve edits and safe commands; ask before irreversible actions.' },
+      { id: 'plan', name: 'Plan', description: 'Plan carefully before executing a task.' },
+    ],
+    defaults: { model: 'gemini-4-neon', effort: 'medium', mode: 'default' },
+  },
 };
 
 // ---- Derived helpers for backend convenience ----------------------------
@@ -579,3 +608,10 @@ export function codexEffortAllowed(model, effort) {
 export function codexServiceTierAllowed(model, serviceTier) {
   return !!serviceTier && (CODEX_MODEL_META.get(model)?.serviceTiers || []).includes(serviceTier);
 }
+
+export const AGY_MODELS = idSet(CAPABILITIES.agy.models);
+export const AGY_EFFORTS = idSet(CAPABILITIES.agy.efforts);
+export const AGY_MODES = idSet(CAPABILITIES.agy.modes);
+export const AGY_MODEL_DEFAULT = CAPABILITIES.agy.defaults.model;
+export const AGY_EFFORT_DEFAULT = CAPABILITIES.agy.defaults.effort;
+export const AGY_MODE_DEFAULT = CAPABILITIES.agy.defaults.mode;

@@ -321,10 +321,19 @@ const PLAN_NOBODY = 'No one can answer that prompt from plan mode in this sessio
  *                     停放复用 / 预热接管 / 挂起接力时一个进程换了请求方，要取「眼下这一轮」的
  */
 const UNATTENDED_WAIT_MS = 30 * 60_000;
-export function makePermissionGate({ ctx, policy = 'interactive', send, sid, currentMode, guard, onInterrupt, onActivity, limitReplay, turnOrigin, unattended, pluginPolicy }) {
+export function makePermissionGate({ ctx, policy = 'interactive', send, sid, currentMode, guard, onInterrupt, onActivity, limitReplay, turnOrigin, unattended, pluginPolicy, planFrom }) {
   const replay = () => (typeof limitReplay === 'function' ? limitReplay() : limitReplay) || null;
   const pend = new Map();   // qid -> { ev, entry, sid, kind }
   const hostPolicy = policy === 'host' || !!ctx.snap;
+  // 绕过权限 = 一张卡都不弹（维护者 2026-11-19：开了完全放行还被审批卡挂住几个小时）。CLI 在 bypass 下仍会为受保护路径
+  // （.git / .claude / .vscode …）、设置里的 ask 规则、高危删除这几样来问——交互轮的卡不设超时，没人在就一直挂着。
+  // 干活时才选的绕过权限（待生效，进程还在旧模式）也算：这一道先按它放行，不必等下一轮。计划模式不算（见 planGate）。
+  const bypassOn = () => {
+    if (hostPolicy || ctx.sandbox) return false;
+    const cur = currentMode ? currentMode() : '';
+    if (cur === 'bypassPermissions') return true;
+    return cur !== 'plan' && deferredModeFor(ctx, sid(), cur) === 'bypassPermissions';
+  };
   const announce = (s, kind) => { if (s) busPublish(ctx.key, { type: 'question', sessionId: s, pending: pendingFor(s, ctx.key), kind }); };
   const hold = (qid, ev, header, question, kind) => {
     const s = sid();
@@ -351,8 +360,17 @@ export function makePermissionGate({ ctx, policy = 'interactive', send, sid, cur
     // 子 agent 的计划（Plan 型子 agent 收尾）是它自己的事，CLI 给它的结果就是「主 agent 已批准」——不打扰人。
     if (opts && opts.agentID) return { behavior: 'allow', updatedInput: input };
     if (hostPolicy) return { behavior: 'allow', updatedInput: input, updatedPermissions: [{ type: 'setMode', mode: 'default', destination: 'session' }] };
-    const qid = (opts && opts.toolUseID) || ('plan-' + randomBytes(6).toString('hex'));
     const modes = permissionModesFor(ctx);
+    // 绕过权限的会话里 Claude 自己进的计划模式（不是用户在芯片上选的）：计划直接批准、回到绕过权限，不挂审批卡
+    if (!ctx.sandbox && modes.includes('bypassPermissions') && (bypassOn() || (planFrom && planFrom() === 'bypassPermissions'))) {
+      const qidA = (opts && opts.toolUseID) || ('plan-' + randomBytes(6).toString('hex'));
+      console.log('[perm] bypass: plan auto-approved', sid() || '');
+      noteSessionMode(ctx, sid(), 'bypassPermissions');
+      notePlan(ctx, opts && opts.toolUseID, { mode: 'bypassPermissions', decision: 'accept' });
+      send({ type: 'plan_answer', qid: qidA, sessionId: sid() || null, at: Date.now(), decision: 'accept', mode: 'bypassPermissions', by: 'bypass' });
+      return { behavior: 'allow', updatedInput: input, updatedPermissions: [{ type: 'setMode', mode: 'bypassPermissions', destination: 'session' }], decisionClassification: 'user_temporary' };
+    }
+    const qid = (opts && opts.toolUseID) || ('plan-' + randomBytes(6).toString('hex'));
     // 官方 HL()：可选的目标模式 = 接受编辑 / 自动 / 绕过权限里这个身份能用的；主按钮 = 自动 > 接受编辑 > 手动；
     // suppressAlwaysAllowRule（这次批准会给出超出它本身的授权）→ 只给「接受」（回手动）。
     const suppress = !!(opts && opts.suppressAlwaysAllowRule);
@@ -488,6 +506,12 @@ export function makePermissionGate({ ctx, policy = 'interactive', send, sid, cur
         return { behavior: 'allow', updatedInput: input };
       }
       if (ownMcp(name, opts, input) && !planModeAsk(opts) && !needsUserApproval(name, input)) return { behavior: 'allow', updatedInput: input };
+      // 绕过权限：CLI 还来问的一律放行、不弹卡（留一行日志，方便事后查它为什么问）。开自动合并 / Auto-fix 不记「已批准」，
+      // 工具自己那张 5 分钟问答卡照旧兜底（有超时，不会挂住）。
+      if (bypassOn() && !planModeAsk(opts)) {
+        console.log('[perm] bypass: auto-allowed', name, (opts && (opts.decisionReasonType || opts.blockedPath)) || '');
+        return { behavior: 'allow', updatedInput: input };
+      }
       // Auto-fix 叫醒的轮：输入里有第三方写的 GitHub 评论 / CI 日志，开长期授权不在这里问（多半没人在看，卡会一直挂着把这一轮卡死），
       // 直接拒——与 pr-tools 自己的 CI 轮拦截同一口径，让用户在 PR 卡上开
       if (needsUserApproval(name, input) && turnOrigin && turnOrigin() === 'ci') {

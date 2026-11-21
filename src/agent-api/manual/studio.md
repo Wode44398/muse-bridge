@@ -41,7 +41,7 @@ Google 系内置模型与参数的可选值（服务端按能力表现填；各�
 - 取消尽力而为：还没发出去的直接停；Veo、Omni 这类发出去就收不回的，标「已放弃（仍可能计费）」，结果到了也不要。
 - 服务重启时没跑完的任务标「服务重启，任务中断」。
 
-接口：`GET /api/studio/jobs?active=1`、`POST /api/studio/jobs`、`POST /api/studio/jobs/<id>/cancel`；agent 侧用 `media.image` / `media.video` / `media.speech` / `media.music`
+接口：`GET /api/studio/jobs?active=1`、`POST /api/studio/jobs`、`POST /api/studio/jobs/<id>/cancel`；agent 侧用 `studio.generate` / `studio.jobs` / `studio.job` / `studio.job_cancel`（简化版 `media.image` / `media.video` / `media.speech` / `media.music`）
 
 ## 作品与工作空间
 
@@ -50,7 +50,7 @@ Google 系内置模型与参数的可选值（服务端按能力表现填；各�
 - 作品菜单可「另存到…」指定文件夹；删除作品只删媒体库里那份，可选连同自动存的副本一起删。
 - 作品的规范地址是 `/api/vertex/media?id=<作品 id>`（聊天内嵌、离线 apk 都认它），缩略图加 `&v=thumb`。
 
-接口：`GET /api/studio/assets?kind=&q=&thread=&cursor=`、`POST /api/studio/assets/<id>/save`、`POST /api/studio/assets/<id>/delete`
+接口：`studio.assets` / `studio.asset` / `studio.asset_save` / `studio.asset_delete`；HTTP `GET /api/studio/assets?kind=&q=&thread=&cursor=`、`POST /api/studio/assets/<id>/save`、`POST /api/studio/assets/<id>/delete`
 
 ## 服务与 Key（设置 › Media Studio › 服务）
 
@@ -68,7 +68,7 @@ Google 系内置模型与参数的可选值（服务端按能力表现填；各�
 - 一键导入 Vertex：把主机现有的 Google 云凭据、Gemini API Key、OpenRouter Key、本机图像模型一次性变成服务（标共享，成员照旧能用），可以重复点（就地更新）。升级后主机一个服务都没有、但 Vertex 配好了时，首次启动会自动导入一次。
 - 「Google 云凭据」卡（主机的服务账号 / ADC、项目、区域、Gemini Key、测试连接）现在是 Vertex 服务连接区的一部分；保存后已导入的服务跟着刷新。凭据只存在服务器数据目录，接口只回服务账号邮箱等摘要。
 
-接口：`GET /api/studio/providers`、`POST /api/studio/providers/{create,update,delete,test,models,import-vertex,sync}`、`GET /api/studio/providers/log?id=`、`GET /api/studio/models/resolve?key=`（备选模型的完整参数）（这组没有 agent 操作：接服务、填 Key 只能在设置页里做）
+接口：`GET /api/studio/providers`、`POST /api/studio/providers/{create,update,delete,test,models,import-vertex,sync}`、`GET /api/studio/providers/log?id=`、`GET /api/studio/models/resolve?key=`（备选模型的完整参数）；agent 侧用 `studio.providers`、`studio.provider_create` / `provider_update` / `provider_delete` / `provider_test` / `provider_models` / `provider_sync` / `provider_log`、`studio.import_vertex`
 
 ## Media Studio 设置（设置 › Media Studio）
 
@@ -86,14 +86,29 @@ Google 系内置模型与参数的可选值（服务端按能力表现填；各�
 - 关掉的调用方或种类：agent 接口目录里对应的 media.* 标不可用，原因写着「管理员没让 … 生成媒体（设置 › Media Studio）」；Claude 从下一条消息起没有那几个工具。
 - 以前在 设置 › Agent › Gemini 改过的这几项照旧生效（首次读取时照抄过来）。
 
-接口：`media.settings` 看主机级全部项，`media.settings_set` 改（values = { key: 值 }，null = 恢复默认；同机 agent 实例不能改）。HTTP：`GET / POST /api/studio/settings`（POST 带 `scope: 'host' | 'mine'`）；老接口 `/api/vertex/settings` 仍可读写原来那几组。
+接口：`media.settings` 看主机级全部项，`media.settings_set` 改（values = { key: 值 }，null = 恢复默认；同机 agent 实例不能改）；个人级用 `studio.my_settings` / `studio.my_settings_set`。HTTP：`GET / POST /api/studio/settings`（POST 带 `scope: 'host' | 'mine'`）；老接口 `/api/vertex/settings` 仍可读写原来那几组。
 
 ## 在 Claude 和 agent 里生成媒体
 
 - Claude：Media Studio 对这个账号开着（成员还需管理员开放媒体生成）时，Claude 自带 mcp__media__generate_image / video / speech / music 四个工具，作品内联显示在对话里、文件路径交给 Claude 当素材，也进 Studio 的作品流。`model` 可以传内置模型的裸 id（如 `gemini-3.1-flash-image`、`veo-3.1-fast-generate-001`、`gpt-image-2.5-sunburst`），也可以传 `<服务 id>/<模型 id>` 用 Studio 里任一服务；不传用 Studio 设置里的默认（没设就是工具说明里写的内置默认）。
-- agent 接口：`media.image` / `media.video` / `media.speech` / `media.music`，`model` 同上两种写法；`saveTo` 顺手复制进工作空间。
+- agent 接口：`studio.*` 一组（见下一节）是完整版；`media.image` / `media.video` / `media.speech` / `media.music` 是常用场景的简化版，`model` 同上两种写法，`saveTo` 顺手复制进工作空间。
+- bridge 里的 Claude 会话优先用自带的媒体工具 mcp__media__*；其它 agent 用 `studio.generate`。Claude 会话的 mcp__bridge__call 不给 `media.*` 与 `studio.generate`，其余 `studio.*` 照常可调。
 - 桌面 Claude Code：仓库根的 `mcp-media.mjs`（stdio MCP）用主机的 Studio 服务生成，写到 outputPath 或 genmedia/。
 - 定时触发不能直接调用媒体生成模块；需要定时出图时用 Claude 引擎并在指令里让它生成。
+
+## agent 怎么操作 Media Studio
+
+`studio.*` 是 /api/studio/* 的薄封装，看到的、能做的和用户在 Studio 页面里一样（按账号隔离；成员的额度、管理员的开关照常生效）。
+
+1. 选模型：`studio.models`（可带 kind、q）。每个模型给 key、服务名、是否默认、inputs（能收的素材角色与张数）、params（参数 key、可选值、范围、默认值、生效条件 when）、priceHint。备选模型（shelf）只有 key 和名字，要参数用 `studio.models { key }` 再查；配音模型这样查还会带上音色。
+2. 生成：`studio.generate { kind, model, prompt, negative?, params?, inputs?, saveTo? }`。params 用卡上的 key；inputs 每项 `{ role, asset | path | upload }`，role 是 edit / ref / first / last（图）或 audio / video，asset = 作品 id、path = 工作空间相对路径。默认等到出结果（最多 20 分钟），返回 job 与作品（id、url、serverPath，给了 saveTo 还有 savedTo）；`wait: false` 立即返回任务，之后用 `studio.job` 查。视频分辨率按管理员设的上限降档。
+3. 续改一张图：`thread` = 那件作品的 thread（没有就用它的 id），`parent` = 那件作品的 id；要拿作品当素材就放进 inputs（如 `{ role: 'edit', asset: <作品 id> }` 或视频首帧 `{ role: 'first', asset: … }`）。
+4. 任务：`studio.jobs`（`active: true` 只看进行中的）、`studio.job`、`studio.job_cancel`（尽力而为，发出去收不回的仍可能计费）。
+5. 作品：`studio.assets`（kind / q / thread 过滤、cursor 翻页）、`studio.asset`（完整信息与服务器文件路径）、`studio.asset_save`（复制进工作空间）、`studio.asset_delete`。agent 发起的生成不自动存进工作空间，要存就给 saveTo 或调 `studio.asset_save`。
+6. 个人设置：`studio.my_settings` / `studio.my_settings_set`（默认模型、自动存储）。
+7. 服务：`studio.providers`（不含密钥：Key 只有末 4 位，请求头与额外请求体只给键名）、`studio.provider_create` / `provider_update` / `provider_delete`、`studio.provider_test` 与 `studio.provider_models`（只读、不花钱，可带未保存的 draft）、`studio.provider_sync`、`studio.provider_log`、`studio.import_vertex`（管理员）。Key 与服务账号只用用户在对话里明确给的，填之前先确认；模型中心托管的服务在这里改不了。
+
+规矩：生成花钱，视频、音乐或用户没明确要求的先征得同意；删除不可撤回，先问。放行与 `media.*` 相同（设置 › Media Studio 的「允许的 agent」「允许的种类」）；同机 agent 实例（dimensio 等）能查、能生成（按设置放行），不能管理服务和改设置。
 
 ## Media Studio 的限制
 

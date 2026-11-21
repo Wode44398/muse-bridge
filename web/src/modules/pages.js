@@ -8,7 +8,13 @@
 import { isEn, addDict } from '../lib/i18n.js';
 
 const cache = {};
-const once = (key, load) => () => (cache[key] ||= load());
+// 已解析完成的模块同步可读：二次进入或空闲预热完成后，模板同帧直接挂载，不再经过 {#await} 微任务延迟；
+// 加载失败时清掉缓存，下次点击仍可重试。
+export const resolvedPage = {};
+const once = (key, load) => () => (cache[key] ||= load().then(
+  (m) => (resolvedPage[key] = m),
+  (e) => { delete cache[key]; throw e; },
+));
 
 // 设置 › Media Studio 的正文由 studio-settings 那边维护；用 glob 引，文件还没进来时这里只是空表，
 // 构建照常过（不会因为缺文件把整个主包拖垮）。核心的 Settings 页只经 loadPage.studioSettings 取它。
@@ -20,6 +26,9 @@ const missing = (what) => Promise.reject(new Error(what + ' is not in this build
 
 export const loadPage = {
   chatgpt: once('chatgpt', () => import('../components/ChatGPTPage.svelte')),
+  agy: once('agy', () => import('../components/agy/AgyPage.svelte')),
+  agyDeskSettings: once('agyDeskSettings', () => import('../desktop/settings/AgySection.svelte')),
+  agyIosSettings: once('agyIosSettings', () => import('../components/settings/ios/agy/AgySettingsPages.svelte')),
   studio: once('studio', () => import('../components/studio/StudioPage.svelte')),
   studioSettings: once('studioSettings', () => {
     const load = Object.values(studioSettingsMods)[0];

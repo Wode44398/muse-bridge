@@ -38,6 +38,8 @@
 // 标题栏里的语言标、复制钮），子树里的字不计数、不逐字显形，随包住它的盒子一起出现。
 // 顶层节点若是常驻的包裹层（{@html} 是它唯一的子节点 → 受控 innerHTML，内容原地整块换），按变更记录把它的
 // 可见字数缓存作废——Svelte 整块替换顶层节点时这一步什么也不做。
+// fx：换一种显形质感（agy 分页用）——{ dur 每字显形时长 ms, ease(p)→透明度, blur 起始虚化 px, blurEase(p)→虚化剩余比例 }。
+// 不传就是 Claude 官网那套 0.4s 线性淡入，行为与以前逐字节相同。
 
 const CLS = 'c-in';          // 自家 span（淡入中 / 隐形）
 const WAIT = 'c-wait';       // 隐形（CSS: opacity 0）
@@ -115,6 +117,17 @@ export function claudeFade(node, opts = {}) {
   let key, live = false, mode = 'static';
   // 可选：额外的盒子类名 / 界面零件类名（见文件头）。只在挂载时读一次——可见字数按节点缓存，口径不能中途变。
   const xbox = classTest(opts && opts.boxes), chrome = classTest(opts && opts.chrome);
+  const fx = (opts && opts.fx) || null;
+  const dur = (fx && fx.dur) || DUR;
+  const opOf = fx && fx.ease
+    ? (age) => (age >= dur ? 1 : age <= 0 ? 0 : fx.ease(age / dur))
+    : fadeOp;
+  const blur0 = (fx && fx.blur) || 0;
+  const blurOf = (age) => {
+    if (!blur0 || age >= dur) return 0;
+    const p = age <= 0 ? 0 : age / dur;
+    return blur0 * (fx.blurEase ? fx.blurEase(p) : 1 - p);
+  };
   let Rf = 0, shown = 0, solid = 0;     // 显形边界（浮点 / 整数）；solid 之前全实体
   let marks = [];                       // 淡入中的段 [{a,b,t}]（可见字序号区间 + 显形时刻）
   let plan = [], planBase = 0;          // 待播段 [{a,b,t0,t1}]：可见字 [a,b) 在 t0..t1 内匀速显形；planBase = 已播完的边界
@@ -239,7 +252,7 @@ export function claudeFade(node, opts = {}) {
       else marks.push({ a: shown, b: R, t: ms });
       shown = R;
     }
-    while (marks.length && ms - marks[0].t >= DUR) { solid = marks[0].b; marks.shift(); }
+    while (marks.length && ms - marks[0].t >= dur) { solid = marks[0].b; marks.shift(); }
     if (!marks.length) solid = shown;
   }
 
@@ -292,7 +305,7 @@ export function claudeFade(node, opts = {}) {
     const cuts = [];
     for (const m of marks) {
       const x = Math.max(i0, m.a), y = Math.min(i1, m.b);
-      if (y > x) cuts.push({ x, y, op: fadeOp(t - m.t) });
+      if (y > x) cuts.push({ x, y, op: opOf(t - m.t), bl: blurOf(t - m.t) });
     }
     if (shown < i1) cuts.push({ x: Math.max(i0, shown), y: i1, wait: true });
     if (!cuts.length) return;
@@ -308,7 +321,10 @@ export function claudeFade(node, opts = {}) {
       if (x > cur) frag.appendChild(document.createTextNode(val.slice(cur, x)));
       const sp = document.createElement('span');
       sp.className = c.wait ? CLS + ' ' + WAIT : CLS;
-      if (!c.wait) sp.style.opacity = c.op.toFixed(3);
+      if (!c.wait) {
+        sp.style.opacity = c.op.toFixed(3);
+        if (c.bl > 0.05) sp.style.filter = 'blur(' + c.bl.toFixed(2) + 'px)';
+      }
       sp.textContent = val.slice(x, y);
       frag.appendChild(sp);
       cur = y;

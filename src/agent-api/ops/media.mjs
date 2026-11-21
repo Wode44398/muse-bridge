@@ -27,7 +27,8 @@ function fail(r, what) {
   throw new OpError(code, what + '：' + routeError(r));
 }
 
-function deliver(ctx, env, id, kind, saveTo) {
+// 作品 → { id, kind, url, serverPath, savedTo? }；studio.generate 也用它（ops/studio.mjs）
+export function deliver(ctx, env, id, kind, saveTo) {
   const file = fileFor(id, ctx.media);
   const out = { id, kind, url: (env.origin || '') + '/api/vertex/media?id=' + encodeURIComponent(id), ...(file ? { serverPath: file } : {}) };
   if (saveTo && file) {
@@ -149,7 +150,7 @@ const sxView = (values) => STUDIO_SETTINGS.map((d) => ({
 
 defineOp({
   name: 'media.settings', title: '看 Media Studio 的设置',
-  desc: '设置 › Media Studio 上的主机级开关：claudeMedia / claudeProactive（Claude 能不能生成、要不要主动生成）、dimensioMedia、codexMedia、apiMedia（外部 agent）、'
+  desc: '设置 › Media Studio 上的主机级开关：claudeMedia / claudeProactive（Claude 能不能生成、要不要主动生成）、dimensioMedia、codexMedia、agyMedia、apiMedia（外部 agent）、'
     + 'agentImage / agentSpeech / agentMusic / agentVideo（agent 能生成哪几种）、agentVideoMaxRes（agent 生成视频的分辨率上限）、safety*（内容安全过滤四类）、'
     + 'defaults（每种媒体的默认 { provider, model }）、autoSave / saveDir（在 Studio 里生成的作品自动存进工作空间的哪个文件夹）。'
     + '只管 agent 自己调用（默认模型与存储除外），用户在 Media Studio 里手动生成不受开关影响。',

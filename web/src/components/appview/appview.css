@@ -1,0 +1,114 @@
+/* 声明式应用（AppView）的令牌：不另起一套样子，两种形态各抄一处现成的设置页——
+   · .av-touch：手机 / 网页 = 设置页 .ios 的 iOS 27 分组卡（--i-* 原样一份，ios27 套件的 Toggle / Segmented 直接认）；
+   · .av-desk ：桌面壳 = 桌面设置页 .sd 的「墨与象牙」（--dsk-* 颜色覆盖一份，DButton / DSwitch / DSegmented 直接认；
+                尺寸梯 --dsk-s* / --dsk-r-* 由 desktop/tokens.css 在 html[data-desktop="1"] 下给）。
+   积木组件只认下面的 --av-* 语义令牌（底 / 卡 / 字 / 线 / 按下 / 强调 / 尺寸），两种形态各自映射过去，
+   组件里不用一处处分 touch / desktop。挂在应用页根（PluginAppPage）与 AppView 根上，侧栏里嵌 AppView 也一样。
+   全局样式表（不进 scoped）：令牌类在 AppView 外层也要能用。 */
+
+/* ── 手机：iOS 27 墨色分组卡（亮） ── */
+.av-touch {
+  --i-bg: #f2f0eb; --i-card: #fcfbf8;
+  --i-label: #1d1b18; --i-label2: rgba(29, 27, 24, .56); --i-label3: rgba(29, 27, 24, .3); --i-label4: rgba(29, 27, 24, .13);
+  --i-sep: rgba(29, 27, 24, .075);
+  --i-fill1: rgba(29, 27, 24, .15); --i-fill2: rgba(29, 27, 24, .1); --i-fill3: rgba(29, 27, 24, .07); --i-fill4: rgba(29, 27, 24, .045);
+  --i-press: rgba(29, 27, 24, .055); --i-seg-sel: #fff; --i-field: rgba(29, 27, 24, .06);
+  --i-accent: #1d1b18; --i-on-accent: #f6f3ec; --i-knob: #fff; --i-knob-on: #fff;
+  --i-tile: rgba(29, 27, 24, .05); --i-tile-ink: rgba(29, 27, 24, .82);
+  --i-ok: #4f8a5b; --i-warn: #b0741c; --i-red: #c4473b;
+  --i-blue: var(--i-accent); --i-green: var(--i-ok); --i-orange: var(--i-warn);
+
+  --av-font: var(--font-brand-sans), -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+  --av-bg: var(--i-bg); --av-card: var(--i-card);
+  --av-ink: var(--i-label); --av-ink2: var(--i-label2); --av-ink3: var(--i-label3);
+  --av-hair: inset 0 0 0 .5px var(--i-label4);   /* 卡片描边（设置页 .ig） */
+  --av-sep: var(--i-sep); --av-press: var(--i-press); --av-hover: var(--i-press);
+  --av-fill: var(--i-fill4); --av-fill2: var(--i-fill3); --av-field: var(--i-field);
+  --av-accent: var(--i-accent); --av-on-accent: var(--i-on-accent);
+  --av-ok: var(--i-ok); --av-warn: var(--i-warn); --av-err: var(--i-red);
+  --av-tile: var(--i-tile); --av-tile-ink: var(--i-tile-ink);
+  --av-focus: 0 0 0 2px color-mix(in srgb, var(--i-accent) 45%, transparent);
+  /* 尺寸 = 设置页：卡圆角 18、行高 50、左右 16、正文 16/22、副文 13/18、组头 13/18、组间 26 */
+  --av-r: 18px; --av-r-sm: 12px; --av-row: 50px; --av-px: 16px; --av-py: 11px;
+  --av-fs: 16px; --av-lh: 22px; --av-fs-sub: 13px; --av-lh-sub: 18px; --av-fs-head: 13px; --av-lh-head: 18px;
+  --av-fs-lg: 20px; --av-lh-lg: 26px; --av-fs-sm: 13px; --av-lh-sm: 18px;
+  --av-gap: 22px; --av-gap-in: 10px; --av-btn-h: 44px; --av-btn-r: 22px; --av-btn-fs: 15px;
+  --av-icon: 30px; --av-icon-r: 8px;
+  --av-t: 60ms;
+}
+/* ── 手机：暗 ── */
+.av-touch.av-dark {
+  --i-bg: #100f0d; --i-card: #1a1917;
+  --i-label: #f1ece2; --i-label2: rgba(241, 236, 226, .54); --i-label3: rgba(241, 236, 226, .27); --i-label4: rgba(241, 236, 226, .11);
+  --i-sep: rgba(241, 236, 226, .065);
+  --i-fill1: rgba(241, 236, 226, .19); --i-fill2: rgba(241, 236, 226, .12); --i-fill3: rgba(241, 236, 226, .08); --i-fill4: rgba(241, 236, 226, .05);
+  --i-press: rgba(241, 236, 226, .05); --i-seg-sel: rgba(241, 236, 226, .2); --i-field: rgba(241, 236, 226, .07);
+  --i-accent: #ebe5d8; --i-on-accent: #151412; --i-knob: #f1ece2; --i-knob-on: #151412;
+  --i-tile: rgba(241, 236, 226, .065); --i-tile-ink: rgba(241, 236, 226, .86);
+  --i-ok: #85b78f; --i-warn: #d9a441; --i-red: #e2725f;
+}
+
+/* ── 桌面：墨与象牙（暗，同桌面设置页 .sd） ── */
+.av-desk {
+  --dsk-bg: #100f0d; --dsk-bg-raised: #262420; --dsk-panel: #1a1917; --dsk-panel-strong: rgba(241, 236, 226, .085);
+  --dsk-ink: #f1ece2; --dsk-ink-2: rgba(241, 236, 226, .62); --dsk-ink-3: rgba(241, 236, 226, .4);
+  --dsk-line: rgba(241, 236, 226, .07); --dsk-line-strong: rgba(241, 236, 226, .14);
+  --dsk-hover: rgba(241, 236, 226, .05); --dsk-active: rgba(241, 236, 226, .085); --dsk-sel: rgba(241, 236, 226, .085);
+  --dsk-accent: #ebe5d8; --dsk-accent-hover: #f6f1e6; --dsk-accent-ink: #151412;
+  --dsk-ok: #85b78f; --dsk-warn: #d9a441; --dsk-crit: #e2725f;
+  --dsk-ctl: rgba(241, 236, 226, .16); --dsk-knob: #f1ece2; --dsk-knob-on: #151412;
+  --dsk-focus: 0 0 0 2px rgba(235, 229, 216, .55);
+
+  --av-font: var(--dsk-font, var(--font-brand-sans), system-ui, "Segoe UI", "Microsoft YaHei UI", sans-serif);
+  --av-bg: var(--dsk-bg); --av-card: var(--dsk-panel);
+  --av-ink: var(--dsk-ink); --av-ink2: var(--dsk-ink-2); --av-ink3: var(--dsk-ink-3);
+  --av-hair: 0 0 0 1px var(--dsk-line);           /* 卡片描边（DGroup .gcard） */
+  --av-sep: var(--dsk-line); --av-press: var(--dsk-active); --av-hover: var(--dsk-hover);
+  --av-fill: var(--dsk-hover); --av-fill2: var(--dsk-active); --av-field: var(--dsk-panel-strong);
+  --av-accent: var(--dsk-accent); --av-on-accent: var(--dsk-accent-ink);
+  --av-ok: var(--dsk-ok); --av-warn: var(--dsk-warn); --av-err: var(--dsk-crit);
+  --av-tile: var(--dsk-active); --av-tile-ink: var(--dsk-ink);
+  --av-focus: var(--dsk-focus);
+  /* 尺寸 = 桌面 kit：卡圆角 16、行高 38、左右 12、行字 13、副文 12、组头 12 */
+  --av-r: 16px; --av-r-sm: 9px; --av-row: 38px; --av-px: 12px; --av-py: 8px;
+  --av-fs: 13px; --av-lh: 18px; --av-fs-sub: 12px; --av-lh-sub: 16px; --av-fs-head: 12px; --av-lh-head: 16px;
+  --av-fs-lg: 17px; --av-lh-lg: 23px; --av-fs-sm: 12px; --av-lh-sm: 16px;
+  --av-gap: 24px; --av-gap-in: 8px; --av-btn-h: 28px; --av-btn-r: 9px; --av-btn-fs: 13px;
+  --av-icon: 24px; --av-icon-r: 6.5px;
+  --av-t: 110ms;
+}
+/* ── 桌面：亮 ── */
+.av-desk.av-light {
+  --dsk-bg: #f2f0eb; --dsk-bg-raised: #fff; --dsk-panel: #fcfbf8; --dsk-panel-strong: #fff;
+  --dsk-ink: #1d1b18; --dsk-ink-2: rgba(29, 27, 24, .6); --dsk-ink-3: rgba(29, 27, 24, .4);
+  --dsk-line: rgba(29, 27, 24, .085); --dsk-line-strong: rgba(29, 27, 24, .16);
+  --dsk-hover: rgba(29, 27, 24, .045); --dsk-active: rgba(29, 27, 24, .08); --dsk-sel: rgba(29, 27, 24, .07);
+  --dsk-accent: #1d1b18; --dsk-accent-hover: #34302a; --dsk-accent-ink: #f6f3ec;
+  --dsk-ok: #4f8a5b; --dsk-warn: #b0741c; --dsk-crit: #c4473b;
+  --dsk-ctl: rgba(29, 27, 24, .14); --dsk-knob: #fff; --dsk-knob-on: #fff;
+  --dsk-focus: 0 0 0 2px rgba(29, 27, 24, .35);
+}
+
+/* 积木共用的几样小零件（每个积木各写一份太散，放这一处） */
+.av-spin {
+  display: inline-block; width: 14px; height: 14px; flex: none; border-radius: 50%;
+  border: 1.6px solid currentColor; border-right-color: transparent; opacity: .7;
+  animation: av-spin .7s linear infinite;
+}
+@keyframes av-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .av-spin { animation-duration: 1.6s; } }
+/* 组头（section 标题 / 积木小标题）：设置页 .ghead */
+.av-head {
+  padding: 0 var(--av-px) 8px; font-size: var(--av-fs-head); line-height: var(--av-lh-head);
+  font-weight: 500; letter-spacing: .2px; color: var(--av-ink2);
+}
+.av-desk .av-head { font-weight: 600; letter-spacing: 0; padding: 0 var(--av-px) 8px; }
+/* 卡片：设置页 .ig / 桌面 DGroup .gcard */
+.av-card {
+  background: var(--av-card); border-radius: var(--av-r); box-shadow: var(--av-hair); overflow: hidden;
+}
+/* tone 字色（text / list / stat 共用） */
+.av-tone-muted { color: var(--av-ink2); }
+.av-tone-ok { color: var(--av-ok); }
+.av-tone-warn { color: var(--av-warn); }
+.av-tone-error { color: var(--av-err); }

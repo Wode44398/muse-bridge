@@ -14,7 +14,7 @@ export const STREAM_FLUSH_MS = 90;
 export const RESYNC_TIMEOUT_MS = 12_000;
 
 // ── 工作区 Dock（右侧五工具面板：任务/审阅/终端/浏览器/文件）────────────────
-// memory = 宿主（bridge）注入的记忆卡，看 dimensio 的记忆（见 workspace-collab.svelte.ts 的 memoryView）
+// memory = 宿主（bridge）的记忆卡，看 dimensio 的记忆（工作区外壳与共用面板都由宿主给，见 components/dock/HostedDock.svelte）
 export type DockTool = "tasks" | "review" | "term" | "browser" | "files" | "memory";
 export const DOCK_TOOL_KEY = "harness.dockTool";
 function readDockTool(): DockTool {

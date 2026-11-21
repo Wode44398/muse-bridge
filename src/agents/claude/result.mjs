@@ -41,7 +41,7 @@ export async function captureContextUsage(run, rmsg) {
   if (!sid || snap) return;
   // 'full' 首次要逐类真打 count_tokens（10-25 实测 5.8s，之后有缓存 4ms）；这期间同会话的下一条在 fin-wait 里干等。
   // 它一喊（gen.hurry）就不等了：控制请求在 CLI 里与新一轮并发无碍（实测），结果晚到照样记账、推给界面。
-  const HURRIED = Symbol('hurried');
+  const HURRIED = Symbol('hurried'), LATE = Symbol('late');
   const apply = (raw) => {
     const usage = normalizeContextUsage(raw, effModel || model || '');
     if (!usage) return;
@@ -54,7 +54,7 @@ export async function captureContextUsage(run, rmsg) {
     const p = run.q.getContextUsage({ detail: 'full' });
     const raw = await Promise.race([
       p,
-      new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
+      new Promise((resolve) => setTimeout(() => resolve(LATE), 8000)),
       ...(run.finHurry ? [run.finHurry.then(() => HURRIED)] : []),
     ]);
     if (raw === HURRIED) {
@@ -62,7 +62,10 @@ export async function captureContextUsage(run, rmsg) {
       p.then(apply, () => {});
       return;   // 额度窗口也留给下一轮收尾
     }
-    apply(raw);
+    // 大上下文（几十万 token）首次逐类 count_tokens 可能超 8s：不再卡收尾，但晚到的结果照样记账
+    //（以前直接丢掉 → 这个会话一直没有分布）。停放的 CLI 还活着，结果会到；进程已关就静默作罢。
+    if (raw === LATE) { console.log('[claude] context usage slow (>8s) — applying when it lands'); p.then(apply, () => {}); }
+    else apply(raw);
   } catch (e) {
     console.log('[claude] getContextUsage failed:', e && e.message);
   }

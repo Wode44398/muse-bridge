@@ -17,8 +17,7 @@ export default {
   "拖拽调整上下两张的高度（双击等分）": "Drag to resize the cards above and below (double-click to even them out)",
   "{label}（{kbd}）": "{label} ({kbd})",
   "工作空间加载中…": "Loading workspace…",
-  "文件视图由 bridge 宿主提供；独立运行模式请直接用系统文件管理器打开工作空间":
-    "The file view comes from The Bridge. When dimensio runs standalone, open the workspace in your system’s file manager.",
+  "工作区由 bridge 宿主提供；独立运行模式没有工作区": "The side panel comes from The Bridge. dimensio has none when it runs standalone.",
 
   // —— 任务面板 ——
   "返回任务列表": "Back to tasks",

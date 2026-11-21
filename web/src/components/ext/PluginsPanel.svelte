@@ -16,7 +16,12 @@
   import { apiUrl } from '../../lib/server.js';
   import { busOn } from '../../lib/bus.js';
   import { pushBackLayer } from '../../lib/nav.js';
-  import { t, tr, isEn, locale } from '../../lib/i18n.js';
+  import { t, tc, tr, isEn, locale } from '../../lib/i18n.js';
+  import { ui } from '../../lib/state.svelte.js';
+  import { extensionsNav } from '../../lib/extensionsNav.svelte.js';
+  import { openApp, appByKey, appIconUrl } from '../../lib/pluginApps.svelte.js';
+  import { pluginUi } from '../../lib/pluginUi.svelte.js';
+  import { pluginIcon } from '../../lib/pluginIcons.js';
   import { ic } from './icons.js';
   import ModulesPanel from '../ModulesPanel.svelte';
   import PluginForm from './PluginForm.svelte';
@@ -38,6 +43,8 @@
     { key: 'integration', label: t('对接'), g: '<path d="M9 3.5V8M15 3.5V8"/><path d="M7 8h10v3.2a5 5 0 0 1-10 0z"/><path d="M12 16.2v4.3"/>' },
     { key: 'network', label: t('网络与访问'), g: '<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.3 2.3 3.4 5 3.4 8s-1.1 5.7-3.4 8c-2.3-2.3-3.4-5-3.4-8S9.7 6.3 12 4z"/>' },
     { key: 'appearance', label: t('外观'), g: '<path d="M12 4a8 8 0 1 0 0 16c1.2 0 1.8-.8 1.5-1.8-.4-1.1.3-2.2 1.5-2.2H17a3 3 0 0 0 3-3A8 8 0 0 0 12 4z"/><circle cx="8" cy="11" r="1"/><circle cx="11" cy="7.8" r="1"/><circle cx="15" cy="8.6" r="1"/>' },
+    // 应用：插件市场 / 已装列表里 category: 'app' 的一类，字形是四格应用图标
+    { key: 'app', label: tc('插件', '应用'), g: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6"/>' },
     { key: 'system', label: t('系统'), g: '<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4 18 18M6 18l1.6-1.6M16.4 7.6 18 6"/>' },
   ];
   const PLUGIN_G = '<path d="M10 4.5a1.8 1.8 0 1 1 3.6 0H17a1.4 1.4 0 0 1 1.4 1.4v3.3a1.8 1.8 0 1 0 0 3.6v3.3A1.4 1.4 0 0 1 17 17.5h-3.3a1.8 1.8 0 1 0-3.6 0H7a1.4 1.4 0 0 1-1.4-1.4v-3.4a1.8 1.8 0 1 1 0-3.6V5.9A1.4 1.4 0 0 1 7 4.5z"/>';
@@ -65,11 +72,16 @@
       if (i >= 0) data.plugins[i] = { ...data.plugins[i], panelStatus: ev.panelStatus || null, processes: ev.processes || [], hooks: ev.hooks || [], actions: ev.actions || [],
         schedules: ev.schedules || [], usage: ev.usage || undefined };
     });
+    // 页面权限授予 / 撤销（授权框、别的设备、这里的「撤销」）：正看着这个插件的详情就重拉
+    else if (ev?.type === 'plugins.grants') untrack(() => { if (selId && ev.plugin === selId && pagePerms) loadGrants(selId); });
   }));
   const apply = (r) => { if (r && Array.isArray(r.plugins)) data = { plugins: r.plugins, restartPending: !!r.restartPending }; };
 
   const builtins = $derived((data?.plugins || []).filter((p) => p.source === 'builtin'));
   const thirdParty = $derived((data?.plugins || []).filter((p) => p.source === 'installed' || p.source === 'local'));
+  // 已装的第三方插件里 category: 'app' 的单独归进「应用」一组，其余照旧一格格排
+  const thirdApps = $derived(thirdParty.filter((p) => p.category === 'app'));
+  const thirdRest = $derived(thirdParty.filter((p) => p.category !== 'app'));
   const groups = $derived(CATS.map((c) => ({ ...c, items: builtins.filter((p) => p.category === c.key) }))
     .concat([{ key: '_other', label: t('其他'), items: builtins.filter((p) => !CATS.some((c) => c.key === p.category)) }])
     .filter((g) => g.items.length));
@@ -109,7 +121,59 @@
   let selId = $state(null);
   const sel = $derived(selId ? (data?.plugins || []).find((p) => p.id === selId) || null : null);
   $effect(() => { if (selId && data && !sel) selId = null; });   // 卸载了：退回列表
-  $effect(() => { if (!selId) return; return pushBackLayer(() => back()); });
+  // 连设置一起直达进来的那个详情（extensionsNav.landing）：系统返回一步收起设置，回到发起的应用页 / 主页。
+  // 直接置 false、不走设置外壳的逐级后退（同 nav.js 原生返回收设置层的做法）；人在详情里换了插件或退回过列表就不再算
+  let landedId = null;
+  $effect(() => {
+    if (!selId) return;
+    return pushBackLayer(() => {
+      if (landedId && landedId === selId) { landedId = null; ui.settingsOpen = false; return; }
+      back();
+    });
+  });
+
+  // ═══ 已授予的页面权限（插件应用页面的 page.chat / page.files）═══
+  // 清单声明了页面权限才出这一块；GET /api/plugins/grants 回的是当前使用者自己的授权（{ declared, granted: { 权限: iso } }）。
+  // 「撤销」= POST { plugin, perm, allow: false }；授予 / 撤销都会推 plugins.grants，上面的总线分支跟着重拉。
+  const pagePerms = $derived(!!sel?.permissions?.some((pm) => typeof pm?.id === 'string' && pm.id.startsWith('page.')));
+  let grants = $state(null);   // { plugin, declared, granted, failed? } | null（拉取中）
+  let grantsSeq = 0;
+  async function loadGrants(id) {
+    const my = ++grantsSeq;
+    try {
+      const g = await api.get('/api/plugins/grants?plugin=' + encodeURIComponent(id));
+      if (my !== grantsSeq) return;
+      grants = { plugin: id, declared: Array.isArray(g?.declared) ? g.declared : [], granted: g?.granted && typeof g.granted === 'object' ? g.granted : {} };
+    } catch { if (my === grantsSeq) grants = { plugin: id, declared: [], granted: {}, failed: true }; }
+  }
+  // 只跟选中的插件与「声明了页面权限」走；清空、重拉都在 untrack 里（不读写同一个 state）
+  $effect(() => {
+    const id = selId, want = pagePerms;
+    untrack(() => { grantsSeq++; grants = null; if (id && want) loadGrants(id); });
+  });
+  const grantRows = $derived(grants && grants.plugin === selId
+    ? grants.declared.filter((d) => d && grants.granted[d.id]).map((d) => ({ id: d.id, label: d.label, at: Date.parse(grants.granted[d.id]) || 0 }))
+    : []);
+  async function revokeGrant(p, row) {
+    const key = p.id + ':grant:' + row.id;
+    if (busy[key]) return;
+    // 与设置「页面权限」同一套确认（同样的串）：只有撤销文件权限有连带后果（交出去的文件随之失效）要确认；别的撤了只是下次再问
+    if (row.id === 'page.files') {
+      const ok = await confirm({
+        title: t('撤销「{name}」的文件权限？', { name: pName(p) }),
+        desc: t('已经交给页面的文件随之失效：页面里开着的文件读写不了，要再用得重新经你同意。'),
+        yes: tc('权限', '撤销'), danger: true,
+      });
+      if (!ok) return;
+    }
+    busy[key] = true;
+    try {
+      await api.post('/api/plugins/grants', { plugin: p.id, perm: row.id, allow: false });
+      toast(t('已撤销'));
+      loadGrants(p.id);
+    } catch (e) { toast(errMsg(e), true); }
+    finally { busy[key] = false; }
+  }
   let anchor = $state();
   // 进详情回到滚动区顶上（同扩展中心别的详情页的 toTop；scrollIntoView 会把返回按钮藏到吸顶的标题栏底下），
   // 返回列表时回到点进去之前的位置。
@@ -127,8 +191,81 @@
     queueMicrotask(() => { const sc = scroller(); if (sc) sc.scrollTop = 0; });
   }
   function back() {
+    landedId = null;
     selId = null;
     requestAnimationFrame(() => { const sc = scroller(); if (sc) sc.scrollTop = listScroll; });
+  }
+
+  // 直达某个插件的详情（lib/extensionsNav 的 openPluginDetail：应用页「⋯ › 插件详情」等）：挂载时和 id / seq 变化时消费。
+  // 列表还没拉到先不动（拉到了 data 一变再跑）；拉到了找得到就选中、找不到也清掉，免得之后误选。
+  // 只跟 id / seq / data 走，选中与清 id 都在 untrack 里（读写同一 state 的 effect 会自激）。
+  // 消费推迟到这一轮更新跑完：人已经在「功能扩展」上时，两套设置外壳会跟着同一个 seq 换 key 重挂 Customize，
+  // 这一份在同一轮里就被拆掉——要是它当场把 id 清了，新挂上的那份拿不到，人落在列表上。被拆掉（或 id / data 又变了）时 cleanup 把这次作废
+  $effect(() => {
+    const id = extensionsNav.id;
+    extensionsNav.seq;   // 同一个 id 连点两次也要再跳一次（期间人可能已经退回列表）
+    if (!id || !data?.plugins) return;
+    let live = true;
+    queueMicrotask(() => {
+      if (!live) return;
+      untrack(() => {
+        const list = data?.plugins;
+        if (extensionsNav.id !== id || !list) return;
+        extensionsNav.id = null;
+        const landing = extensionsNav.landing;
+        extensionsNav.landing = false;
+        const p = list.find((x) => x.id === id);
+        if (!p) return;
+        landedId = landing ? p.id : null;
+        mkId = null; mkFrom = null;   // 正开着市场条目详情：直接换成插件详情
+        if (!selId) open(p);
+        else if (selId !== p.id) { selId = p.id; queueMicrotask(() => { const sc = scroller(); if (sc) sc.scrollTop = 0; }); }
+      });
+    });
+    return () => { live = false; };
+  });
+
+  // ═══ 插件应用（主页图标 + 自己的全屏分页）═══
+  // 两个来源：清单 ui.apps 随 /api/plugins 下发（插件关着也有；图标是插件目录里的相对路径 web/…，由 /plugins/<id>/ 提供）；
+  // /api/plugins/ui 的 apps（pluginUi.apps）是服务端合并好的现行登记——只有开着的插件、同 id 的 ctx.ui.app 动态登记已盖住清单、
+  // 标题按界面语言取好、图标已是 /plugins/<id>/… 的地址，主页图标也读它。所以清单里的每一项先找现行登记、有就用它的标题与图标
+  // （插件运行时改了标题 / 图标，这里跟主页一致），找不到（插件关着、或登记还没拉到）才退回清单的静态值；只有动态登记的接在后面。
+  const light = $derived(ui.theme === 'light');
+  function appsOf(p) {
+    if (!p) return [];
+    const out = [];
+    const seen = new Set();
+    const live = new Map(pluginUi.apps.filter((a) => a.plugin === p.id).map((a) => [a.id, a]));
+    const fromLive = (key, a) => ({ key, title: a.title || a.id, icon: a.icon || { name: 'plugin' } });
+    // 已经是完整地址（/plugins/… 或 http）的原样用，免得拼成两层；相对路径逐段编码（同服务端 assetUrl）
+    const abs = (v) => (typeof v !== 'string' || !v ? '' : /^(\/|https?:\/\/)/i.test(v) ? v : '/plugins/' + encodeURIComponent(p.id) + '/' + v.split('/').map(encodeURIComponent).join('/'));
+    for (const a of Array.isArray(p.ui?.apps) ? p.ui.apps : []) {
+      if (!a?.id || seen.has(a.id)) continue;
+      seen.add(a.id);
+      const key = 'app:' + p.id + ':' + a.id;
+      const cur = live.get(a.id);
+      if (cur) { out.push(fromLive(key, cur)); continue; }
+      const icon = a.icon && typeof a.icon === 'object' && !a.icon.name ? { light: abs(a.icon.light), dark: abs(a.icon.dark) } : a.icon || { name: 'plugin' };
+      // 英文界面：插件自带词条 locales/en.json 的 ui.app.<id>.title 优先，其次清单里的 titleEn
+      out.push({ key, title: plText(p, ['ui', 'app', a.id, 'title'], isEn() && a.titleEn ? a.titleEn : a.title || a.id), icon });
+    }
+    for (const a of live.values()) {
+      if (seen.has(a.id)) continue;
+      seen.add(a.id);
+      out.push(fromLive(a.key || 'app:' + a.plugin + ':' + a.id, a));
+    }
+    return out;
+  }
+  const appIcon = (a) => {
+    const src = appIconUrl(a, light);
+    return src ? { src } : { svg: pluginIcon(a.icon?.name || 'plugin') };
+  };
+  // 打开：手机 App 里交给原生干净页（设置留在底下）；其余关掉设置、在主界面里开全屏分页。
+  // 刚开插件时应用登记要等总线推 plugins.ui 重拉才到：还没到就留在设置里提示一句，别先把设置关了
+  function launchApp(a) {
+    if (!appByKey(a.key)) { toast(pluginUi.loaded ? t('应用还没准备好，稍等一下再试') : t('应用列表还在加载，稍等一下再试'), true); return; }
+    if (!inAndroidApp()) ui.settingsOpen = false;
+    openApp(a.key);
   }
   async function reload(p) {
     busy[p.id] = true;
@@ -290,6 +427,13 @@
   const mktOf = (id) => (mkt?.plugins || []).find((x) => x.id === id) || null;
   const mktNew = $derived((mkt?.plugins || []).filter((x) => !x.builtin && x.state === 'none'));
   const mktUpdates = $derived((mkt?.plugins || []).filter((x) => x.update));
+  // 市场分类筛选：全部 / 应用 / 其它；索引里 category: 'app' 的算应用（服务端 normalizeIndex 保留 category）
+  let mktCat = $state('all');
+  const mktShown = $derived(mktCat === 'all' ? mktNew : mktNew.filter((x) => (x.category === 'app') === (mktCat === 'app')));
+  // 应用类卡片的图标：索引只认 https 地址（服务端已滤，这里再挡一道）；加载失败的记下来退回分类字形
+  let mkIconBad = $state({});
+  const mkIcon = (x) => (x && x.category === 'app' && typeof x.icon === 'string' && /^https:\/\//i.test(x.icon) && !mkIconBad[x.id] ? x.icon : '');
+  const mkIconFail = (x) => { mkIconBad = { ...mkIconBad, [x.id]: true }; };
   const mName = (x) => (isEn() && x.nameEn ? x.nameEn : tr(x.name));
   const mDesc = (x) => (isEn() && x.descriptionEn ? x.descriptionEn : tr(x.description || ''));
   const kb = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
@@ -419,6 +563,7 @@
   {@const runOn = sel.active && !!(sel.panelStatus || sel.processes?.length || sel.actions?.length || sel.hooks?.length)}
   <!-- 日志行：有记录就给；第三方插件开着时也给（hasLogs 是拉列表那一刻的，之后才记的看不到）。内置功能没记录就不占地方 -->
   {@const logOn = !!(sel.hasLogs || (sel.active && (sel.source === 'installed' || sel.source === 'local')))}
+  {@const apps = appsOf(sel)}
   <div class="pp-detail">
     <div class="cz-crumb"><button class="cz-back" onclick={back}>{@html ic('back', 2)}<span>{t('功能扩展')}</span></button></div>
     <div class="cz-dh">
@@ -463,6 +608,27 @@
         {#each sel.permissions as pm (pm.id)}
           <div class="cz-kv pp-perm"><b>{tr(pm.label)}</b></div>
         {/each}
+      </div>
+    {/if}
+
+    <!-- 已授予的页面权限：你在应用页面的授权框里点过「允许」的，随时可以撤销（授权按使用者各算各的） -->
+    {#if pagePerms}
+      <div class="cz-sec">{t('已授予的页面权限')}</div>
+      <div class="cz-list">
+        {#if !grants}
+          <div class="cz-li"><span class="cz-li-tx"><small>{t('载入中…')}</small></span></div>
+        {:else if grants.failed}
+          <div class="cz-li"><span class="cz-li-tx"><small>{t('授权记录没读出来')}</small></span><button class="cz-btn sm" onclick={() => loadGrants(sel.id)}>{t('重试')}</button></div>
+        {:else if !grantRows.length}
+          <div class="cz-li"><span class="cz-li-tx"><small>{t('还没有授予过。应用页面要用到时会先问你。')}</small></span></div>
+        {:else}
+          {#each grantRows as g (g.id)}
+            <div class="cz-li">
+              <span class="cz-li-tx"><span>{tr(g.label)}</span><small>{g.at ? t('{at}授予', { at: relTime(g.at) }) : t('已授予')}</small></span>
+              <button class="cz-btn sm" disabled={busy[sel.id + ':grant:' + g.id]} onclick={() => revokeGrant(sel, g)}>{tc('权限', '撤销')}</button>
+            </div>
+          {/each}
+        {/if}
       </div>
     {/if}
 
@@ -533,6 +699,21 @@
       </div>
     {/if}
 
+    <!-- 插件应用：主页上那枚图标的同一个应用，这里也能直接打开（插件关着时打不开：应用只在插件开着时登记） -->
+    {#if apps.length}
+      <div class="cz-sec">{tc('插件', '应用')}</div>
+      <div class="cz-list">
+        {#each apps as a (a.key)}
+          {@const aic = appIcon(a)}
+          <div class="cz-li">
+            <span class="cz-tile sm pp-app-ic" aria-hidden="true">{#if aic.src}<img src={aic.src} alt="" draggable="false" />{:else}{@html aic.svg}{/if}</span>
+            <span class="cz-li-tx"><span>{a.title}</span>{#if !sel.active}<small>{t('插件开着才能打开')}</small>{/if}</span>
+            <button class="cz-btn sm" disabled={!sel.active} onclick={() => launchApp(a)}>{t('打开')}</button>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
     {#if sel.ui?.panel && sel.active}
       <div class="cz-list pp-gap">
         <button class="cz-li act" onclick={() => openPanel(sel)}><span class="cz-li-tx"><span>{t('打开「{name}」', { name: pPanelTitle(sel) })}</span><small>{t('插件自己的控制面板')}</small></span></button>
@@ -573,7 +754,7 @@
 
 {#snippet mkCard(x)}
   <div class="cz-card" role="button" tabindex="0" onclick={() => openMk(x)} onkeydown={(ev) => { if (ev.key === 'Enter') openMk(x); }}>
-    <span class="cz-tile">{@html glyph(x)}</span>
+    <span class="cz-tile" class:pp-icon={!!mkIcon(x)}>{#if mkIcon(x)}<img src={mkIcon(x)} alt="" draggable="false" referrerpolicy="no-referrer" onerror={() => mkIconFail(x)} />{:else}{@html glyph(x)}{/if}</span>
     <div class="cz-body">
       <b class="cz-name">{mName(x)}</b>
       <p class="cz-desc">{mDesc(x)}</p>
@@ -590,7 +771,7 @@
   <div class="pp-detail">
     <div class="cz-crumb"><button class="cz-back" onclick={mkBack}>{@html ic('back', 2)}<span>{mkFrom ? nameOf(mkFrom) : t('功能扩展')}</span></button></div>
     <div class="cz-dh">
-      <span class="cz-tile lg">{@html glyph(mkSel)}</span>
+      <span class="cz-tile lg" class:pp-icon={!!mkIcon(mkSel)}>{#if mkIcon(mkSel)}<img src={mkIcon(mkSel)} alt="" draggable="false" referrerpolicy="no-referrer" onerror={() => mkIconFail(mkSel)} />{:else}{@html glyph(mkSel)}{/if}</span>
       <div class="cz-dh-tx">
         <h2>{mName(mkSel)}</h2>
         <p>{t('插件市场')}{mkSel.latest ? ' · v' + mkSel.latest.version : ''}{mkSel.author ? ' · ' + mkSel.author : ''}</p>
@@ -671,7 +852,16 @@
     {:else}
       {#if mktErr || mkt?.market?.error}<div class="cz-diag">{t('插件市场没拉下来：{reason}', { reason: tr(mktErr || mkt.market.error) })}</div>{/if}
       {#if mktNew.length}
-        <div class="cz-grid">{#each mktNew as x (x.id)}{@render mkCard(x)}{/each}</div>
+        <div class="cz-chips pp-mkcats" role="tablist" aria-label={t('分类')}>
+          {#each [['all', t('全部')], ['app', tc('插件', '应用')], ['other', t('其它')]] as [k, label] (k)}
+            <button class="cz-chip" class:on={mktCat === k} role="tab" aria-selected={mktCat === k} onclick={() => (mktCat = k)}>{label}</button>
+          {/each}
+        </div>
+        {#if mktShown.length}
+          <div class="cz-grid">{#each mktShown as x (x.id)}{@render mkCard(x)}{/each}</div>
+        {:else}
+          <p class="cz-note pp-intro">{mktCat === 'app' ? t('市场里暂时没有可装的应用。') : t('这一类里暂时没有可装的插件。')}</p>
+        {/if}
       {:else if mkt?.market?.ok}
         <p class="cz-note pp-intro">{(mkt.plugins || []).length ? t('市场里的插件都装上了。') : t('市场里暂时还没有插件。')}</p>
       {:else if !mkt && !mktErr}
@@ -692,7 +882,12 @@
 
     <h3 class="cz-h pp-top">{t('已安装的插件')} {#if thirdParty.length}<span class="cz-n">{thirdParty.length}</span>{/if}</h3>
     {#if thirdParty.length}
-      <div class="cz-grid">{#each thirdParty as p (p.id)}{@render card(p)}{/each}</div>
+      {#if thirdApps.length}
+        <div class="cz-sec">{tc('插件', '应用')}</div>
+        <div class="cz-grid">{#each thirdApps as p (p.id)}{@render card(p)}{/each}</div>
+        {#if thirdRest.length}<div class="cz-sec">{t('其他')}</div>{/if}
+      {/if}
+      {#if thirdRest.length}<div class="cz-grid">{#each thirdRest as p (p.id)}{@render card(p)}{/each}</div>{/if}
     {:else}
       <p class="cz-note pp-intro">{t('还没有装第三方插件。插件就是一个带 bridge-plugin.json 的目录：可以给 Claude 加工具、加接口、加 agent 操作、加定时的后台任务。直接跟 Claude 说想要什么，它可以帮你写好并登记上。')}</p>
     {/if}
@@ -766,6 +961,10 @@
 
 <style>
   .pp-anchor { display: block; height: 0; }
+  /* 应用类市场卡片的图片图标：铺满方块、圆角跟方块走；底色留着，透明图标不至于飘在卡片上 */
+  .cz-tile.pp-icon { overflow: hidden; }
+  .cz-tile.pp-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .pp-mkcats { margin: 2px 0 12px; }
   .pp-upd { margin: 0 0 26px; padding: 14px 16px 6px; border-radius: 14px; background: color-mix(in srgb, var(--cz-crit) 7%, transparent);
     border: 1px solid color-mix(in srgb, var(--cz-crit) 22%, transparent); }
   .pp-upd-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
@@ -803,6 +1002,7 @@
   .pp-tag.pp-tag-bad { color: var(--cz-crit); background: color-mix(in srgb, var(--cz-crit) 12%, transparent); }
   .pp-logbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; font-size: 13.5px; color: var(--cz-ink2); }
   .pp-gap { margin-top: 16px; }
+  .pp-app-ic img { width: 22px; height: 22px; object-fit: contain; display: block; }
   .pp-mono { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 13px; }
   .pp-add { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
   .pp-add :global(svg) { width: 16px; height: 16px; margin-right: 6px; vertical-align: -3px; }

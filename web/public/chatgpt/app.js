@@ -971,7 +971,8 @@
       return;
     }
     if (ev.type === "session") {
-      bridge.sessionId = ev.sessionId || bridge.sessionId;
+      // 新对话拿到 id：告诉宿主（工作区的浏览器按会话各开一份，面板要跟到这一份上）
+      if (ev.sessionId && ev.sessionId !== bridge.sessionId) { bridge.sessionId = ev.sessionId; updateProjectContext(); }
       if (MODEL_META.some(function (m) { return m.id === ev.model; })) {
         bridge.model = ev.model;
         bridge.effort = ev.effort;
@@ -1752,7 +1753,8 @@
     sendBridge("workspace-context", {
       projectId: bridge.projectId || null,
       projectName: bridge.projectName || (project && project.name) || "",
-      path: project && project.path ? project.path : ""
+      path: project && project.path ? project.path : "",
+      sessionId: bridge.sessionId || ""
     });
     projectContext.title = project && project.path ? project.path : (bridge.projectName || "");
     var mobileTitle = $("#chat-title-button > div");

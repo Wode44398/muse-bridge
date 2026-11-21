@@ -11,7 +11,7 @@ import { pipeline } from 'node:stream';
 import { readBody } from '../runtime/body.mjs';
 import { sanitizeName, sweepStaleParts } from '../runtime/paths.mjs';
 import { contextFor } from '../runtime/identity.mjs';
-import { imageThumb, THUMB_EXT, THUMB_TIERS } from './file-preview.mjs';
+import { imageThumb, THUMB_EXT, THUMB_VIDEO_EXT, THUMB_TIERS } from './file-preview.mjs';
 import { streamFile, mimeType } from '../runtime/http-file.mjs';
 import { mediaSafetyHeaders } from './media-file.mjs';
 
@@ -80,9 +80,10 @@ export function registerUploadRoutes(router, { authOk, identify }) {
     }
     const ext = path.extname(file).slice(1).toLowerCase();
     const tier = THUMB_TIERS[url.searchParams.get('thumb')];
-    if (tier && THUMB_EXT.has(ext)) {
+    // 视频也给缩略档（ffmpeg 抽一帧）：Claude 输入框里附的视频按图片那样显示封面
+    if (tier && (THUMB_EXT.has(ext) || THUMB_VIDEO_EXT.has(ext))) {
       try {
-        const thumb = await imageThumb(file, statSync(file), false, tier);
+        const thumb = await imageThumb(file, statSync(file), THUMB_VIDEO_EXT.has(ext), tier);
         if (thumb) {
           res.writeHead(200, { 'Content-Type': 'image/webp', 'Cache-Control': 'private, max-age=31536000, immutable' });
           pipeline(createReadStream(thumb), res, () => {});

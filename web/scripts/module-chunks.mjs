@@ -17,6 +17,9 @@ import path from 'node:path';
 export const MODULE_ENTRIES = {
   studio: ['src/components/studio/StudioPage.svelte', 'src/components/studio/settings/StudioSettings.svelte', 'src/components/studio/settings/MediaProviderManager.svelte'],
   codex: ['src/components/ChatGPTPage.svelte'],
+  // store：lib/agentUi.js 点通知回跳与 agy 的 ui_open 经它懒加载（只在 agy 分页开着时才走到）
+  agy: ['src/components/agy/AgyPage.svelte', 'src/desktop/settings/AgySection.svelte', 'src/components/settings/ios/agy/AgySettingsPages.svelte', 'src/lib/agy/file-target.js',
+    'src/lib/agy/store.svelte.js'],
   dimensio: ['src/components/HarnessPage.svelte', '../harness/web/src/i18n/en/index.ts', 'src/components/dock/DimensioMemoryNote.svelte'],
 };
 
@@ -27,7 +30,8 @@ export const MODULE_PUBLIC_DIRS = { codex: ['chatgpt'] };
 const MODULE_SOURCES = {
   studio: [/^src\/components\/studio\//, /^src\/modules\/studio\//],
   codex: [/^src\/components\/ChatGPTPage\.svelte$/, /^src\/components\/dock\/CodexWorkspace\.svelte$/],
-  dimensio: [/^src\/components\/HarnessPage\.svelte$/, /^src\/components\/dock\/HxFilesEmbed\.svelte$/, /^src\/components\/dock\/DimensioMemoryNote\.svelte$/, /^\.\.\/harness\/web\/src\//],
+  agy: [/^src\/components\/agy\//, /^src\/lib\/agy\//, /^src\/desktop\/settings\/Agy(?:Ext|Pool)?Section\.svelte$/, /^src\/components\/settings\/ios\/agy\//],
+  dimensio: [/^src\/components\/HarnessPage\.svelte$/, /^src\/components\/dock\/HxWorkbench\.svelte$/, /^src\/components\/dock\/DimensioMemoryNote\.svelte$/, /^\.\.\/harness\/web\/src\//],
 };
 
 export function bridgeModuleChunks({ webRoot }) {

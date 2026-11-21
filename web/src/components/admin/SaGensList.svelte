@@ -7,7 +7,8 @@
   let { gens = [], withStop = false } = $props();
   const live = $derived(liveGens(gens));
   // 'u:<账号 id>' → 登录名（S2-4：新账号 id = 名字-随机串）；用户列表没拉过就显示 id
-  const ownerName = (key) => { const id = String(key || '').replace(/^u:/, ''); return sa.users.find((u) => (u.id || u.name) === id)?.name || id; };
+  const ownerName = (key) => { const id = String(key || '').replace(/^agy:/, '').replace(/^u:/, ''); return sa.users.find((u) => (u.id || u.name) === id)?.name || id; };
+  const isAgy = (key) => String(key || '').startsWith('agy:');
 
   async function stopGen(g) {
     try {
@@ -24,7 +25,8 @@
   <div class="glist">
     {#each live as g (g.key + (g.sessionId || ''))}
       <div class="grow">
-        {#if g.key === 'admin'}<span class="sa-badge blue">admin</span>
+        {#if isAgy(g.key)}<span class="sa-badge blue">Antigravity · {ownerName(g.key)}</span>
+        {:else if g.key === 'admin'}<span class="sa-badge blue">Claude · admin</span>
         {:else}<span class="sa-badge purple">{ownerName(g.key)}</span>{/if}
         <span class="sa-mono sa-dim sid">{(g.sessionId || '').slice(0, 8) || '—'}</span>
         <!-- hidden：成员没允许管理员看内容（S2-7），提问原文不给 -->

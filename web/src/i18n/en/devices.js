@@ -27,7 +27,7 @@ export default {
   // —— 终端面板：开在服务器还是我的电脑 ——
   '终端开在哪台机器上': 'Where the terminal runs',
   '服务器': 'Server',
-  '工作空间，Claude 的命令也在这里跑': 'Workspace — where Claude runs commands too',
+  '工作空间，agent 的命令也在这里跑': 'Workspace — where the agent runs commands too',
   '我的电脑': 'My computer',
   '离线': 'Offline',
   '正在连接「{name}」上的终端…': 'Connecting to the terminal on “{name}”…',

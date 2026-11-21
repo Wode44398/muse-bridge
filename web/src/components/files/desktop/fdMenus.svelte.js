@@ -6,6 +6,7 @@ import { hasNativeFileClipboard, nativeWorkspaceReveal } from '../../../lib/nati
 import { isEn, t, tc } from '../../../lib/i18n.js';
 import { kindOf as fkKind } from '../../../lib/fileKinds.js';
 import { kindOf } from '../../../lib/files/common.js';
+import { fdPluginOpenEntries } from './fdPluginOpen.js';
 
 export function createFdMenus(P) {
   // —— 右键菜单 ——
@@ -68,6 +69,7 @@ export function createFdMenus(P) {
         entries.push({ label: t('打开方式…'), act: () => P.doOpenWith(it) });
       }
       if (P.nativeFs) entries.push({ label: t('在文件资源管理器中显示'), act: () => P.doReveal(it) });
+      entries.push(...fdPluginOpenEntries(P, it));
       entries.push({ sep: true });
       if (P.serverOps || P.pcFs) {
         entries.push({ label: t('发送给 AI…'), act: () => P.ai.open(it), accent: true });

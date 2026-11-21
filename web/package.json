@@ -29,6 +29,7 @@
     "@lezer/markdown": "^1.7.2",
     "@radix-ui/react-slider": "^1.4.7",
     "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5.5.0",
     "dompurify": "^3.4.7",
     "fflate": "^0.8.3",

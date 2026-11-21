@@ -1,9 +1,11 @@
 <script>
   // 审阅面板：工作空间 worktree 概览（基线 → working tree 的变更清单），
   // 行点开懒加载单文件 unified diff（+绿 −红），Claude 分页配色。
+  import { untrack } from 'svelte';
   import { api } from '../../lib/api.js';
   import { dragOut, joinAbs } from '../../lib/dragOut.js';
   import { dock } from '../../lib/dock.svelte.js';
+  import { fsChange } from '../../lib/fsSync.svelte.js';
   import { t, tc, tr } from '../../lib/i18n.js';
   let { dockState = dock } = $props();
 
@@ -22,7 +24,20 @@
     } catch (e) { err = tr(e?.body?.error || e?.body) || t('加载失败'); data = null; }
     loading = false;
   }
-  $effect(() => { if (dockState.ws) refresh(); });
+  $effect(() => { if (dockState.ws) untrack(() => refresh()); });
+
+  // 编辑工具落盘触发 fsSync 时防抖重拉 worktree 变更，让开着的审阅面板自动跟上最新改动
+  let fsSeen = fsChange.seq;
+  let fsTimer = 0;
+  $effect(() => {
+    const seq = fsChange.seq;
+    if (seq === fsSeen) return;
+    fsSeen = seq;
+    if (!untrack(() => dockState.ws)) return;
+    clearTimeout(fsTimer);
+    fsTimer = setTimeout(() => untrack(() => refresh()), 260);
+    return () => clearTimeout(fsTimer);
+  });
 
   async function toggle(f) {
     if (open[f.path]) { const { [f.path]: _, ...rest } = open; open = rest; return; }

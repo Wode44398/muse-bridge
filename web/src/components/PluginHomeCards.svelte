@@ -8,13 +8,16 @@
   import { t } from '../lib/i18n.js';
   import './ios27/ink.css';
 
+  // bottom：离屏幕底的距离（CSS 长度）。手机主页贴底（默认）；桌面主页底下是 Dock，传一个抬到 Dock 上方的值
+  let { bottom = null } = $props();
+
   const cards = $derived(me.kind === 'none' ? [] : pluginUi.homeCards);
   const dark = $derived(ui.theme !== 'light');
   const TONE = { ok: t('正常'), warn: t('注意'), error: t('出错'), idle: t('空闲') };
 </script>
 
 {#if cards.length}
-  <section class="phc i27ink" class:dark aria-label={t('插件卡片')}>
+  <section class="phc i27ink" class:dark aria-label={t('插件卡片')} style:bottom={bottom}>
     <div class="phc-row">
       {#each cards as c (c.plugin + '/' + c.id)}
         <svelte:element this={c.open ? 'button' : 'div'} class="card phc-card" class:tap={!!c.open} role={c.open ? undefined : 'group'}

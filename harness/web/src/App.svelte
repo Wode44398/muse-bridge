@@ -37,7 +37,7 @@
   import SettingsSheet from "./components/sheets/SettingsSheet.svelte";
   import CheckpointsSheet from "./components/sheets/CheckpointsSheet.svelte";
   import MemorySheet from "./components/sheets/MemorySheet.svelte";
-  import Dock from "./components/dock/Dock.svelte";
+  import HostedDock, { type DockView } from "./components/dock/HostedDock.svelte";
   import DragLayer from "./components/shell/DragLayer.svelte";
   import { dnd, dropTarget, type DragPayload, type DropPoint } from "./lib/dnd.svelte.ts";
   import { splitDropLabel, splitDropPlan, type Side } from "./lib/split.ts";
@@ -47,7 +47,7 @@
 
   // ── 宿主契约（bridge 的 HarnessPage 传进来；独立运行时全是默认值）──────────────────────────
   // embedded：作为 bridge 分页运行（主题作用域在本组件根、连接 / 系统栏归宿主、侧栏里有「主页」）
-  // filesView：宿主注入的工作区「文件」视图 snippet（透传给 Dock）
+  // dockView：宿主注入的工作区外壳（和 bridge 别的 agent 分页同一份）；不给 = 独立运行，没有工作区
   // pickWorkspace：宿主接管「选一个文件夹当工作空间」（返回绝对路径，空串 = 取消）
   // chatDrop：宿主的「把工作空间里的文件投给这个对话」落点 action，只挂在正文列 .main 上——
   //           这个节点的 class 只许静态写 + class: 指令（宿主会往上加 hx-dnd-on，动态 class={…} 会把它冲掉）
@@ -61,7 +61,7 @@
     sidebarFoot = null,
     onOpenArtifact = null,
     onOpenMedia = null,
-    filesView = null,
+    dockView = null,
     pickWorkspace = null,
     chatDrop = null,
     onOpenSettings = null,
@@ -71,9 +71,7 @@
     sidebarFoot?: import("svelte").Snippet | null;
     onOpenArtifact?: ((artifact: ArtifactItem, sessionId: string) => void) | null;
     onOpenMedia?: MediaHost | null;
-    filesView?: import("svelte").Snippet<
-      [{ ws: string; chatId: string; onExit: () => void; target: null | { seq: number; rel: string; open: string } }]
-    > | null;
+    dockView?: DockView | null;
     pickWorkspace?: null | (() => Promise<string>);
     chatDrop?: null | ((node: HTMLElement) => { destroy?: () => void } | void);
     onOpenSettings?: null | (() => void);
@@ -89,7 +87,7 @@
   onMount(startBrowserMount);
   // 产物卡：有宿主文件视图就进右侧工作区读，没有（独立 8799）才回落查看器 / 新窗口
   $effect(() => {
-    app.hasFilesView = !!filesView;
+    app.hasFilesView = !!dockView;
   });
   $effect(() => {
     setHostPickWorkspace(pickWorkspace);
@@ -555,7 +553,11 @@
         ondblclick={splitReset}
       ></div>
       <div class="pv-col" style={dockW}>
-        <Dock docked {filesView} {twoOk} bind:two={dockTwo} />
+        {#if dockView}
+          <HostedDock view={dockView} docked {twoOk} bind:two={dockTwo} />
+        {:else}
+          <p class="no-dock">{t("工作区由 bridge 宿主提供；独立运行模式没有工作区")}</p>
+        {/if}
       </div>
     {/if}
   </div>
@@ -577,8 +579,8 @@
   {/if}
 
   <!-- 手机：工作区是整屏的底部层 -->
-  {#if !wide && app.dockOpen}
-    <Dock {filesView} />
+  {#if !wide && app.dockOpen && dockView}
+    <HostedDock view={dockView} />
   {/if}
 
   {#if app.vendorMenu}
@@ -820,6 +822,14 @@
     z-index: 1;
     flex: none;
     min-width: 0;
+  }
+  .no-dock {
+    margin: 0;
+    padding: 32px 24px;
+    color: var(--text3);
+    font-size: var(--fs-md);
+    line-height: 1.6;
+    text-align: center;
   }
 
   /* 抽屉 */

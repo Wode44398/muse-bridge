@@ -8,4 +8,4 @@ export { pendingNew, dropPendingNew } from './chat/pending.svelte.js';
 export { queueState, mcpState, queuedItems, limitResume, fetchLimitResume, setLimitAutoContinue, refreshQueue, removeQueued, moveQueued, clearQueued, promoteQueued, editQueued, editLastQueued, retractableSteers, retractSteer, retractLastSteer } from './chat/queue.svelte.js';
 export { prefetchSessions } from './chat/history.js';
 export { onSnapClosed, answerQuestion } from './chat/events.js';
-export { requestSync, detachLive, openSession, send, prewarmNewChat, rewindToMessage, bgHoldNow, releaseBgHold, stop, newConversation, convertToProject, bumpLoadGen, loadSession, onBusEvent, steer, queueSend, mirrorActiveTurn, reconcileSession, restoreOnBoot } from './chat/kernel.js';
+export { requestSync, detachLive, openSession, send, prewarmNewChat, rewindToMessage, bgHoldNow, releaseBgHold, stop, newConversation, convertToProject, bumpLoadGen, loadSession, onBusEvent, steer, forceSteer, queueSend, mirrorActiveTurn, reconcileSession, restoreOnBoot } from './chat/kernel.js';

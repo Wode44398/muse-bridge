@@ -42,7 +42,8 @@
   import { buildSrcdoc, themeVars, currentMode, bridgeVarRefs, styleText, widgetCss, ARROW_DEFS, sanitizeStatic, stripScripts, visibleMarkup, isSvgCode, standaloneFile, fileStem } from '../../lib/widgetShell.js';
   import ClaudeLogo from '../ClaudeLogo.svelte';
 
-  const { seg, live = false } = $props();
+  // sendPrompt：别的分页（Antigravity）嵌这张卡时传自己的发送函数（返回 false = 没发出去）；不传就发到 Claude 当前对话
+  const { seg, live = false, sendPrompt = null } = $props();
 
   // Android 壳：离线 apk 的 appassets 源（server.js isOffline），或在线壳里注入了原生桥（AndroidStore 在就是 apk）
   const STATIC = isOffline() || (typeof window !== 'undefined' && !!window.AndroidStore);
@@ -228,6 +229,7 @@
     notSent = '';
     if (HIDDEN) return;
     if (ui.offline) { notSent = s; return; }   // 离线只读：不发
+    if (sendPrompt) { if ((await sendPrompt(s)) === false) notSent = s; return; }
     // Claude 在跑：进「稍后发送」队列，排不上就提示；没在跑：当作用户消息直接发
     if (session.busy) { if (!(await queueSend(s, []))) notSent = s; }
     else send(s, []);

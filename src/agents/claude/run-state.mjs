@@ -10,6 +10,8 @@ export function createRun(plan) {
     // 开跑时用启动方案里的；挂起接力 / 停放接管换成新请求带来的
     chatPrefs: plan.chatPrefs,
     limitReplay: plan.limitReplay,
+    // 插件应用页面开的会话的归属：只在 init 帧打标时用（plugin-origin.mjs），由 runClaudeChat 从入参带进来
+    pluginOrigin: undefined,
     abort: new AbortController(),
     // CLI 进程真正退干净（主循环 finally 走完）。硬停止先让界面收尾，进程在后台退，同会话重发据此等它。
     markExited: undefined,
@@ -87,6 +89,7 @@ export function createRun(plan) {
     interimResult: null,
     runModel: undefined,   // 这个 CLI 进程眼下的模型（接力时用户换了模型 → setModel）
     runPermMode: undefined,   // 这个 CLI 进程眼下的权限模式（init / status 帧实况、会话中切换）
+    planFrom: null,             // Claude 自己进计划模式之前的权限模式（用户选的计划模式 = null），见 notePermMode
     askedPermMode: undefined,   // 眼下这一轮要的模式（停放复用 / 接力换成新请求的）——init 帧据此认 CLI 降级
     permGate: null,   // 逐次审批 / 计划审批闸门（runtime/permissions.mjs），query 前建
     unbindMode: null,   // 会话中切模式的控制口登记（拿到会话 id 时登记，进程退出注销）

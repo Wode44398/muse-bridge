@@ -20,9 +20,17 @@ export const PLUGIN_FEATURES = Object.freeze([
   'config.hot', 'config.self', 'status', 'action', 'configOptions', 'store', 'panel', 'panel.config', 'process.args', 'sandbox.readDirs', 'claude.tool', 'claude.prompt', 'claude.mcp', 'agentOp', 'manual',
   'models.provide',
   // 四期：改到核心
-  'events', 'claude.hook', 'claude.permission', 'claude.input', 'claude.options', 'tools.agents', 'net', 'oauth', 'models.middleware', 'tool.card',
+  'events', 'claude.hook', 'claude.permission', 'claude.input', 'claude.options', 'tools.agents', 'tools.agy', 'net', 'oauth', 'models.middleware', 'tool.card',
   'replaces', 'service.priority', 'notify.channel', 'auth.provider',
   'ui.homeCard', 'ui.workbench', 'ui.command', 'ui.composerAction', 'ui.messageAction', 'ui.sessionAction', 'ui.theme',
+  // 插件应用：主页图标 + 全屏分页（ctx.ui.app / 清单 ui.apps）；没有 index.mjs 的纯页面插件
+  'ui.app', 'plugin.pageOnly',
+  // 页面宿主能力（_bridge/kv · grants · chat/* · files/* · host/*，页面 SDK 用；这里列出好让插件作者 ctx.has 探测宿主版本）
+  'page.kv', 'page.grants', 'page.chat', 'page.files', 'page.nav', 'page.host',
+  // 声明式应用（ctx.ui.app 的 view / actions，bridge 按积木画）与 ctx.ui.refresh
+  'ui.app.view', 'ui.refresh', 'ui.blocks',
+  // 更多插槽：文件「用 X 打开」、命令面板收录插件命令、应用固定到 Claude 侧栏、市场的应用分类
+  'ui.fileHandler', 'ui.command.palette', 'ui.app.pin', 'market.app',
 ]);
 
 const parse = (v) => {
