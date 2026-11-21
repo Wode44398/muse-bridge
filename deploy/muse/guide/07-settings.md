@@ -6,7 +6,7 @@
 - 网页和手机上，设置是一个整页的列表（像手机的「设置」App）：根页按分组列出各项，点一行从右边推入它的子页；左上角返回，手机上也可以从左边缘往右滑、按返回键，电脑上按 Esc。在根页再返回就关掉设置。网页版设置里没有搜索。
 - **dimensio 的设置也在这里**：「Agent」分组里的 dimensio 一行就是它的全部设置；dimensio 页侧栏最底下的「设置」打开的也是这一页（逐项见 03-dimensio.md「dimensio 的设置」）。
 - 宽屏电脑上，设置页会分成左右两栏：左边是根页的列表，右边是点开的那一页。
-- Windows 桌面客户端里的设置长得不一样：左栏最上面是 **「搜索」**（Search）和账户，下面一列分区——**「通用」**、**「外观」**、**「快捷键」**（Keyboard shortcuts）；Claude、dimensio、Media Studio（打开了才有）、**「模型中心」**（Model Hub）、**「Agent 接入」**；**「扩展」**、**「额度与注册」**、**「设备」**、**「壁纸」**；**「安卓 App」**；**「连接与更新」**（Connection & updates）、**「反馈」**（Feedback）。各分区的内容和下面网页版对应的那一页一样；网页版「关于」里的服务器地址、公网地址在客户端的「连接与更新」里。
+- Windows 桌面客户端里的设置长得不一样：左栏最上面是 **「搜索」**（Search）和账户，下面一列分区——**「通用」**、**「外观」**、**「主页」**——有主页时才有、**「页面权限」**、**「快捷键」**（Keyboard shortcuts）；Claude、dimensio、Media Studio（打开了才有）、**「模型中心」**（Model Hub）、**「Agent 接入」**；**「扩展」**、**「额度与注册」**、**「设备」**、**「壁纸」**；**「安卓 App」**；**「连接与更新」**（Connection & updates）、**「反馈」**（Feedback）。各分区的内容和下面网页版对应的那一页一样；网页版「关于」里的服务器地址、公网地址在客户端的「连接与更新」里。
 - 存在哪：「通用」「外观」「壁纸」**只存在当前这个浏览器 / 设备里**，换设备要重新设；「Claude」「dimensio」「Media Studio」这几页的设置（除了标着 **「这台设备」**（This device）的几项）**存在服务端**，按账号保存、各设备一致；模型中心里的服务也存在服务端。
 
 ## 根页一览
@@ -16,13 +16,13 @@
 | 分组 | 行 | 谁能看到 |
 |---|---|---|
 | （最上面） | 账户卡：名字和身份，点进去是「账户」；没登录时写「登录」 | 所有人 |
-| **「Agent」**（Agents） | Claude、dimensio，每个 agent 一行、各自一页；打开了 Media Studio 时多一行 Media Studio（见下面「Media Studio」与 09-media-studio.md） | 管理员看到所有开着的 agent；成员看到自己能用的 |
+| **「Agent」**（Agents） | Claude、dimensio，每个 agent 一行、各自一页；装了 Antigravity（可选，见 11-antigravity.md）时多一行 Antigravity；打开了 Media Studio 时多一行 Media Studio（见下面「Media Studio」与 09-media-studio.md） | 管理员看到所有开着的 agent；成员看到自己能用的 |
 | 同上 | **「模型中心」**（Model Hub）：配模型服务的唯一入口，排在各个 agent 之后（见下面「模型中心」与 10-model-hub.md） | 管理员；能用 Claude 的成员（只有他自己的那一份） |
 | 同上 | **「Agent 接入」**（Agent access） | 登录的人 |
 | **「插件」**（Plugins） | **「安卓 App」**——英文界面下也写这几个中文字 | 登录的人 |
 | **「服务器」**（Server） | **「扩展」**（Extensions）、**「额度与注册」**（Quotas & sign-ups）（多人用时才有）、**「服务端控制台」**（Admin console） | 只有管理员 |
 | **「个性化」**（Personalization） | **「扩展」**（Extensions）——只有技能：自己添加的技能，以及管理员给所有人加装的（见 05-customize.md「成员自己的技能」） | 注册账号（成员）；管理员这一行在「服务器」分组里 |
-| **「偏好」**（Preference） | **「通用」**（General）、**「外观」**（Appearance）、**「壁纸」**（Wallpaper）、**「流体壁纸」**（Fluid wallpaper） | 所有人；壁纸只在有主页（两个 agent 都开着）时有，流体壁纸只在主页用深色流体壁纸时有 |
+| **「偏好」**（Preference） | **「通用」**（General）、**「外观」**（Appearance）、**「主页」**（Home）、**「页面权限」**（Page permissions）、**「壁纸」**（Wallpaper）、**「流体壁纸」**（Fluid wallpaper） | 所有人；主页和壁纸只在有主页（能用的 agent 不止一个）时有，页面权限要登录，流体壁纸只在主页用深色流体壁纸时有 |
 | （不带标题） | **「设备」** | 登录的人 |
 | （不带标题） | **「提交反馈」**（Send feedback）、**「关于」**（About） | 所有人 |
 
@@ -86,6 +86,12 @@
 - 里面按分组排：子 agent 调度（dimensio 自己的「子 agent 调用策略」，默认单独一套，也可以跟随 Claude 的）、权限与安全、工作空间、记忆、连接器与技能、对话、上下文与成本、会话协作、工作区协同、Git 与拉取请求、会话管理、通知、调试、诊断。逐项见 03-dimensio.md「dimensio 的设置」。
 - **这一页不管模型**：以前的「模型」「API Key」「本机模型」三组去掉了。新对话的默认型号、思考深度、Fast mode 就是 dimensio 输入框型号菜单里最后选的；模型服务和 key 在「设置 → 模型中心」。成员现在网页上没有地方给 dimensio 填自己的 key（见 03-dimensio.md「配 key」）。
 
+## Antigravity
+
+- **「设置 → Antigravity」**（Settings → Antigravity）——装了 Antigravity（可选、实验性，见 11-antigravity.md）才有，「Agent」分组里的 Antigravity 一行；Antigravity 页侧栏最底下的「设置」打开的也是这一页。页头有启用 Antigravity 的开关，只有管理员能改。
+- 里面按分组排：「订阅号池」（只有管理员：Google 账号、用量、「撞上限额时」；其中「添加 Google 账号」在 Muse 上默认不可用，登录用网页终端里的 agy）、新对话默认（默认模型、思考档位、运行模式、项目工作空间）、权限与附加工作目录、系统提示追加、扩展与工具（Bridge 工具协同；MCP 服务器和 CLI 插件只有管理员）、外观（界面主题、对话字号，只管 Antigravity 页）、运行状态与更新（只有管理员：常驻进程、CLI 版本、日志、重启、检查 CLI 更新）、会话管理（已隐藏的会话）、调试（只有管理员）。逐项见 11-antigravity.md「Antigravity 的设置」。
+- 这一页的设置存在服务端，按账号保存。成员（只有完全信任档能开 Antigravity）只看到他能改的几组。
+
 ## Media Studio
 
 - **「设置 → Media Studio」**（Settings → Media Studio）——打开了 Media Studio 时「Agent」分组里多出的那一行，Media Studio 页右上角的齿轮打开的也是这里。
@@ -145,6 +151,23 @@
 - **「跟随系统明暗」**（Match system appearance）：跟着手机 / 电脑的深浅色自动换。
 - **「禁用系统转场动画」**（Turn off transitions）：关掉页面切换的动画。
 - 明暗是**全站统一**的：主页、Claude 页、dimensio 页、Media Studio、设置一起变（以前的「分页跟随主页明暗」和 dimensio 单独的明暗设置都没有了）。在 Claude 页单击星标、在 dimensio 页点月桥标志也能切，见 01-access.md「语言和主题」。
+
+## 主页
+
+**「设置 → 主页」**（Settings → Home）：主页上摆哪些入口、什么顺序。没有主页（只能用一个 agent，打开网址直接是那个 agent 的页面）时没有这一行。
+
+- **「主页上的入口」**（Home screen items）：每个入口一行——内置的 Claude、dimensio、Media Studio（打开了才有），以及插件应用。每行有上移 / 下移两个箭头调顺序，右边的开关管在不在主页上显示（内置的也能藏）；收进「更多」的那几个行里写着 **「在「更多」里」**（In “More”）。
+- 主页最多摆 8 个，多出来的收进最后一格 **「更多」**（More）。**只影响这台设备**，换设备要重新调。
+- **「恢复默认」**（Reset to defaults）：按默认顺序摆、全部显示。
+- **「新建应用」**（New app）——只有管理员：交给 Claude 做一个主页上的应用，见 05-customize.md「插件做成的应用」。
+- 在主页上长按一个方块（电脑上右键）选 **「从主页隐藏」**（Hide from Home Screen），藏掉的也在这里打开开关找回。
+
+## 页面权限
+
+**「设置 → 页面权限」**（Settings → Page permissions）：插件应用的页面向你要过的权限——**以你的身份和 Claude 对话**、**读写你在选择器里选中的文件**。每个插件一组，列出它要过的每一项和什么时候允许的，点 **「撤销」**（Revoke）收回；撤销文件权限会先确认，已经交给页面的文件随之失效。撤销以后页面再要用，会重新问你。
+
+- 授权跟人走：管理员和每个成员各管各的。没有插件要过权限时，这里写 **「没有要过页面权限的插件」**（No plugins have asked for page permissions）。
+- 应用页面 ⋯ 菜单里的 **「页面权限」** 打开的也是这一页。详见 05-customize.md「插件做成的应用」。
 
 ## 壁纸、流体壁纸
 

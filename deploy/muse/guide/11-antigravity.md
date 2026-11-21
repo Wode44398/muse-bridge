@@ -1,0 +1,211 @@
+# Antigravity 页（可选、实验性）
+
+Antigravity 是 Google 的 agent（Google 官方的 Antigravity CLI，命令叫 `agy`）。Muse Bridge 在服务器上常驻一个 `agy acp` 进程，把它接成和 Claude、dimensio 并列的第三个对话页：它在这台 VM 上读写文件、跑命令、做项目，用的是登录进去的那个 Google 账号（免费、Pro 或 Ultra 都行）的额度，模型有 Gemini 系列，也有它自带的 Claude、GPT-OSS 型号。
+
+**先跟用户说清三件事：**
+
+- **默认不装。** 装 Muse Bridge 时不带它，用户要用才加。
+- **实验性，还没在真 Muse VM 上端到端验证过。** 装 CLI、登录 Google、对话，任何一步都可能不通。下面写的是界面本来的样子和预期的步骤，不是在 Muse 上实测过的结果。
+- **不通就照实说**：先跑 `known-issues` 看是不是已知问题（条目 `agy-unverified-on-muse`），再问用户要不要报告（`../MUSE.md` 第 8 节，附上 Antigravity 页上的报错原文）。Claude、dimensio 不受它影响。
+
+## 怎么加上、怎么去掉
+
+- 装、去掉都是 Muse 在 VM 上做的事，步骤见 `../MUSE.md` 4.10：先跟用户说明会做什么、会弹哪几张网站审核卡，他同意后跑 `set-agents <现在的名单>,agy`（比如 `set-agents claude,dimensio,agy`）。
+- **不能单独装**：名单里 claude、dimensio 至少要有一个，agy 只能附加在后面。
+- 会以服务账号 `bridge` 的身份运行 Google 官方的安装脚本，把约 270 MB 的 CLI 装到 `/home/hatch/bridge-srv/home/.local/bin/agy`（数据目录里，VM 重启后还在）；CLI 之后自己在后台更新。
+- 装好后主页多一个 Antigravity 方块，设置的「Agent」分组里多一行 Antigravity。装 CLI 失败时页面会显示 **「未检测到 Antigravity CLI」**（Antigravity CLI not found）的横幅——请 Muse 确认网站都放行了、再跑一次同样的 `set-agents`，别照横幅上「在运行 Bridge 的电脑上安装」的字面去自己装。
+- 不要了：`set-agents` 去掉 `,agy`。CLI 和登录凭据留在数据目录里，用户想清掉再按 4.10 删。
+- 别在 **「设置 → 扩展 → 功能扩展」**（Settings → Extensions → Modules）里装卸 Antigravity，那会和 Muse 的部署对不上。
+
+## 登录
+
+Google 账号由**用户自己**在网页里登录，Muse 不替他登录，也别让他把授权码、令牌贴进聊天。这一步在 Muse 上还没实测过，下面是预期的样子。
+
+1. 用管理员身份打开一个终端。最顺手的是在 Antigravity 页右上角点 **「侧边工作区」**（Side workspace），再打开 **「终端」**（Terminal）卡片；Claude 页工作台里的「终端」也一样（见 02-claude-code.md「工作台」），同一个文件夹里是同一个终端。
+2. 在终端里输入 `~/.local/bin/agy` 回车。（服务账号的 PATH 里不一定有 `agy`，所以写全路径。）
+3. CLI 会打出一个 Google 授权网址。用户在**自己的浏览器**里打开它（终端里的网址：电脑上按住 Ctrl 点，手机上点一下选「用系统浏览器打开」或「复制链接」），登录 Google 并同意。
+4. 页面上会给出一个授权码，把它复制、贴回终端回车。**大约 30 秒内要贴**，超时就重新跑一次第 2 步。
+5. 登录完，CLI 可能接着进入它自己的对话界面——不需要在终端里用它，按 Ctrl+C 退出即可。
+6. 回到 Antigravity 页，点横幅 **「尚未登录 Antigravity 账号」**（Not signed in to Antigravity）右边的 **「我已登录，刷新」**（Signed in, refresh）。
+
+可能遇到的现象，照实告诉用户：
+
+- **登录后横幅还在**：Linux 上登录凭据的文件名和网页的检测不一定对得上。先发一条消息试试，发成功后横幅才消失。
+- **终端里没给出授权网址**、或者贴回授权码后仍提示没登录：照实报告，别让用户反复试别的办法；先跑 `known-issues`。
+- **对话停在等待回复**：多半是 Google 的接口网站（`daily-cloudcode-pa.googleapis.com` 等）的审核卡没人批（见下面「限制」）。
+- 凭据存在服务账号的家目录 `/home/hatch/bridge-srv/home/.gemini/`，只在这台 VM 上。
+- 横幅上的 **「账号设置」**（Account settings）打开「设置 → Antigravity」。
+
+### 设置里的「订阅号池」（Muse 上默认不可用）
+
+**「设置 → Antigravity」**（Settings → Antigravity）最上面有一组 **「订阅号池」**（Subscription Pool），只有管理员看得到。这是管理员管理这台服务器上 Antigravity 所用 Google 账号的地方：列着账号和用量，终端里登录的那个显示为「本机」。
+
+- 里面的 **「添加 Google 账号」**（Add Google account）**在 Muse 上默认不可用**：它要部署方自己准备一个 Google OAuth 客户端（Muse Bridge 不内置），没配时点了会提示「没有配置 Antigravity 号池用的 Google OAuth 客户端」。这是预期的，不是故障。
+- **登录一律用上面的网页终端里跑 `agy`**。终端登录的这个「本机」账号不受影响，照常可用、照常显示用量。
+- 一个人用几个 Google 账号、怎么切换使用，要遵守 Google 的使用条款；不要向用户推荐用多个账号来绕开额度。
+
+## 页面布局
+
+- **左侧栏**：最上面是「Antigravity」字样和 **「收起侧栏」**（Collapse sidebar）；下面 **「新建对话」**（New chat）、**「搜索对话」**（Search chats）；然后是会话列表——收藏过的在最上面的 **「收藏」**（Star）组，其余按工作文件夹分组、组内按时间排，每组先显示最近 8 条，组头悬停有 **「在此文件夹新建对话」**（New chat in this folder）。最底下是 **「设置」**（Settings）——打开「设置 → Antigravity」；藏过对话时还有 **「已隐藏」**（Hidden）。装了不止一个 agent 时有 **「返回主页」**（Back to Home）。
+- **中间**：对话和输入框。新对话页中间是 Antigravity 图标，点一下切换明暗（全站一起变）。
+- **右侧工作区**：右上角 **「侧边工作区」**（Side workspace）按钮打开，见下面「右侧工作区」。
+- 手机上侧栏是抽屉，工作区是整屏页（左上角回对话、右边切卡片）。
+- 侧栏里的对话行：在跑的前面有呼吸的小点；在等你批准或回答的前面是黄色圆点。别的设备上开的对话也会实时出现在这里。
+
+## 开始一个对话
+
+- 点 **「新建对话」**，或某个文件夹组头上的「在此文件夹新建对话」。
+- **工作文件夹**：发第一条消息之前，点页面左上角侧栏按钮旁边的文件夹按钮（悬停提示 **「选择这次对话的工作空间文件夹」**（Choose the working folder for this chat）），在 **「工作空间文件夹」**（Working folder）里选 **「工作空间根目录（默认）」**（Workspace root (default)）、**「最近用过」**（Recent）里的，或 **「选择其他文件夹…」**（Choose a different folder…）。**对话开始后就不能换文件夹了**，要换就新建一个对话。
+- 进 Antigravity 页时停在新对话页，不会自动跳进上次的对话；要看哪个从侧栏点开。
+
+## 历史对话
+
+- **搜索对话**：先按标题、文件夹过滤；下面另有 **「对话内容」**（In conversation）一段，搜对话正文（第一次搜时会先建索引，稍等一下）。
+- 对话行的 ⋯ 菜单：**「收藏」**（Star）/ **「取消收藏」**（Unstar）、**「重命名」**（Rename）、**「隐藏对话」**（Hide chat）、**「删除」**（Delete）。
+  - 「隐藏对话」可以找回：侧栏最底下的「已隐藏」里逐条 **「恢复」**（Restore）或 **「全部恢复」**（Restore all）。
+  - 「删除」是**彻底删除、不能恢复**：点一下变成 **「确认删除」**（Confirm delete），再点才删；正在跑的会先停下。
+- 改名、隐藏、收藏在各设备间同步。
+
+## 发消息
+
+- 电脑上 Enter 发送，Shift+Enter 换行。
+- 输入 `/` 弹出 Antigravity 自己的斜杠命令（比如先出计划、压缩上下文、围绕目标持续推进）；列表以菜单里实际显示的为准。
+- 草稿按对话各存各的，刷新页面、App 被系统清掉之后回来还在。
+- **发送键**平时藏在右下角的仪表后面，一打字就弹出来；它干活时变成 **「停止生成」**（Stop response）。
+
+### 附件
+
+- 输入框左下角 ＋ **「添加图片或文件」**（Attach images or files）：电脑上直接选文件；手机上弹出 **「添加到对话」**（Add to chat）菜单，有 **「照片」**（Photos）和「文件」。
+- 也可以把文件、整个文件夹拖进或粘贴进输入框。**单个文件最多 20MB。**
+- 输入框里的图片、视频点一下全屏看（多张左右切）；它交给你的文件、回答里的文件链接，点一下在右侧工作区的「文件」里打开预览，不会弹出全屏。
+
+## 模型、思考深度、运行模式
+
+- 输入框下面：**「模型」**（Model）芯片显示型号名，点开选，按 Gemini / Claude / GPT 分组。可选的型号以菜单为准（由 Google 的账号决定），新对话默认是 Gemini 4 Neon。
+- 紧跟在型号名后面的淡色小字是 **「思考深度」**（Effort），直接写调用名 low / medium / high / xhigh，点它换。有的型号不能调，菜单里写「当前模型不支持调整思考深度」。
+- 选过的只管这个对话；新对话的默认值在「设置 → Antigravity → 新对话默认」里。
+
+### 右下角的仪表
+
+输入框右下角那颗小圆仪表：中间的数字是这个对话的上下文用了多少，外圈的填充段是本周额度用了多少，圈上的小圆点是 5 小时额度用了多少，底部缺口里的小图标是当前运行模式。点开是 **「运行模式与用量」**（Mode & usage）：
+
+- 上半选运行模式（见下一节）。
+- 下半是 **「上下文窗口」**（Context window）和 **「额度」**（Usage limits）：Gemini、Claude / GPT 两组各有 **「5 小时」**（5-hour）和 **「每周」**（Weekly）两条，写着用了多少、多久后重置。新对话发第一条消息之前写「发一条消息后显示」；取不到时写「额度暂时取不到」。
+- 额度是登录的那个 Google 账号在 Google 那边的额度，不是 Muse Bridge 定的。
+
+## 运行模式和批准
+
+在仪表的弹层里选，按对话生效：
+
+- **「默认」**（Default）：改文件、跑命令前按 Antigravity 自己的规则问你。
+- **「接受编辑」**（Accept edits）：工作文件夹里的文件改动自动通过，跑命令前仍要你批准。
+- **「自动」**（Auto）：它自己判断，常规操作不再问，中断少。
+- **「计划」**（Plan）：先调研、出方案，你确认后再动手。
+- **「完全放行」**（Bypass permissions）：在「自动」之上，替你允许所有审批——跑命令、改文件都不再停下来问，你走开它也会一路做完。只对选了它的那个对话生效，换回别的模式就恢复审批。用户想选它时，照实说明这个后果，选不选由他。
+- 菜单里实际有哪几种以 Antigravity 给出的为准（比如有的版本有 **「逐项确认」**（Ask each time））。
+
+**批准卡**：它要做需要批准的事时，对话里出一张卡，写着要执行的命令或要改的文件（在沙盒外执行的标着 **「沙盒外」**（Unsandboxed）），按钮是 **「允许」**（Allow）和 **「拒绝」**（Deny），Antigravity 给了的话还有 **「始终允许」**（Always allow）、**「始终拒绝」**（Always deny）。**会一直等你回来**，不会十分钟没人点就自动取消。
+
+**提问卡**：它问你问题时给出选项表单，填好点 **「提交回答」**（Submit），不想答点 **「取消」**（Cancel）。
+
+批准卡、提问卡在同一个账号的任何设备上都能处理。
+
+## 它在干活的时候
+
+- 回复下面一行运行状态：左边的 Antigravity 小图标随它在做的事变形（思考、写回复、读文件、改文件、跑命令、等你批准），右边写用时、tokens 和它正在做什么；做完换成这一轮的用时和 tokens。
+- 连着的读文件、跑命令、思考收成一行汇总（比如「执行 2 条命令，读取 3 个文件」），点开看每一步的详情和返回内容。
+- **插话**：它干活时照样能发消息，发送键这时叫 **「插话」**（Send now）——它做完手头这一步就会看到这条。
+- **稍后发送**：输入框上方那行提示右边的 **「稍后发送」**（Queue for later），或按 Ctrl+Enter：这一轮结束后再发。排着的消息列在 **「排队的消息」**（Queued messages）里，每条可以 **「立即发送（停下手头这一步）」**（Send now (interrupts the current step)）或 **「撤回到输入框」**（Move back to the input）。按停止时，排着的会回到输入框里让你改。
+- 关掉页面、切到别的对话，它在服务器上接着做；回来打开会接上。别的设备上正看着的对话开跑了，也会自动接上。
+- **后台提醒**：它跑完了、出错了、等你批准或等你回答时，会按对话来通知（标题如「Antigravity 需要你批准」），点通知回到那个对话。开关和 Claude 共用 **「设置 → 通用 → 通知」**（Settings → General → Notifications），见 07-settings.md「通知」。
+- 每条回复下面有 **「复制回复」**（Copy response）和 **「重新生成」**（Regenerate）。
+
+## 子代理和多代理
+
+- 它派出子代理、或开起一个多代理团队时，对话里会出一张卡：显示角色、状态、子代理点阵、各自用的模型和思考深度、最新的报错。点卡片打开右侧工作区的 **「代理」**（Agents）卡片：一张表列出每层子代理的模型、tokens、时长，点进任意一个看它收到的任务提示词、思考过程和每一步工具调用。
+- 多代理协作（Swarm）的卡片上有 **「总览」**（Overview）、**「消息板」**、**「成员」**（Members）、**「协作图」** 几个入口，在「代理」卡片里看协作目标、进度、成员之间的消息。
+- 子代理在后台跑完会自动把汇报推回对话，它会接着往下说，不用你追问「好了么」。
+- 子代理用的也是登录那个 Google 账号的额度，派得多额度用得快。
+
+## 右侧工作区
+
+右上角 **「侧边工作区」**（Side workspace）打开。顶上一排开关，一个开关管一张卡片，可以同时开几张；电脑上够宽时摆成两列，拖卡片标题行排顺序、换列，拖两张卡之间的缝调高度（双击等分）。这台 VM 上有这几张：
+
+| 卡片 | 做什么 |
+|---|---|
+| **「文件」**（Files） | 这个对话工作文件夹的文件管理器和预览（同「工作空间」，见 04-files.md）。它让你看某个文件时，就在这里打开 |
+| **「审阅」**（Review） | 这个文件夹的 git 改动；不是 git 仓库时列出这个对话里改过的文件 |
+| **「终端」**（Terminal） | 这个文件夹里的 shell。同一个文件夹里，Antigravity、Claude、dimensio 用的是**同一个终端**，它在里面敲的你都看得见。只有管理员和完全信任账号有 |
+| **「代理」**（Agents） | 子代理、多代理团队（见上一节） |
+| **「活动」**（Activity） | 这个对话里每次工具调用的时间线，可以按读取、审批等分类看 |
+
+- **这台 VM 上没有工作台浏览器**：界面上的「浏览器」卡片在 Muse 上不出现（内置浏览器在 VM 上用不了，装好时已关掉），Antigravity 也用不了「打开网页、截图」这类浏览器工具。
+- 对话还没选工作文件夹时，工作区里有「选择文件夹」的入口。
+
+## Antigravity 能用的 bridge 工具
+
+除了它自带的读写文件、跑命令、搜索、子代理、自带生图，bridge 还给它挂了一批工具，每样都能在 **「设置 → Antigravity → Bridge 工具协同」**（Settings → Antigravity → Bridge tools）里单独关掉（下一轮对话生效）。这台 Muse 上：
+
+- **能用**：**「媒体生成」**（Media generation）——要先打开 Media Studio，并且在「设置 → Media Studio」里允许了 Antigravity（见 09-media-studio.md）；**「共享终端」**（Shared terminal）；**「工作区协同」**（Workspace awareness）——看你正在预览的文件和没保存的草稿、把做好的文件弹到你眼前；**「界面协同」**（UI coordination）；**「bridge 手册与操作」**（bridge manual & actions）；**「内嵌图表」**（Inline visuals）——把图表画进对话；**「会话协作」**（Session collaboration）——另开 Claude 子会话干活，要装了 Claude；**「拉取请求」**——要先在终端里登录 `gh`；**「项目记忆」**（Project memory）、**「插件工具」**（Plugin tools）、**「远程连接器」**（Remote connectors）——这三样只有管理员，远程连接器每次调用都先问你。
+- **用不了**：**「侧边浏览器」**（Side browser）、**「手机文件收发」**（Phone file access）、**「操控我的手机」**（Control my phone）——这几项要的插件在 VM 上用不了、装好时已关掉，**别为了它们去打开**；**「操作我的电脑」**（Control my computers）要先登记电脑（见 07-settings.md「设备」），没登记就没有。
+- 会改东西的操作（在共享终端里敲命令、改设置）照常先弹批准卡；只读的（查手册、画图表）不再每步都问。
+- 扩展中心里的技能和 stdio 连接器也能勾给 Antigravity 用，见 05-customize.md；只对管理员生效。
+
+## Antigravity 的设置
+
+**「设置 → Antigravity」**（Settings → Antigravity）——设置「Agent」分组里的 Antigravity 一行，Antigravity 页侧栏最底下的「设置」打开的也是这一页。从上到下：
+
+| 分组 | 里面有什么 |
+|---|---|
+| 页头 | 「启用 Antigravity」开关——只有管理员能改；CLI 没装好时写着不可用 |
+| **「订阅号池」**（Subscription Pool）——只有管理员 | 每个 Google 账号一行，带 Gemini、Claude / GPT 的 5 小时和每周用量；**「添加 Google 账号」**（Add Google account）——Muse 上默认不可用，见上面「登录」。点进一个账号：用量、**「切到此号」**（Switch to this account）、**「编辑账号」**（Edit account）、顺序、删除账号或「退出本机登录」。下面的 **「撞上限额时」**（When you hit a usage limit）一组是号池里有两个以上账号时的切换方式，最后是 **「最近的分派」**（Recent dispatches）/ **「最近的自动切换」**（Recent automatic switches）记录 |
+| **「新对话默认」**（New chat defaults） | **「默认模型」**（Default model）、**「默认思考档位」**（Default thinking level）、**「默认运行模式」**（Default execution mode）、**「默认项目工作空间」**（Default project workspace）——默认「沿用上次」。只管新建的对话 |
+| **「权限与附加工作目录」**（Permissions & additional directories） | **「附加工作目录」**（Additional working directories）：主文件夹之外，允许它读取和交付文件的文件夹，新对话生效 |
+| **「系统提示追加」**（System prompt append） | **「追加提示词（Bridge 协作约定）」**（Appended instructions (Bridge conventions)）：每个新对话开头带上的说明，自带一份默认的，改过会标出来 |
+| **「扩展与工具」**（Extensions & tools） | **「Bridge 工具协同」**（Bridge tools）——总开关 **「允许 Antigravity 使用 Bridge 工具」**（Allow Antigravity to use Bridge tools）和逐类开关（见上一节）；**「MCP 服务器」**（MCP servers）、**「CLI 插件」**（CLI plugins）——只有管理员，管的是 CLI 自己的配置。加的 MCP 服务器要上网的话，先让 Muse 跑 `allow-sites <它的地址>` |
+| **「外观」**（Appearance） | **「界面主题」**（Theme）：跟随 Bridge（默认）/ Azure（深色）/ Daylight（浅色）——只管 Antigravity 页；**「对话字号」**（Chat font size）：小 / 标准 / 大 |
+| **「运行状态与更新」**（Runtime & updates）——只有管理员 | **「常驻进程」**（ACP daemon）在不在跑、**「CLI 版本」**（CLI version）、启动时间、在跑的轮数；**「运行日志文件」**（Daemon log file）→ **「打开日志」**（View log）；**「重启常驻进程」**（Restart ACP daemon）——有对话在跑时会先确认，会打断它们；**「检查 CLI 更新」**（Check CLI updates）——装了新版后点「重启进程使新版本生效」 |
+| **「会话管理」**（Session management） | **「已隐藏的会话」**（Hidden chats）有几条，**「全部恢复」**（Restore all） |
+| **「调试」**（Debug）——只有管理员 | **「调试模式」**（Debug mode），默认关：让 Antigravity 把用 bridge 工具时遇到的问题记成反馈，是给开发者改进用的，平时不用开 |
+
+- 常驻进程连着异常退出几次后会停下不再自动重启，页面上出 **「常驻进程已暂停自动重启」**（ACP daemon auto-restart paused）的横幅，点 **「重启进程」**（Restart daemon）或 **「设置与日志」**（Settings & log）。反复这样就照实报告。
+- Windows 桌面客户端的设置里也有 Antigravity 一个分区，内容一样。
+
+## 给成员用
+
+- **只能开给「完全信任」档的成员**：Antigravity 自带的工具直接作用在服务器上，还会执行工作文件夹里的钩子脚本，相当于命令行权限。普通档成员在名单里会写「只能开给完全信任档」，勾不上。
+- 管理员在服务端控制台的用户名单里，展开那个人，在 **「能用的 agent」**（Available agents）里勾上 Antigravity（见 06-users-admin.md）。
+- 每个成员一个单独的 Antigravity 进程和一份自己的对话，看不到管理员和别人的对话；他的每一次工具调用都经 bridge 的守卫检查，读写文件只能在他自己的文件夹里，守卫不认识的工具一律拦下。闲置 10 分钟后他的进程会被收掉，下次用时再起。
+- **成员用的也是服务器上登录的那个 Google 账号的额度**（成员没有地方登录自己的 Google 账号），大家共用。开给谁之前先想好。
+- 成员看到的「设置 → Antigravity」只有他能改的几组；号池、运行状态、MCP 服务器、CLI 插件、调试只有管理员有。
+
+## 限制
+
+- **额度在 Google 那边**：用的是登录的 Google 账号的 5 小时 / 每周额度，用满了要等重置；Muse Bridge 给成员设的额度只算 Claude（见 06-users-admin.md），管不到 Antigravity。
+- **CPU 要支持 AES 指令**，不支持时 CLI 起不来（安装输出会提示）。
+- **内存**：每个在用的人一个 Antigravity 进程，每个进程还带一个后台语言服务，占用不小；8G 的 VM 上几个人同时用会吃紧。
+- **网站审核卡**：装和用的时候会访问这些网站，第一次访问时弹审核卡（选项和后果见 `../MUSE.md` 2.0，选择由用户决定）——
+  - 装 CLI、CLI 自动更新：`antigravity.google`、`antigravity-cli-auto-updater-974169037036.us-central1.run.app`、`storage.googleapis.com`；
+  - 对话、Google 登录令牌续期、账号信息：`daily-cloudcode-pa.googleapis.com`、`cloudcode-pa.googleapis.com`、`oauth2.googleapis.com`、`www.googleapis.com`；
+  - CLI 还可能访问别的 Google 网站（比如用量统计），那些会在用到时再弹卡。对话是在服务器后台跑的，只「允许一次」的话以后后台访问还会再弹，没人批就会停在等待回复。
+- **没有浏览器工具**：这台 VM 起不了浏览器，Antigravity 用不了打开网页、截图（联网搜索、抓网页文字照常）。
+- **没在真 Muse 上验证过**：遇到上面没写的现象，先 `known-issues`，再按 `../MUSE.md` 第 8 节问用户要不要报告。
+
+## 常见提示
+
+| 看到 | 意思 / 怎么办 |
+|---|---|
+| **「未检测到 Antigravity CLI」**（Antigravity CLI not found） | CLI 没装上。请 Muse 确认安装那几个网站放行了，再跑一次 `set-agents …,agy`；装好后点 **「重新检测」**（Check again） |
+| **「尚未登录 Antigravity 账号」**（Not signed in to Antigravity） | 还没登录 Google，按上面「登录」做；登录后还在就先发一条消息试试 |
+| **「常驻进程已暂停自动重启」**（ACP daemon auto-restart paused） | 常驻进程连续异常退出，点「重启进程」；反复出现就报告 |
+| **「当前网络连接已断开」**（You’re currently offline） | 你的设备断网了，恢复后自动同步，也可以点 **「立即重试」**（Retry now） |
+| 一直「等待 Antigravity…」 | 多半是 Google 接口网站的审核卡没批；也可能是额度用满（看仪表） |
+| 「不能更改已有会话的工作目录」 | 对话开始后不能换文件夹，新建一个对话 |
+| 「{name}：超过 20MB 上传上限」 | 单个附件最多 20MB |
+
+## 没有的功能（别答应用户）
+
+- 不能单独只装 Antigravity。
+- 成员不能用自己的 Google 账号登录。
+- 这台 VM 上没有它的浏览器卡片和浏览器工具，也不能操控手机。
+- Muse 不替用户登录 Google，也不接收授权码。
