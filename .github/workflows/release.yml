@@ -3,7 +3,8 @@
 #     已装的 Muse 每 6 小时读一次，发现新版本就问用户。（GitHub 的 latest 不认预发布——beta 要是标成预发布，
 #     更新频道和 README 里的安装地址就全是 404。）
 #   试装版（标签里带 -test，如 v0.2.0-test.1）：发成预发布，不进 latest，用 Release 里附的 muse-prompt.txt 在新 Muse 上试装。
-# 安卓 app 用 bridge 的（同一个 apk，连上 Muse 后显示 Muse Bridge 的品牌）：从 bridge 公开 Release 取与服务端同版本的那份
+# 安卓 app 用 bridge 的（同一个 apk，连上 Muse 后显示 Muse Bridge 的品牌）：从 bridge 公开 Release（2026-11-24 起在开源库
+#   Wode44398/bridge，旧发布库 claude-bridge-releases 已归档、停在 2026.11.24.0643）取与服务端同版本的那份
 #   （src/config/versions.mjs 的 APP_VERSION_CODE；没有同版本就取更低版本里最高的——服务端兼容旧 App），校验 sha256 后放进安装包的
 #   程序目录（ClaudeBridge-offline-<版本号>.apk），服务器的 /download/android 与 App 内更新直接用它；Release 上另挂一份 MuseBridge.apk
 #   给旧链接。Muse 不再自己编 apk，以前的安卓签名密钥 secrets 用不上了。
@@ -31,7 +32,7 @@ jobs:
 
       - name: Fetch the Android app (bridge public release)
         env:
-          FEED: https://github.com/Wode44398/claude-bridge-releases/releases/latest/download/latest.json
+          FEED: https://github.com/Wode44398/bridge/releases/latest/download/latest.json
         run: |
           set -euo pipefail
           CODE="$(sed -n 's/^export const APP_VERSION_CODE = \([0-9]*\);.*/\1/p' src/config/versions.mjs)"
@@ -43,7 +44,7 @@ jobs:
           [ -n "$ENTRY" ] || { echo "::error::bridge 公开 Release 的清单里没有版本号 ≤ $CODE 的安卓 App"; exit 1; }
           APK_CODE="$(jq -r .code <<<"$ENTRY")"; URL="$(jq -r '.url // empty' <<<"$ENTRY")"; SHA="$(jq -r .sha256 <<<"$ENTRY")"
           # 相对地址按清单自己的版本标签补全（releases/latest/download/ 会漂走）
-          case "$URL" in http*) ;; *) URL="https://github.com/Wode44398/claude-bridge-releases/releases/download/v$(jq -r .version dist/bridge-latest.json)/${URL:-ClaudeBridge-offline-$APK_CODE.apk}" ;; esac
+          case "$URL" in http*) ;; *) URL="https://github.com/Wode44398/bridge/releases/download/v$(jq -r .version dist/bridge-latest.json)/${URL:-ClaudeBridge-offline-$APK_CODE.apk}" ;; esac
           [ "$APK_CODE" = "$CODE" ] || echo "::warning::bridge 没有与服务端同版本（$CODE）的安卓 App，带上 $APK_CODE（服务端兼容旧 App）"
           curl -fsSL --retry 3 -o "dist/ClaudeBridge-offline-$APK_CODE.apk" "$URL"
           echo "$SHA  dist/ClaudeBridge-offline-$APK_CODE.apk" | sha256sum -c -
