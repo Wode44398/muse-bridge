@@ -73,11 +73,12 @@ Muse Bridge 会访问的网站和用途（`allow-sites` 不带参数时按当前
 |---|---|
 | `api.anthropic.com` | Claude（装了 Claude Code 才有） |
 | `html.duckduckgo.com` | dimensio 联网搜索的备用搜索（装了 dimensio 才有） |
-| `github.com`、`release-assets.githubusercontent.com` | 下载发布包、看门狗每 6 小时查一次新版本、bridge 的插件市场 |
+| `github.com`、`release-assets.githubusercontent.com` | 下载发布包、看门狗每 6 小时查一次新版本、bridge 的插件市场（官方和社区两栏） |
 | `registry.npmjs.org` | 安装和更新时下载 npm 依赖 |
 | `muse-bridge-feedback.huole8610.workers.dev` | Muse Bridge 项目自己的反馈中继（源码在仓库的 `feedback-worker/`），收问题报告并转成本项目的 GitHub Issue（第 8 节，用户同意了才发） |
 | 各家模型的接口网站（如 `api.deepseek.com`） | 模型中心里加了哪家的服务才有，以前写进 dimensio 的 key 对应的也算（4.5） |
 | 自定义模型服务的地址 | 用户自己加的才有（第 6 节） |
+| `api.github.com` | 不在 `allow-sites` 的名单里：只有用户自己把写的插件「发布到社区」时才访问（登录 GitHub、提交拉取请求），用到时弹卡，批不批由用户在卡上自己定（2.0） |
 | Google 的接口（`oauth2.googleapis.com`、`aiplatform.googleapis.com` 等 4 个） | 打开了 Media Studio，或上传了 Google 云凭据才有（4.9） |
 | `antigravity.google`、`antigravity-cli-auto-updater-974169037036.us-central1.run.app`、`storage.googleapis.com` | 下载、安装 Google 的 Antigravity CLI，CLI 之后也从这里自动更新（选了 Antigravity 才有，4.10） |
 | `daily-cloudcode-pa.googleapis.com`、`cloudcode-pa.googleapis.com`、`oauth2.googleapis.com`、`www.googleapis.com` | Antigravity 的对话、Google 登录令牌续期和账号信息（选了 Antigravity 才有，4.10）。CLI 还可能访问别的 Google 网站（比如用量统计），那些会在用到时弹卡 |
