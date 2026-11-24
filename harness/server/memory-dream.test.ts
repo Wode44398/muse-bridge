@@ -23,12 +23,10 @@ import {
   memoryDir,
   readMemory,
   rejectMemory,
-  renderMemoryForPrompt,
   saveMemory,
-  WORKSPACE_PROMPT_BUDGET,
-  workspaceBudgetLeft,
   type SaveMemoryOptions,
 } from "./memory.ts";
+import { renderMemoryForPrompt } from "./memory-index.ts";
 import {
   _dreamTick,
   _resetDreamIdle,
@@ -250,40 +248,37 @@ test("用户确认过的只加意见不改；合并 → superseded；退场 → 
   assert.ok(hist.some((f) => f.startsWith("verified-claim.") && f.endsWith(".overwrite.md")));
 });
 
-test("工作区注入预算满了不晋升；注入预算没超一字不差、超了按召回次数留且原顺序输出", async (t) => {
+// 记忆放宽（m 线）：索引列出全部条目（待确认的也在），晋升不再占注入预算——以前钉的「预算满了不晋升」改成「照常晋升」；
+// 索引超了预算时先去描述、再把最不相关的折叠，标题能留就留，留下的照原来的次序
+test("晋升不再受注入预算限制；索引超预算时去描述、再按相关度折叠，留下的照原次序", async (t) => {
   const ws = tmpWs();
   const long = "x".repeat(200);
-  let i = 0;
-  while (workspaceBudgetLeft(ws) > 700) {
-    saveMemory(ws, { title: `Rule ${++i}`, description: `rule ${i} ${long}`, type: "user", topic: `user.rule-${i}`, status: "active", confidence: "user_confirmed", content: "x", origin: { writer: "user" } });
+  for (let i = 1; i <= 30; i++) {
+    saveMemory(ws, { title: `Rule ${i}`, description: `rule ${i} ${long}`, type: "user", topic: `user.rule-${i}`, status: "active", confidence: "user_confirmed", content: "x", origin: { writer: "user" } });
   }
-  // 留下不到一行长条目的余量（短条目补齐）
-  while (workspaceBudgetLeft(ws) > 200) {
-    saveMemory(ws, { title: `Rule ${++i}`, description: `rule ${i}`, type: "user", topic: `user.rule-${i}`, status: "active", confidence: "user_confirmed", content: "x", origin: { writer: "user" } });
-  }
-  assert.ok(workspaceBudgetLeft(ws) >= 0);
-  const before = renderMemoryForPrompt(ws)!;
-  assert.doesNotMatch(before, /over this workspace's prompt budget/);
-  assert.equal(before.split("\n").length, i, "没超预算：每条一行，与以前一样");
-
   const sid = await fixtureSession(ws, [user("我习惯先跑单测再提交，记住")]);
   note(ws, { title: "Tests first", type: "user", topic: "user.tests-first", description: `tests first ${long}`, sourceSession: sid });
   const adapter = scripted(t).next(decisions({ id: "tests-first", action: "promote", verdict: "supported", reason: "r", quote: "先跑单测再提交", session: sid }));
   const s = await dreamWorkspace(ws, { adapter });
-  assert.deepEqual(s.promoted, []);
-  assert.match(readMemory(ws, "tests-first")?.reviewNote ?? "", /prompt budget is full/);
+  assert.deepEqual(s.promoted, ["tests-first"]);
 
-  // 再塞两条让它超：召回过的留下，没召回过的最旧的先截
+  // 预算够：每条一行带描述
+  const full = renderMemoryForPrompt(ws)!;
+  assert.equal(full.split("\n").length, 31);
+  assert.match(full, /^- Rule 1 — rule 1 x+… · rule-1\.md$/m, "描述截到一句的长度");
+
+  // 预算紧：先去掉描述
+  const tight = renderMemoryForPrompt(ws, 900)!;
+  assert.doesNotMatch(tight, /x{20}/);
+  assert.ok(tight.length <= 900, `${tight.length}`);
+  // 再紧：读得多的留下，其余折叠成一句
   noteMemoryUse(ws, ["rule-1", "rule-1", "rule-2"]);
-  for (let k = 0; k < 3; k++) {
-    saveMemory(ws, { title: `Extra ${k}`, description: `extra ${k} ${long}`, type: "user", topic: `user.extra-${k}`, status: "active", confidence: "user_confirmed", content: "x", origin: { writer: "user" } });
-  }
-  const out = renderMemoryForPrompt(ws)!;
-  assert.match(out, /more active notes are over this workspace's prompt budget/);
-  assert.ok(out.includes("[rule-1]") && out.includes("[rule-2]"), "召回过的留下");
-  assert.ok(out.length - out.split("\n").pop()!.length <= WORKSPACE_PROMPT_BUDGET + 1);
-  const order = out.split("\n").filter((l) => l.startsWith("- [")).map((l) => l.slice(3, l.indexOf("]")));
-  const all = listMemories(ws).filter((m) => m.status === "active").map((m) => m.id);
+  const out = renderMemoryForPrompt(ws, 300)!;
+  assert.match(out, /^- \(\d+ more notes in this directory are not listed here for space — Glob or Recall finds them\)$/m);
+  assert.ok(out.includes("rule-1.md") && out.includes("rule-2.md"), "读得多的留下");
+  assert.ok(out.length <= 300, `${out.length}`);
+  const order = out.split("\n").filter((l) => / · [^ ]+\.md$/.test(l)).map((l) => l.slice(l.lastIndexOf(" · ") + 3, -3));
+  const all = renderMemoryForPrompt(ws)!.split("\n").map((l) => l.slice(l.lastIndexOf(" · ") + 3, l.lastIndexOf(".md")));
   assert.deepEqual(order, all.filter((id) => order.includes(id)), "留下的仍按原来的次序");
 });
 

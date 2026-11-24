@@ -4,11 +4,12 @@
 // metadata.type，正文在后；MEMORY.md 是索引），dimensio 在对应的工作区里可以读、永远不写：
 //   · Recall(query) 的检索带上它，Recall 用 external:<id> 读全文、layer:"external" 列目录——结果一律标明「外部记忆，未经
 //     dimensio 治理」（没有到期、证据、锚点这套治理，可能过时）；
-//   · Remember 没有写它的路；不进提示词的索引（只一句「挂着一个外部库、有多少条」），也不会晋升到全局层；
+//   · Remember 没有写它的路，也不会晋升到全局层。system 里给出库的绝对路径与它的索引（externalMemoryIndex：有 MEMORY.md
+//     就放它的正文，没有就列各篇标题，都有预算），会话的沙箱把这些目录开成只读，模型照着链接直接 Read；
 //   · 疑似含凭据的条目整条不收；命中注入特征的只露标题（和受治理的记忆同一套判法）。
 // 挂哪个库、给哪些工作区，由 DIMENSIO_EXTERNAL_MEMORY 显式配置（默认不挂）：分号分隔，每项 `<库目录>` 或
 // `<库目录>=><工作区>|<工作区>`（不写工作区 = 所有工作区）。每次现读环境变量（与 DIMENSIO_READONLY_PATHS 一样）。
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { containsSensitiveData, injectionSignals } from "./memory.ts";
 
@@ -136,24 +137,80 @@ export function readExternalNote(workspaceRoot: string, id: string): ExternalNot
   return listExternalNotes(workspaceRoot).find((n) => n.id === want);
 }
 
-// 进提示词的只是一句：挂着外部库、有多少条、怎么读（条目本身不进——它没经过治理）
-export function externalMemorySummary(workspaceRoot: string): string | undefined {
-  if (!externalMemoryDirs(workspaceRoot).length) return undefined;
-  const n = listExternalNotes(workspaceRoot).length;
-  if (!n) return undefined;
-  return `External memory library mounted read-only: ${n} notes kept by other agents on this project, NOT governed by dimensio ` +
-    `(no expiry, evidence or anchors — they may be out of date; check against the files). Recall(query) searches them; ` +
-    `Recall with layer "external" lists them; read one with Recall(id:"external:<id>"). Remember never writes there.`;
+// system 里的外部库一节：库的绝对路径、只读、怎么读（有分区索引就说明分层），后面是它的 MEMORY.md 正文；没有 MEMORY.md 就
+// 列各篇标题。合计有预算（随窗口缩放），超了截断并写明截在哪、全文在哪。MEMORY.md 本身命中注入特征或像含凭据的，正文不放，
+// 只给路径。建会话时定下（不走 World State）：别的 agent 天天改这个库，模型要最新的照着路径去读就是。
+export function externalMemoryBudget(contextWindow?: number): number {
+  const w = contextWindow && contextWindow > 0 ? contextWindow : 200_000;
+  return Math.max(3_000, Math.min(12_000, Math.round(w * 0.05)));
 }
 
-// 提示词里的记忆一节：挂了外部库就在末尾补那一句；没挂与以前一字不差
-export function withExternalSummary(memory: string | undefined, workspaceRoot: string): string | undefined {
-  const ext = externalMemorySummary(workspaceRoot);
-  if (!ext) return memory;
-  return memory ? `${memory}\n\n${ext}` : ext;
+function readIndex(file: string): string | undefined {
+  try {
+    if (statSync(file).size > MAX_FILE_BYTES * 4) return undefined;
+    let text = readFileSync(file, "utf8");
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+    return text.trim();
+  } catch {
+    return undefined;
+  }
+}
+
+export function externalMemoryIndex(workspaceRoot: string, budget = externalMemoryBudget()): string | undefined {
+  const dirs = externalMemoryDirs(workspaceRoot);
+  if (!dirs.length) return undefined;
+  const notes = listExternalNotes(workspaceRoot);
+  const each = Math.floor(budget / dirs.length);
+  const parts: string[] = [];
+  for (const dir of dirs) {
+    let files: string[] = [];
+    try {
+      files = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    const areas = files.filter((f) => /^MEMORY-.+\.md$/i.test(f));
+    const indexFile = files.find((f) => /^MEMORY\.md$/i.test(f));
+    const head =
+      `External memory library at ${dir} — read-only: other agents keep it, dimensio never writes there, and it may be out of date (check it against the files). ` +
+      (indexFile
+        ? areas.length
+          ? `It is layered: ${indexFile} (below) points to ${areas.length} area indexes (MEMORY-<area>.md), and those point to single notes — Read the area index for the task, then the notes it links.`
+          : `${indexFile} (below) links its notes; Read the ones you need.`
+        : "Its notes, one per file:");
+    const room = Math.max(500, each - head.length);
+    let body: string;
+    if (indexFile) {
+      const file = path.join(dir, indexFile);
+      const text = readIndex(file) ?? "";
+      if (!text) body = `(${indexFile} is empty or unreadable)`;
+      else if (containsSensitiveData(text) || injectionSignals(text).length) body = `(${indexFile} is not shown here: it matches prompt-injection or credential patterns)`;
+      else if (text.length <= room) body = text;
+      else body = `${text.slice(0, room)}\n[… ${indexFile} truncated: ${room} of ${text.length} characters shown — Read ${file} for the rest]`;
+    } else {
+      const own = notes.filter((n) => existsSync(path.join(dir, n.source)));
+      const lines: string[] = [];
+      let used = 0;
+      for (const n of own) {
+        const line = `- ${n.title}${n.withheld || !n.description ? "" : ` — ${n.description}`} · ${n.source}`;
+        if (used + line.length + 1 > room) break;
+        lines.push(line);
+        used += line.length + 1;
+      }
+      if (lines.length < own.length) lines.push(`- (${own.length - lines.length} more notes in that directory)`);
+      body = lines.join("\n") || "(no notes)";
+    }
+    parts.push(`${head}\n\n${body}`);
+  }
+  return parts.length ? parts.join("\n\n") : undefined;
+}
+
+// 会话的沙箱据此把外部库开成只读（不挂就是空）
+export function externalReadDirs(workspaceRoot: string): string[] {
+  return externalMemoryDirs(workspaceRoot);
 }
 
 // 检索 / 列表里给模型看的那一行（命中注入特征的只露标题）
 export function externalLine(n: ExternalNote): string {
-  return `- [external:${n.id}] (${n.type}; external, not governed) ${n.title}${n.withheld ? " — (text withheld: it matches prompt-injection patterns)" : n.description ? ` — ${n.description}` : ""}`;
+  return `- [external:${n.id}] (${n.type}; external, read-only) ${n.title}${n.withheld ? " — (text withheld: it matches prompt-injection patterns)" : n.description ? ` — ${n.description}` : ""}`;
 }

@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveKey } from "./config.ts";
+import { defaultBaseUrl, resolveKey } from "./config.ts";
 import { projectKnowledgeDir, type ProjectKnowledge } from "./knowledge.ts";
 import { refreshProjectKnowledge } from "./knowledge-service.ts";
 import { globalMemoryFor, listMemories, memoryDir, readMemory, type MemoryStatus } from "./memory.ts";
-import { listExternalNotes } from "./external-memory.ts";
+import { externalMemoryDirs, listExternalNotes } from "./external-memory.ts";
+import { idfOver, normalizeText, queryTerms, scoreFields, termCount, type Field, type Terms } from "./text-match.ts";
 
 export type KnowledgeKind =
   | "memory"
@@ -29,6 +30,9 @@ export interface KnowledgeDocument {
   paths: string[];
   scope: string[];
   source: string;
+  // 记忆的一句话描述（打分时权重仅次于标题）；file = 笔记文件的绝对路径（结果里给出来，模型可以直接 Read）
+  summary?: string;
+  file?: string;
   status?: MemoryStatus | "current";
   confidence?: string;
 }
@@ -41,6 +45,8 @@ export interface KnowledgeSearchOptions {
   limit?: number;
   semantic?: boolean;
   includeQuarantined?: boolean;
+  // 记忆按「还活着」收：生效、待确认、被隔离的都检索（带着状态），只排除被替代的与用户驳回的（Recall 用：索引里列着的都该搜得到）
+  liveMemory?: boolean;
   generatedOnly?: boolean;
   signal?: AbortSignal;
   recordMetrics?: boolean;
@@ -85,6 +91,8 @@ export interface KnowledgeSearchResponse {
   eligibleDocuments: number;
   skippedQuarantined: number;
   semantic: "disabled" | "unavailable" | "used" | "failed";
+  // semantic 为 failed 时为什么（HTTP 状态、超时……；不含地址与 key）
+  semanticError?: string;
   latencyMs: number;
 }
 
@@ -141,20 +149,6 @@ function normalize(value: string): string {
   return slash(value).toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function terms(value: string): string[] {
-  const result = new Set<string>();
-  for (const token of normalize(value).match(/[\p{L}\p{N}_./:-]+/gu) ?? []) {
-    if (token.length > 1) result.add(token);
-    if (/\p{Script=Han}/u.test(token)) {
-      const chars = [...token];
-      for (let i = 0; i < chars.length - 1; i++) result.add(chars.slice(i, i + 2).join(""));
-    } else {
-      for (const part of token.split(/[./:_-]/)) if (part.length > 1) result.add(part);
-    }
-  }
-  return [...result].slice(0, 40);
-}
-
 function doc(
   kind: KnowledgeKind,
   id: string,
@@ -172,20 +166,26 @@ function doc(
 function knowledgeDocuments(root: string, knowledge: ProjectKnowledge, generatedOnly: boolean): KnowledgeDocument[] {
   const out: KnowledgeDocument[] = [];
   if (!generatedOnly) {
+    const memoryDoc = (r: NonNullable<ReturnType<typeof readMemory>>, id: string, title: string, dir: string, anchors: string[]): KnowledgeDocument => ({
+      ...doc(
+        "memory",
+        id,
+        title,
+        `${r.content}${r.evidence.length ? `\nEvidence: ${r.evidence.join("; ")}` : ""}`,
+        `${path.basename(dir)}/${r.id}.md`,
+        anchors,
+        [r.topic, ...r.scope],
+        // 用户驳回的单独标出来（列表里的状态是 declaredStatus），检索按它排除
+        r.declaredStatus === "rejected" ? "rejected" : r.status,
+        r.confidence,
+      ),
+      summary: r.description,
+      file: path.join(dir, `${r.id}.md`),
+    });
     for (const meta of listMemories(root)) {
       const record = readMemory(root, meta.id);
       if (!record) continue;
-      out.push(doc(
-        "memory",
-        `memory:${record.id}`,
-        record.title,
-        `${record.description}\n${record.content}\nEvidence: ${record.evidence.join("; ")}`,
-        `memory/${record.id}.md`,
-        record.anchors,
-        [record.topic, ...record.scope],
-        record.status,
-        record.confidence,
-      ));
+      out.push(memoryDoc(record, `memory:${record.id}`, record.title, memoryDir(root), record.anchors));
     }
     // K7：全局层的条目一并检索（id 带 global: 前缀，Recall 按它去全局层读）；还没有全局层就不去建它
     // 评测隔离开着时是这个工作区自己那份全局层（memory.ts globalMemoryFor），正式服就是唯一那份
@@ -194,32 +194,28 @@ function knowledgeDocuments(root: string, knowledge: ProjectKnowledge, generated
       for (const meta of listMemories(globalRoot)) {
         const record = readMemory(globalRoot, meta.id);
         if (!record) continue;
-        out.push(doc(
-          "memory",
-          `memory:global:${record.id}`,
-          `[global] ${record.title}`,
-          `${record.description}\n${record.content}\nEvidence: ${record.evidence.join("; ")}`,
-          `memory/global/${record.id}.md`,
-          [],
-          [record.topic, ...record.scope],
-          record.status,
-          record.confidence,
-        ));
+        out.push(memoryDoc(record, `memory:global:${record.id}`, `[global] ${record.title}`, memoryDir(globalRoot), []));
       }
     }
     // K8：挂着的外部记忆库（只读、未经治理）：标题带 [external]，命中注入特征的只进标题
+    const extDirs = externalMemoryDirs(root);
     for (const note of listExternalNotes(root)) {
-      out.push(doc(
-        "memory",
-        `memory:external:${note.id}`,
-        `[external, not governed] ${note.title}`,
-        note.withheld ? note.title : `${note.description}\n${note.body}`,
-        `external/${note.source}`,
-        [],
-        [note.type],
-        "active",
-        "external",
-      ));
+      const dir = extDirs.find((d) => fs.existsSync(path.join(d, note.source)));
+      out.push({
+        ...doc(
+          "memory",
+          `memory:external:${note.id}`,
+          `[external, not governed] ${note.title}`,
+          note.withheld ? note.title : note.body,
+          `external/${note.source}`,
+          [],
+          [note.type],
+          "active",
+          "external",
+        ),
+        ...(note.withheld ? {} : { summary: note.description }),
+        ...(dir ? { file: path.join(dir, note.source) } : {}),
+      });
     }
   }
   const { profile, tests, modules, contracts, health } = knowledge;
@@ -319,11 +315,24 @@ function matchesFilters(document: KnowledgeDocument, options: KnowledgeSearchOpt
   return true;
 }
 
-function lexicalScore(document: KnowledgeDocument, query: string): { score: number; reasons: string[] } {
+// 词法打分：整句 / 路径 / scope 的精确命中照旧加分；分词命中按字段加权（标题 5、路径 7、scope 5、记忆描述 4、正文 1.5）、
+// 按稀有程度（idf，整批候选里算）加权、乘覆盖率——部分命中也排得出来，中文按二元组与整词并用（text-match.ts）
+const FIELD_WEIGHTS = { title: 5, path: 7, scope: 5, summary: 4, body: 1.5 } as const;
+const FIELD_LABELS: Record<string, string> = { title: "标题", path: "路径", scope: "scope", summary: "描述", body: "正文" };
+
+function fieldsOf(document: KnowledgeDocument): Field[] {
+  return [
+    { name: "title", text: normalize(document.title), weight: FIELD_WEIGHTS.title },
+    { name: "path", text: document.paths.map(normalize).join("\n"), weight: FIELD_WEIGHTS.path },
+    { name: "scope", text: document.scope.map(normalize).join("\n"), weight: FIELD_WEIGHTS.scope },
+    ...(document.summary ? [{ name: "summary", text: normalize(document.summary), weight: FIELD_WEIGHTS.summary }] : []),
+    { name: "body", text: normalize(document.text), weight: FIELD_WEIGHTS.body },
+  ];
+}
+
+function lexicalScore(document: KnowledgeDocument, query: string, qt: Terms, idf: (t: string) => number): { score: number; reasons: string[] } {
   const q = normalize(query);
-  const queryTerms = terms(query);
   const title = normalize(document.title);
-  const body = normalize(document.text);
   const paths = document.paths.map(normalize);
   const scope = document.scope.map(normalize);
   let score = 0;
@@ -346,28 +355,14 @@ function lexicalScore(document: KnowledgeDocument, query: string): { score: numb
   if (scope.some((item) => item === q)) {
     score += 22;
     reasons.push("scope 精确匹配");
-  } else if (scope.some((item) => item.includes(q) || q.includes(item))) {
+  } else if (scope.some((item) => item && (item.includes(q) || q.includes(item)))) {
     score += 12;
     reasons.push("scope 匹配");
   }
-  let titleHits = 0;
-  let pathHits = 0;
-  let scopeHits = 0;
-  let bodyHits = 0;
-  for (const term of queryTerms) {
-    if (title.includes(term)) titleHits++;
-    if (paths.some((item) => item.includes(term))) pathHits++;
-    if (scope.some((item) => item.includes(term))) scopeHits++;
-    if (body.includes(term)) bodyHits++;
-  }
-  score += Math.min(titleHits, 6) * 5;
-  score += Math.min(pathHits, 6) * 7;
-  score += Math.min(scopeHits, 6) * 5;
-  score += Math.min(bodyHits, 10) * 1.5;
-  if (titleHits) reasons.push(`标题命中 ${titleHits} 个词`);
-  if (pathHits) reasons.push(`路径命中 ${pathHits} 个词`);
-  if (scopeHits) reasons.push(`scope 命中 ${scopeHits} 个词`);
-  if (bodyHits) reasons.push(`正文命中 ${bodyHits} 个词`);
+  const s = scoreFields(fieldsOf(document), qt, idf);
+  score += s.score;
+  for (const [field, n] of Object.entries(s.hits)) reasons.push(`${FIELD_LABELS[field] ?? field}命中 ${n} 个词`);
+  if (s.matched && s.total > 1) reasons.push(`覆盖 ${s.matched}/${s.total}`);
   if (document.status === "active" || document.status === "current") score += 2;
   if (document.confidence === "verified" || document.confidence === "user_confirmed") score += 2;
   return { score, reasons };
@@ -387,19 +382,42 @@ function appliedFilterEvidence(options: KnowledgeSearchOptions): { score: number
   return { score, reasons };
 }
 
-function embeddingConfig(): { apiKey: string; baseUrl: string; model: string; dimensions: number } | undefined {
-  const apiKey = process.env.KNOWLEDGE_EMBEDDING_API_KEY?.trim() || resolveKey("qwen");
+// 语义检索的 embedding 服务。key 与地址要成对：显式配了 KNOWLEDGE_EMBEDDING_API_KEY 就配它自己的地址（没给用 DashScope 兼容地址）；
+// 借用通义那家的 key 时，地址跟着那家的服务走（模型中心接管时是服务上填的地址，海外区 / 自建网关的 key 发到大陆默认地址必然 401）。
+// 编码套餐（Coding Plan）的 key 与只说 Anthropic 协议的入口不提供 /embeddings：当作没配（unavailable，不是 failed），原因记下来。
+const DASHSCOPE_COMPAT = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+
+export interface EmbeddingConfig {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  dimensions: number;
+}
+
+export function embeddingConfig(): EmbeddingConfig | { unavailable: string } | undefined {
+  const own = process.env.KNOWLEDGE_EMBEDDING_API_KEY?.trim();
+  const apiKey = own || resolveKey("qwen");
   if (!apiKey) return undefined;
+  const explicit = process.env.KNOWLEDGE_EMBEDDING_BASE_URL?.trim();
+  const baseUrl = (explicit || (own ? DASHSCOPE_COMPAT : defaultBaseUrl("qwen") || DASHSCOPE_COMPAT)).replace(/\/+$/, "");
+  if (!explicit) {
+    if (/^sk-sp-/i.test(apiKey) || /\/\/coding(?:-intl)?\.dashscope/i.test(baseUrl)) {
+      return { unavailable: "the Qwen key is a Coding Plan key, which has no embeddings endpoint; set KNOWLEDGE_EMBEDDING_API_KEY" };
+    }
+    if (/\/anthropic(?:\/|$)/i.test(baseUrl)) {
+      return { unavailable: "the Qwen service is configured with an Anthropic-protocol endpoint, which has no embeddings; set KNOWLEDGE_EMBEDDING_BASE_URL" };
+    }
+  }
   const dimensionsRaw = Number(process.env.KNOWLEDGE_EMBEDDING_DIMENSIONS || DEFAULT_DIMENSIONS);
   return {
     apiKey,
-    baseUrl: (process.env.KNOWLEDGE_EMBEDDING_BASE_URL || process.env.QWEN_BASE_URL || process.env.VISION_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1").replace(/\/+$/, ""),
+    baseUrl,
     model: process.env.KNOWLEDGE_EMBEDDING_MODEL || "text-embedding-v4",
     dimensions: Number.isInteger(dimensionsRaw) && dimensionsRaw >= 64 && dimensionsRaw <= 2048 ? dimensionsRaw : DEFAULT_DIMENSIONS,
   };
 }
 
-async function embed(inputs: string[], config: NonNullable<ReturnType<typeof embeddingConfig>>, signal?: AbortSignal): Promise<number[][]> {
+async function embed(inputs: string[], config: EmbeddingConfig, signal?: AbortSignal): Promise<number[][]> {
   const timeout = AbortSignal.timeout(20_000);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
   const response = await fetch(`${config.baseUrl}/embeddings`, {
@@ -442,6 +460,11 @@ function priorityForEmbedding(document: KnowledgeDocument): number {
   return ({ memory: 100, guide: 95, route: 90, config: 88, data: 86, command: 84, verification: 82, profile: 80, ci: 78, deploy: 76, test: 65, module: 55 } as Record<KnowledgeKind, number>)[document.kind];
 }
 
+class SemanticUnavailable extends Error {}
+
+// 文档向量按内容哈希缓存在知识目录里。以前一批出错整次作废、已经算好的也不落盘——首次要补上百篇时任何一批限流 / 超时，下一次
+// 又从头补，永远补不完（9 月起记录里全是 failed 的一个来源）。现在：成功的批次照样落盘，失败的批次跳过（这次那几篇没有语义分），
+// 只有查询本身的向量拿不到才算整次失败。
 async function semanticScores(
   root: string,
   query: string,
@@ -450,6 +473,7 @@ async function semanticScores(
 ): Promise<Map<string, number> | undefined> {
   const config = embeddingConfig();
   if (!config) return undefined;
+  if ("unavailable" in config) throw new SemanticUnavailable(config.unavailable);
   const selected = [...documents]
     .sort((a, b) => priorityForEmbedding(b) - priorityForEmbedding(a) || a.id.localeCompare(b.id))
     .slice(0, EMBEDDING_DOCUMENT_CAP);
@@ -462,29 +486,58 @@ async function semanticScores(
   const batches: KnowledgeDocument[][] = [];
   for (let i = 0; i < missing.length; i += EMBEDDING_BATCH) batches.push(missing.slice(i, i + EMBEDDING_BATCH));
   let cursor = 0;
+  let added = 0;
+  let firstError: unknown;
   await Promise.all(Array.from({ length: Math.min(EMBEDDING_PARALLEL, batches.length) }, async () => {
-    while (cursor < batches.length) {
+    while (cursor < batches.length && !signal?.aborted && firstError === undefined) {
       const batch = batches[cursor++];
-      const vectors = await embed(batch.map(embeddingText), config, signal);
-      batch.forEach((document, index) => {
-        cache.vectors[vectorHash(document, config.model, config.dimensions)] = vectors[index];
-      });
+      try {
+        const vectors = await embed(batch.map(embeddingText), config, signal);
+        batch.forEach((document, index) => {
+          cache.vectors[vectorHash(document, config.model, config.dimensions)] = vectors[index];
+        });
+        added += batch.length;
+      } catch (error) {
+        firstError ??= error; // 同一个原因（限流、鉴权）后面的批次多半也过不去：停下，已经算好的照样落盘
+      }
     }
   }));
   const keep = new Set(selected.map((document) => vectorHash(document, config.model, config.dimensions)));
   const pruned = Object.fromEntries(Object.entries(cache.vectors).filter(([hash]) => keep.has(hash)));
-  if (missing.length || Object.keys(pruned).length !== Object.keys(cache.vectors).length) {
+  if (added || Object.keys(pruned).length !== Object.keys(cache.vectors).length) {
     cache.vectors = pruned;
     cache.updatedAt = new Date().toISOString();
     atomicJson(file, cache);
   }
-  const [queryVector] = await embed([query.slice(0, MAX_EMBED_TEXT)], config, signal);
+  let queryVector: number[];
+  try {
+    [queryVector] = await embed([query.slice(0, MAX_EMBED_TEXT)], config, signal);
+  } catch (error) {
+    throw firstError ?? error;
+  }
   const scores = new Map<string, number>();
   for (const document of selected) {
     const vector = cache.vectors[vectorHash(document, config.model, config.dimensions)];
     if (vector) scores.set(document.id, cosine(queryVector, vector));
   }
   return scores;
+}
+
+// 语义检索失败的原因：一句给人看的（不含地址与 key），每种原因只在日志里说一次
+const loggedFailures = new Set<string>();
+function noteSemanticFailure(error: unknown, signal?: AbortSignal): string {
+  const message = signal?.aborted
+    ? "aborted"
+    : error instanceof SemanticUnavailable
+      ? error.message
+      : (error as Error)?.name === "TimeoutError"
+        ? "embedding request timed out"
+        : String((error as Error)?.message ?? error).replace(/https?:\/\/\S+/g, "<url>").slice(0, 200);
+  if (!loggedFailures.has(message) && !signal?.aborted) {
+    loggedFailures.add(message);
+    console.warn(`[knowledge] semantic search unavailable: ${message}`);
+  }
+  return message;
 }
 
 function metricsFile(root: string): string {
@@ -535,8 +588,9 @@ export async function searchUnifiedKnowledge(
   const latestFailure = options.latestFailureOnly
     ? all.filter((document) => document.kind === "verification" && document.scope.includes("failed")).at(-1)?.id
     : undefined;
+  const live = (document: KnowledgeDocument) => options.liveMemory === true && document.status !== "superseded" && document.status !== "rejected";
   const eligible = all.filter((document) => {
-    if (document.kind === "memory" && !options.includeQuarantined && document.status !== "active") {
+    if (document.kind === "memory" && !options.includeQuarantined && document.status !== "active" && !live(document)) {
       skippedQuarantined++;
       return false;
     }
@@ -545,8 +599,10 @@ export async function searchUnifiedKnowledge(
     }
     return matchesFilters(document, options);
   });
+  const qt = queryTerms(query);
+  const idf = termCount(qt) ? idfOver(eligible.map((d) => fieldsOf(d).map((f) => f.text)), qt) : () => 1;
   const scored = eligible.map((document) => {
-    const lexical = lexicalScore(document, query);
+    const lexical = lexicalScore(document, query, qt, idf);
     const filter = appliedFilterEvidence(options);
     return {
       document,
@@ -556,6 +612,7 @@ export async function searchUnifiedKnowledge(
     } as KnowledgeSearchResult;
   });
   let semantic: KnowledgeSearchResponse["semantic"] = options.semantic === false ? "disabled" : "unavailable";
+  let semanticError: string | undefined;
   if (options.semantic !== false && query.trim()) {
     try {
       const scores = await semanticScores(root, query, eligible, options.signal);
@@ -571,8 +628,9 @@ export async function searchUnifiedKnowledge(
           if (similarity >= SEMANTIC_RESULT_MIN) item.reasons.push(`语义相似 ${similarity.toFixed(2)}`);
         }
       }
-    } catch {
-      semantic = "failed";
+    } catch (error) {
+      semantic = error instanceof SemanticUnavailable ? "unavailable" : "failed";
+      semanticError = noteSemanticFailure(error, options.signal);
     }
   }
   const hasQuery = Boolean(query.trim());
@@ -589,6 +647,7 @@ export async function searchUnifiedKnowledge(
     eligibleDocuments: eligible.length,
     skippedQuarantined,
     semantic,
+    ...(semanticError ? { semanticError } : {}),
     latencyMs: Math.max(0, Math.round(performance.now() - started)),
   };
   if (options.recordMetrics !== false) writeMetrics(root, response);
@@ -620,14 +679,17 @@ export function worthAutoRecall(item: KnowledgeSearchResult, query: string, sema
 }
 
 export function renderSearchResults(response: KnowledgeSearchResponse): string {
+  const diag = `Search diagnostics: semantic=${response.semantic}${response.semanticError ? ` (${response.semanticError})` : ""}; eligible=${response.eligibleDocuments}/${response.totalDocuments}; quarantined skipped=${response.skippedQuarantined}; latency=${response.latencyMs}ms.`;
   if (!response.results.length) {
-    return `No current knowledge matched. ${response.skippedQuarantined} quarantined memory notes were excluded. Semantic: ${response.semantic}.`;
+    return `Nothing matched. Try other words (a name, a path, a phrase from the note), or Recall with layer "sessions" to search past conversations. ${diag}`;
   }
   const rows = response.results.map((item, index) => {
     const document = item.document;
     const meta = [document.kind, document.status, document.confidence].filter(Boolean).join("; ");
+    const file = document.file ? `\n  file: ${document.file}` : "";
     const paths = document.paths.length ? `\n  paths: ${document.paths.slice(0, 5).join(", ")}` : "";
-    return `${index + 1}. [${document.id}] (${meta}) ${document.title}\n  why: ${item.reasons.join("; ") || "semantic supplement"}${paths}\n  ${document.text.slice(0, 700)}`;
+    const summary = document.summary ? `${document.summary}\n  ` : "";
+    return `${index + 1}. [${document.id}] (${meta}) ${document.title}\n  why: ${item.reasons.join("; ") || "semantic supplement"}${file}${paths}\n  ${summary}${document.text.slice(0, 700)}`;
   });
-  return `${rows.join("\n\n")}\n\nSearch diagnostics: semantic=${response.semantic}; eligible=${response.eligibleDocuments}/${response.totalDocuments}; quarantined skipped=${response.skippedQuarantined}; latency=${response.latencyMs}ms.`;
+  return `${rows.join("\n\n")}\n\n${diag}`;
 }

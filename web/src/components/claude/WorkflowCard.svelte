@@ -32,7 +32,10 @@
     if (tool.status === 'error') return 'failed';
     return tool.status === 'running' ? 'running' : 'completed';
   });
-  const running = $derived(!!live && (pre || taskRunning(status)));
+  // 判活看任务自己的状态，不看本轮是否还在流式：工作流是后台任务，主回合说完「已在后台跑」
+  // 就 live=false 了，以前这里随之判成结束 → settleProgress 把在跑的 agent 全记失败、点阵一片红。
+  // 死任务不会误判：历史归一（chat/history.js normSeg）已把没等到收尾的 running 收成 stopped。
+  const running = $derived((!!live && pre) || (!!task && taskRunning(status)));
   const stopped = $derived(status === 'stopped');
   const failed = $derived(status === 'failed');
   const reason = $derived((failed || stopped) ? (reasonFromSummary(task ? task.summary : '', task ? task.description : '') || '') : '');

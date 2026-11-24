@@ -14,6 +14,8 @@ import { ANSWER_NUDGE } from "./agent/loop.ts";
 import { visibleMessages } from "./agent/state.ts";
 import { say, scripted } from "./test-harness/scripted-adapter.ts";
 import { attachSession, send } from "./test-harness/session-fixture.ts";
+import { hardenedProfile } from "./agent/profile.ts";
+// 这个文件钉的是加固姿态（hardened）的门禁 / 追问 / 提醒行为：各场景显式在加固档案下跑（lean 默认不设这些）
 
 const roots: string[] = [];
 after(() => {
@@ -32,7 +34,7 @@ const textOf = (m: { content: { t: string; text?: string }[] }) => m.content.fil
 
 test("R19 只写了思考就要收尾：追一句把答复写出来，答复照常交付；追问不进聊天记录", async (t) => {
   const adapter = scripted(t).next(thinkOnly("先想想怎么回答……"), say("答复：用 sqlite 就够了"));
-  const session = attachSession(adapter, tmp("dimensio-r19-"));
+  const session = attachSession(adapter, tmp("dimensio-r19-"), { profile: hardenedProfile() });
   await send(session, "用哪个数据库？");
   const msgs = session.state!.messages;
   const nudges = msgs.filter((m) => m.role === "user" && m.origin === "harness" && m.kind === "answer-nudge");
@@ -47,7 +49,7 @@ test("R19 只写了思考就要收尾：追一句把答复写出来，答复照�
 
 test("R19 追问之后还是只有思考：不再追问，照旧收尾（不报错、不空转）", async (t) => {
   const adapter = scripted(t).next(thinkOnly("想一想"), thinkOnly("再想一想"));
-  const session = attachSession(adapter, tmp("dimensio-r19-twice-"));
+  const session = attachSession(adapter, tmp("dimensio-r19-twice-"), { profile: hardenedProfile() });
   await send(session, "在吗");
   assert.equal(adapter.callCount, 2, "只追问一次");
   const nudges = session.state!.messages.filter((m) => m.kind === "answer-nudge");
@@ -57,7 +59,7 @@ test("R19 追问之后还是只有思考：不再追问，照旧收尾（不报�
 
 test("R19 有正文的一轮不追问；下一条用户消息重新计数", async (t) => {
   const adapter = scripted(t).next(say("好的"), thinkOnly("嗯……"), say("第二个答复"));
-  const session = attachSession(adapter, tmp("dimensio-r19-count-"));
+  const session = attachSession(adapter, tmp("dimensio-r19-count-"), { profile: hardenedProfile() });
   await send(session, "第一问");
   assert.equal(session.state!.messages.filter((m) => m.kind === "answer-nudge").length, 0);
   await send(session, "第二问");

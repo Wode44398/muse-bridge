@@ -101,7 +101,7 @@ async function bootApp(pg, cfg) {
     try {
       // 冷 vite（第一次见到快照 / 新依赖）首屏可能要几十秒：导航与等待都放宽
       await pg.send('Page.navigate', { url: u.href }, 90000);
-      await pg.eval(`(async () => { for (let i = 0; i < 900; i++) { if (document.readyState === 'complete' && !document.documentElement.hasAttribute('data-booting') && document.querySelector('#app *, body > div *')) return true; await new Promise((r) => setTimeout(r, 100)); } throw new Error('页面没起来'); })()`, { timeout: 100000 });
+      await pg.eval(`(async () => { for (let i = 0; i < 900; i++) { if (document.readyState === 'complete' && !document.documentElement.hasAttribute('data-boot') && document.querySelector('#app *, body > div *')) return true; await new Promise((r) => setTimeout(r, 100)); } throw new Error('页面没起来'); })()`, { timeout: 100000 });
       await sleep(600);
       await pg.eval(`__pvqa.init()`, { timeout: 30000 });
       // 坑：新文档上的第一下输入，浏览器的命中测试会落到 <html> 上（实测点按、触摸都一样；一秒多以后或先有一次鼠标移动就正常）。

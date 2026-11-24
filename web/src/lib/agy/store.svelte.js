@@ -29,14 +29,33 @@ import { thisDeviceId } from '../devices.svelte.js';
 import { agyArtifactUrl } from '../preview.svelte.js';
 import { loadDrafts, saveDrafts, putDraft, draftKeyOf, cleanAtts, loadSessionsCache, saveSessionsCache } from './persist.js';
 import { applyLiveSnapshot, setSessionPending, returnQueuedToDraft, loadAgyDeviceLink } from './remote.js';
+import { isVoiceAtt, saveVoicePeaks } from './voice-peaks.js';
 
 const LAST_PROJ_KEY = 'bridge-agy-project';
 const LAST_CWD_KEY = 'bridge-agy-cwd';
 const LAST_SID_KEY = 'bridge-agy-session';
+const PROJ_ORDER_KEY = 'bridge-agy-proj-order';
 const readStored = (key) => { try { return localStorage.getItem(key) || ''; } catch { return ''; } };
 const writeStored = (key, val) => {
   try { val ? localStorage.setItem(key, String(val)) : localStorage.removeItem(key); } catch {}
 };
+function loadStoredOrder() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PROJ_ORDER_KEY) || '[]');
+    return Array.isArray(raw) ? raw.filter((p) => typeof p === 'string' && p.trim()) : [];
+  } catch { return []; }
+}
+export function cacheAgyProjectOrder(list) {
+  try {
+    const arr = Array.isArray(list) ? list : [];
+    if (arr.length) localStorage.setItem(PROJ_ORDER_KEY, JSON.stringify(arr));
+    else localStorage.removeItem(PROJ_ORDER_KEY);
+  } catch {}
+}
+let orderPending = 0;
+export function bumpAgyOrderPending(delta) {
+  orderPending = Math.max(0, orderPending + delta);
+}
 
 export const agy = $state({
   booted: false, loadingSession: false, loadingList: false, reconnecting: false,
@@ -44,11 +63,13 @@ export const agy = $state({
   // 账号模型额度（/api/agy/quota）：{ buckets:[{ id, group, window, usedPct, resetAt }], at, error }；开口仪表中间那个数字
   quota: null,
   model: '', thoughtLevel: 'medium', mode: 'default',
-  projects: [], recentDirs: [], projectId: readStored(LAST_PROJ_KEY), cwd: readStored(LAST_CWD_KEY),
+  projects: [], projectOrder: loadStoredOrder(), recentDirs: [], projectId: readStored(LAST_PROJ_KEY), cwd: readStored(LAST_CWD_KEY),
   // sessions 先用本机缓存垫着（冷启动 / 断网时侧栏不是空的），拉到新的再换
   sessions: loadSessionsCache(), hiddenSessions: [], hiddenCount: 0, activeSessionIds: [],
   // 在等你的会话：sessionId -> 'permission'（等审批）| 'question'（等回答）；侧栏的「在等你」点
   pendingSessions: {},
+  // 这一轮说完了、后台还在跑的会话（转入后台的命令 / 定时任务 / 子代理）：侧栏的「在等后台」空心环
+  bgSessionIds: [],
   sessionId: null, title: '', messages: [], busy: false,
   // 当前会话排着队的消息（这一轮收尾后依次发出）：[{ id, text, atts, at }]
   queue: [],
@@ -75,8 +96,11 @@ let fsNotifySeq = 0;
 function permNoticeBody(ev) {
   const tc = ev.toolCall && typeof ev.toolCall === 'object' ? ev.toolCall : {};
   const meta = classifyToolKind({ name: tc.name || ev.toolName, kind: tc.kind || ev.kind, title: tc.title || ev.title, command: tc.command || ev.command, args: tc.args || ev.args });
-  if (meta.bridge) return [meta.verb, meta.detail || meta.summary].filter(Boolean).join(' · ');
-  return tc.title || ev.title || tc.command || ev.command || '';
+  const body = meta.bridge
+    ? [meta.verb, meta.detail || meta.summary].filter(Boolean).join(' · ')
+    : (tc.title || ev.title || tc.command || ev.command || '');
+  const sub = ev.subagent?.role || ev.subagent?.typeName || '';
+  return sub ? `[${sub}] ${body}` : body;
 }
 
 // 工作区 goto / preview 指令去重（见 handleStreamEvent 的 wsx 分支）
@@ -215,20 +239,30 @@ export async function refreshAgyStatus(ensure = false) {
   }
 }
 
-export async function refreshAgyProjects() {
+export async function refreshAgyProjects({ preserveDefault = false } = {}) {
   try {
     const res = await agyApi.listProjects();
-    agy.projects = Array.isArray(res?.projects) ? res.projects : [];
+    const list = Array.isArray(res?.projects) ? res.projects : [];
+    agy.projects = list;
+    agyPrefs.projects = list;
+    if (orderPending === 0 && Array.isArray(res?.order)) {
+      agy.projectOrder = res.order;
+      cacheAgyProjectOrder(res.order);
+    }
     if (agy.projectId) {
-      const hit = agy.projects.find((p) => p.id === agy.projectId);
+      const hit = list.find((p) => p.id === agy.projectId);
       if (hit && !agy.sessionId) agy.cwd = hit.path;
       else if (!hit) {
-        agy.projectId = agy.projects[0]?.id || '';
-        writeStored(LAST_PROJ_KEY, agy.projectId);
+        agy.projectId = '';
+        writeStored(LAST_PROJ_KEY, '');
+        if (!agy.sessionId) {
+          agy.cwd = '';
+          writeStored(LAST_CWD_KEY, '');
+        }
       }
-    } else if (agy.projects.length && !agy.sessionId) {
-      agy.projectId = agy.projects[0].id;
-      agy.cwd = agy.projects[0].path;
+    } else if (!preserveDefault && list.length && !agy.sessionId && !agy.cwd) {
+      agy.projectId = list[0].id;
+      agy.cwd = list[0].path;
       writeStored(LAST_PROJ_KEY, agy.projectId);
     }
     syncDockContext();
@@ -253,6 +287,7 @@ export async function refreshAgySessions({ refresh = false } = {}) {
     }
     agy.hiddenCount = Number(res?.hiddenCount) || 0;
     if (act && Array.isArray(act.activeSessions)) applyLiveSnapshot(act.activeSessions);
+    if (act && Array.isArray(act.bgSessions)) agy.bgSessionIds = act.bgSessions;
     saveSessionsCache(fresh);
     // 正看着的会话在别处被改了名：标题跟上
     const cur = agy.sessionId ? fresh.find((s) => s.sessionId === agy.sessionId) : null;
@@ -299,6 +334,12 @@ function bindBus() {
     }
     if (ev.type === 'agy.run') { onRemoteRun(ev); return; }
     if (ev.type === 'agy.subagents') {
+      const waiting = typeof ev.bgWaiting === 'boolean' ? ev.bgWaiting : null;
+      if (ev.sessionId && waiting !== null) {
+        const has = agy.bgSessionIds.includes(ev.sessionId);
+        if (waiting && !has) agy.bgSessionIds = [...agy.bgSessionIds, ev.sessionId];
+        else if (!waiting && has) agy.bgSessionIds = agy.bgSessionIds.filter((x) => x !== ev.sessionId);
+      }
       if (ev.sessionId && ev.sessionId === agy.sessionId) {
         refreshAgySubagents(ev.sessionId, { silent: true });
         refreshAgySwarm(ev.sessionId, { silent: true });
@@ -313,7 +354,11 @@ function bindBus() {
       }
       return;
     }
-    if (ev.type === 'agy.sessions') { scheduleListSync(400, false); }
+    if (ev.type === 'agy.sessions') { scheduleListSync(400, false); return; }
+    if (ev.type === 'agy.projects') {
+      refreshAgyProjects({ preserveDefault: true });
+      scheduleListSync(400, false);
+    }
   });
 }
 
@@ -371,8 +416,8 @@ function onRemoteRun(ev) {
       upsertLocalSession(sid, { cwd: ev.cwd || '', projectId: ev.projectId || '', title: String(ev.userText || '').slice(0, 40) });
       scheduleListSync();
     }
-    // 正看着的这个会话在别处开跑、或后台子代理回报触发了自动唤醒：挂上去看直播
-    if (sid === agy.sessionId && !agy.busy && !agy.loadingSession && !liveHandle && ev.turn && ev.turn !== lastRemoteTurn
+    // 正看着的这个会话在别处开跑、或后台子代理回报触发了自动唤醒/权限审批：挂上去看直播
+    if (sid === agy.sessionId && !agy.busy && !agy.loadingSession && !liveHandle && ev.turn && (ev.turn !== lastRemoteTurn || ev.pending)
       && ui.screen === 'agy' && (typeof document === 'undefined' || !document.hidden)) {
       lastRemoteTurn = ev.turn;
       if (ev.backgroundWake) {
@@ -461,9 +506,11 @@ function markSessionLive(sid, live) {
 }
 
 function firstUserTextTitle() {
-  const u = agy.messages.find((m) => m.role === 'user' && m.text);
+  const u = agy.messages.find((m) => m.role === 'user' && (m.text || (Array.isArray(m.atts) && m.atts.length > 0)));
   const txt = String(u?.text || '').replace(/\s+/g, ' ').trim();
-  return txt.length > 40 ? txt.slice(0, 40) + '…' : txt;
+  if (txt) return txt.length > 40 ? txt.slice(0, 40) + '…' : txt;
+  if (Array.isArray(u?.atts) && u.atts.some((a) => isVoiceAtt(a))) return t('语音消息');
+  return '';
 }
 
 function getLastAssistantTurn() {
@@ -937,6 +984,42 @@ export async function sendAgyMessage(rawText = agy.draftText, rawAtts = agy.draf
   }, { scope: 'agy' });
 }
 
+// 发送原生语音消息：上传 WAV 音频并作为原生音频附件直发给 Gemini，气泡立即复用本地 blob 零延迟播放
+export async function sendAgyVoice({ blob, durationSec, peaks, fileName } = {}) {
+  if (!blob || !fileName || agy.loadingSession || agy.busy) return { ok: false };
+  const seq = viewSeq;
+  const startSid = agy.sessionId;
+  const localUrl = URL.createObjectURL(blob);
+  try {
+    const res = await api.uploadBlob(fileName, blob);
+    if (seq !== viewSeq || agy.sessionId !== startSid) {
+      URL.revokeObjectURL(localUrl);
+      return { ok: false, stale: true };
+    }
+    const uploadedPath = res?.path || '';
+    if (!uploadedPath) throw new Error('missing upload path');
+    if (Array.isArray(peaks) && peaks.length) {
+      saveVoicePeaks(uploadedPath, peaks);
+      saveVoicePeaks(fileName, peaks);
+    }
+    const voiceAtt = {
+      path: uploadedPath,
+      name: fileName,
+      kind: 'voice',
+      url: localUrl,
+      size: blob.size,
+      duration: Math.round((Number(durationSec) || 1) * 100) / 100,
+      peaks: Array.isArray(peaks) ? peaks : [],
+    };
+    await sendAgyMessage('', [voiceAtt]);
+    return { ok: true, att: voiceAtt };
+  } catch (err) {
+    URL.revokeObjectURL(localUrl);
+    showToast(tr(err?.body?.error || err?.message) || t('语音上传失败，请重试'), 'err');
+    return { ok: false, error: err };
+  }
+}
+
 // 一条消息的请求体（直接发与排队共用）
 function chatPayload(text, readyAtts) {
   const pc = thisDeviceId();
@@ -1073,14 +1156,20 @@ export {
   selectProjectForNewChat,
   selectDirectoryForNewChat,
   createAgyProjectAt,
+  pinAgyProject,
+  renameAgyProject,
+  deleteAgyProject,
+  reorderAgyProjects,
   locateAgyFileInWorkspace,
   scrollToAgyCard,
   uploadAgyFile,
+  pushAgyFolder,
   attachAgyTransfer,
   removeAgyDraftAtt,
   pushAgyDraftAtt,
   renameAgySession,
   hideAgySession,
+  hideAgyWorkspaceSessions,
   restoreAgySession,
   restoreAllHiddenAgySessions,
 } from './workspace-actions.js';

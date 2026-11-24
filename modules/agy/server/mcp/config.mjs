@@ -9,7 +9,7 @@ import { pluginOn } from '@bridge/core/plugins/state.mjs';
 import { DEFAULT_BRIDGE_TOOLS, buildEffectiveAgySystemPrompt } from '../settings.mjs';
 import { agyExtensionParams } from '@bridge/core/extensions.mjs';
 import { enabledHubGroups, hubToolingSig } from './hub.mjs';
-import { pluginPromptsForAgy } from './groups/plugins.mjs';
+import { pluginPromptsForAgy, pluginPromptSig } from './groups/plugins.mjs';
 import { agyDebugOn } from '../debug-mode.mjs';
 
 export const AGY_BRIDGE_MCP_SERVER_PATH = fileURLToPath(new URL('./agy-bridge-server.mjs', import.meta.url));
@@ -79,7 +79,9 @@ export function buildAgySessionTooling({ ctx, settings = {}, cwd = '', additiona
   // 调试模式也并进指纹：系统提示只在挂载会话时带给 agy，已挂着的会话要等常驻进程换过一次才重新挂载、拿到新提示。
   // 没挂 bridge 工具时也得带上（'off' 会被 noteTooling 当成「谈不上新旧」直接跳过）
   const debug = agyDebugOn(ctx, settings);
-  const toolingSig = debug ? `${baseSig}|debug` : baseSig;
+  // 插件给 agy 的提示同理（groups/plugins.mjs pluginPromptSig：按不带会话目录的那一份算，免得换目录就重启）
+  const promptSig = ctx ? pluginPromptSig(ctx) : '';
+  const toolingSig = `${debug ? `${baseSig}|debug` : baseSig}${promptSig ? `|pp:${promptSig}` : ''}`;
   let ext = { instructions: '', mcpServers: [] };
   // 扩展中心只给主机管理员（agy 本身也只开给管理员）
   if (ctx && ctx.kind === 'admin' && !ctx.sandbox) {
@@ -90,7 +92,8 @@ export function buildAgySessionTooling({ ctx, settings = {}, cwd = '', additiona
     hasBridgeTools: bridge.length > 0,
     localCategories: bridge.length ? effectiveBridgeToolCategories(settings, { ctx }).filter((c) => c !== 'hub') : [],
     hubGroups,
-    extensionInstructions: [ext.instructions, hubGroups.includes('plugins') ? pluginPromptsForAgy(ctx) : ''].filter(Boolean).join('\n'),
+    // 插件提示与插件工具脱钩：插件没给 agy 工具、或设置里关了插件工具，提示照样带
+    extensionInstructions: [ext.instructions, ctx ? pluginPromptsForAgy(ctx, { cwd }) : ''].filter(Boolean).join('\n'),
     cwd,
     additionalDirectories,
     debug,

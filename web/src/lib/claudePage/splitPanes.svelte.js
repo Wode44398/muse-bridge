@@ -8,7 +8,7 @@ import { splitDropPlan, splitDropLabel, canSplitWidth, MIN_PANE } from '../claud
 import { soloUrl, PANE_MSG, isPaneMsg } from '../solo.js';
 import { openSettings } from '../settingsNav.svelte.js';   // 分屏格托宿主页开设置（onPaneMsg 的 settings）
 import { wcoHeight, wcoRightInset } from '../../desktop/chrome/wco.svelte.js';
-import { canQuote, quoteSession } from '../chatQuote.js';
+import { canQuote, quoteSession, canRefFolder, refClaudeFolder } from '../chatQuote.js';
 import { t, tc } from '../i18n.js';
 
 /** @param {any} pc 页面上下文：各区段经它互相取用（getter / setter，见 ClaudePage.svelte） */
@@ -183,29 +183,51 @@ export function createSplitPanes(pc) {
     quoteRects = out;
   }
   // 落点层随 sideDrag 显形（下一拍才挂上 DOM），挂上之后量一次；拖拽中窗口一般不变，不追踪
+  const canQuoteDrag = (rec) => rec?.kind === 'session' || (rec?.kind === 'project' && !!rec?.path);
   $effect(() => {
-    if (pc.sideDrag?.kind === 'session' && splitDropEl) untrack(measureQuoteRects);
+    if (canQuoteDrag(pc.sideDrag) && splitDropEl) untrack(measureQuoteRects);
     else { quoteRects = []; quoteHover = null; }
   });
   const quoteTargetId = (target) => (target === 'pane' ? paneId : session.id);
-  // 本页那一格还要查「已经引用过」（compose 就是它的）；那一格的去重在它自己的 quoteSession 里
+  // 本页那一格还要查「已经引用过」（compose 就是它的）；那一格的去重在它自己的 quoteSession / refClaudeFolder 里
   const quoteOk = (target) => {
-    const id = pc.sideDrag?.id || pc.dragRec?.id;
+    const rec = pc.sideDrag || pc.dragRec;
+    if (rec?.kind === 'project') {
+      if (!rec.path) return false;
+      return target === 'pane' ? true : canRefFolder(rec.path);
+    }
+    const id = rec?.id;
     return target === 'pane' ? !!id && id !== paneId : canQuote(id, session.id);
   };
+  function quoteIdleLabel() {
+    const rec = pc.sideDrag || pc.dragRec;
+    if (rec?.kind === 'project') return tc('claude', '放到输入框＝引用这个文件夹');
+    return tc('claude', '放到输入框＝引用这段对话');
+  }
   function quoteLabelFor(target) {
-    const id = pc.sideDrag?.id || pc.dragRec?.id;
+    const rec = pc.sideDrag || pc.dragRec;
+    if (rec?.kind === 'project') {
+      if (!quoteOk(target)) return t('这个文件夹已经引用过了');
+      return t('引用文件夹「{name}」', { name: rec.title || '' });
+    }
+    const id = rec?.id;
     if (id && id === quoteTargetId(target)) return tc('claude', '不能引用对话自己');
     if (!quoteOk(target)) return t('这个对话已经引用过了');
     return target === 'main' ? pc.quoteLabel() : tc('claude', '引用到这个对话');
   }
   function quoteInto(target, rec) {
+    if (rec?.kind === 'project') {
+      if (target === 'pane') { postPane({ t: 'folder', path: rec.path, name: rec.title }); focusPane(); }
+      else { paneFocus = false; refClaudeFolder({ path: rec.path, name: rec.title }); }
+      return;
+    }
     if (target === 'pane') { postPane({ t: 'quote', id: rec.id, title: rec.title }); focusPane(); }
     else { paneFocus = false; quoteSession({ id: rec.id, title: rec.title }); }
   }
 
   function onSplitOver(e) {
-    if (pc.dragRec?.kind !== 'session') return;
+    const rec = pc.dragRec;
+    if (!canQuoteDrag(rec)) return;
     e.preventDefault();
     const r = e.currentTarget.getBoundingClientRect();
     const qx = e.clientX - r.left, qy = e.clientY - r.top;
@@ -216,6 +238,11 @@ export function createSplitPanes(pc) {
       return;
     }
     quoteHover = null;
+    if (rec.kind === 'project') {
+      splitHover = null;
+      try { e.dataTransfer.dropEffect = 'none'; } catch {}
+      return;
+    }
     const side = dropZones.length > 1 ? (e.clientX - r.left < splitBoundary ? 'left' : 'right') : 'left';
     splitHover = side;
     try { e.dataTransfer.dropEffect = planFor(side).kind === 'none' ? 'none' : 'move'; } catch {}
@@ -223,7 +250,7 @@ export function createSplitPanes(pc) {
   function onSplitLeave(e) { if (!e.currentTarget.contains(e.relatedTarget)) { splitHover = null; quoteHover = null; } }
   function onSplitDrop(e) {
     const rec = pc.dragRec;
-    if (!rec || rec.kind !== 'session') return;
+    if (!canQuoteDrag(rec)) return;
     e.preventDefault();
     if (quoteHover) {
       const target = quoteHover;
@@ -232,6 +259,7 @@ export function createSplitPanes(pc) {
       if (quoteOk(target)) quoteInto(target, rec);
       return;
     }
+    if (rec.kind === 'project') { splitHover = null; return; }
     const side = splitHover || 'left';
     const plan = planFor(side);
     splitHover = null;
@@ -283,6 +311,7 @@ export function createSplitPanes(pc) {
     get quoteRects() { return quoteRects; }, set quoteRects(v) { quoteRects = v; },
     get quoteHover() { return quoteHover; }, set quoteHover(v) { quoteHover = v; },
     get quoteOk() { return quoteOk; },
+    quoteIdleLabel,
     quoteLabelFor,
     quoteInto,
     onSplitOver,

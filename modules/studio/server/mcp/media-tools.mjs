@@ -26,6 +26,7 @@ import {
   TTS_MODEL_DEFAULT, TTS_MODELS, TTS_VOICES, TTS_VOICE_DEFAULT,
   MUSIC_MODELS, MUSIC_MODEL_DEFAULT,
 } from '@bridge/core/config/capabilities.mjs';
+import { paramWarningText } from './param-warnings.mjs';
 
 // The Claude-facing image tool defaults to Nano Banana Flash — fast, cheap, and the
 // only image model that supports BOTH thinking and image search (Pro does neither).
@@ -230,7 +231,7 @@ const swapIn = (text, from, to) => text.replace(from, () => to);
 
 // 卡上参数 / 负面词 / 素材 / 续改（两种版本都有；素材的写法按版本不同：手机版收工作空间路径与作品 id，桌面版收绝对路径）
 const ROLES = ['edit', 'ref', 'first', 'last', 'audio', 'video'];
-const PARAMS_FIELD = z.record(z.string(), z.any()).optional().describe('模型卡上的其它参数，键名照 list_media_models 查到的写（如 { "count": 2, "seed": 7, "quality": "high" }）；原样交给 Studio 按卡规范化（越界的夹紧、不认识的丢掉），和上面同名的字段同时给时以这里为准。');
+const PARAMS_FIELD = z.record(z.string(), z.any()).optional().describe('模型卡上的其它参数，键名照 list_media_models 查到的写（如 { "count": 2, "seed": 7, "quality": "high" }）；原样交给 Studio 按卡规范化（越界的夹紧、不认识的丢掉，回执会列出没生效的），和上面同名的字段同时给时以这里为准。卡上没有的上游参数写进 params.extra（JSON 对象，原样并入请求体；合并顺序：卡上映射出的字段 < 服务级额外参数 < extra，后者覆盖前者；卡上没有 extra 键的模型（Google 系内置卡）不收）。');
 const NEGATIVE_FIELD = z.string().optional().describe('负面提示词（不要出现什么），只在模型卡收 negative 时生效。');
 const inputsField = (flavor) => z.array(z.object({
   role: z.enum(ROLES).describe('edit = 改这张图；ref = 参考图（主体 / 风格）；first / last = 视频首帧 / 尾帧；audio / video = 参考音频 / 视频'),
@@ -342,10 +343,13 @@ export function buildMediaTools({ flavor = 'phone', adapter, defaults = null }) 
           Object.assign(info, { width: r.width, height: r.height });
           if (r.params) Object.assign(info, { imageSize: r.params.imageSize, downscaled: !p.isImagen && belowSize(r.params.imageSize, r.width, r.height) });
         }
-        return { content: [{ type: 'text', text: adapter.resultText(evKind(kind), info) }] };
+        // params 里显式给的参数被丢 / 回落时附一句（不改生成结果，只让 agent 看得见）
+        const warn = paramWarningText(flavor, r.warnings, args.params);
+        return { content: [{ type: 'text', text: adapter.resultText(evKind(kind), info) + (warn ? '\n' + warn : '') }] };
       } catch (e) {
         adapter.emit({ type: 'gen_media_error', id, kind: evKind(kind), message: String(e?.message ?? e) });
-        return { isError: true, content: [{ type: 'text', text: adapter.errorText(evKind(kind), e) }] };
+        const warn = paramWarningText(flavor, e?.warnings, args && args.params);
+        return { isError: true, content: [{ type: 'text', text: adapter.errorText(evKind(kind), e) + (warn ? '\n' + warn : '') }] };
       }
     },
   });

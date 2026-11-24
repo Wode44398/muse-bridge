@@ -10,6 +10,7 @@ import type { PrefixTotals } from "./agent/prefix-audit.ts";
 import { danglingToolCalls, healDanglingToolCalls, visibleMessages } from "./agent/state.ts";
 import { checkTurn } from "./agent/turn-invariants.ts";
 import type { Block, Msg } from "./agent/turn.ts";
+import { toolArgStr } from "./agent/tool-input.ts";
 import { parseSessionRecord, type PersistedSession } from "./store.ts";
 
 export type Severity = "error" | "warn" | "info";
@@ -59,7 +60,8 @@ export interface HealthOptions {
 
 // loop / 会话以 internal 追加的注入片段：出现在聊天记录里就是漏了（或老记录没清干净）。插话、todo 提醒、预算
 // 提示、续写提示是有意给人看的，不在这里。
-const HIDDEN_KINDS = new Set(["recall", "audit-nudge", "precompact-audit-nudge", "verify-nudge", "plan-nudge", "submit-nudge", "world-state"]);
+// compaction-restore = 压缩后回填的工作现场（文件正文、待办）；compaction-request = inline 摘要指令（根本不该进转录）
+const HIDDEN_KINDS = new Set(["recall", "audit-nudge", "precompact-audit-nudge", "verify-nudge", "plan-nudge", "submit-nudge", "world-state", "compaction-restore", "compaction-request"]);
 const GATE_EXHAUSTED = 3;
 
 const textOf = (m: Msg | undefined): string => (m ? m.content.flatMap((b) => (b.t === "text" ? [b.text] : [])).join("\n") : "");
@@ -97,8 +99,9 @@ export function checkSession(rec: PersistedSession, opts: HealthOptions = {}): H
   for (const p of pairing) {
     const n = Number(/^message (\d+)/.exec(p)?.[1]);
     const at = Number.isFinite(n) ? n - 1 : undefined;
-    // 压缩摘要后面紧跟着找不到调用的结果 = 压缩把一对调用 / 结果切开了
-    const cut = at !== undefined && isSummary(healed[at - 1]);
+    // 压缩摘要后面紧跟着找不到调用的结果 = 压缩把一对调用 / 结果切开了（摘要与尾部之间可能隔着一条回填的工作现场）
+    const prev = at !== undefined ? healed[at - 1] : undefined;
+    const cut = at !== undefined && (isSummary(prev) || (prev !== undefined && messageKind(prev) === "compaction-restore" && isSummary(healed[at - 2])));
     issues.push({ code: cut ? "compaction-cut" : "pairing", severity: "error", detail: p, ...(at !== undefined ? { at } : {}) });
   }
 
@@ -190,7 +193,7 @@ export function sessionStats(rec: PersistedSession): SessionStats {
           streakKey = key;
           streak = 1;
         }
-        const p = typeof b.args?.path === "string" ? b.args.path : typeof b.args?.file_path === "string" ? b.args.file_path : undefined;
+        const p = toolArgStr(b.name, b.args, "path"); // 转录是模型原话：file_path 这类别名也认
         if (p) {
           if (b.name === "Write" && seenPaths.has(p)) writesToKnownPaths++;
           seenPaths.add(p);

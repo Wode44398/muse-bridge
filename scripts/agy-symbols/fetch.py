@@ -1,6 +1,6 @@
 # Antigravity 分页的图标字体子集：向 Google Fonts 官方接口按名字要一份 Material Symbols Rounded 子集。
 #
-# 用法：  python scripts/agy-symbols/fetch.py web/src/components/agy/fonts/material-symbols-rounded-agy.woff2
+# 用法：  python scripts/agy-symbols/fetch.py web/src/visuals/fonts/agy/material-symbols-rounded-agy.woff2
 # 依赖：fonttools + brotli（只用来核对出来的字体；pip install fonttools brotli）
 #
 # 为什么走接口而不是自己切：图标名有别名（restore 其实是 history 那个字形、draft 是 note），接口替我们把别名的
@@ -27,6 +27,7 @@ stop_circle terminal tune visibility_off warning wb_twilight
 
 desktop_windows play_arrow star account_tree
 draft text_snippet table slideshow picture_as_pdf graphic_eq movie folder_zip
+content_cut content_paste format_quote link select_all text_fields
 '''.split()))
 
 # 要 woff2 得报一个现代浏览器的 UA

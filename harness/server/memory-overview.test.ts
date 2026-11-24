@@ -74,7 +74,8 @@ test("K11 总览：全局层 + 有记忆的项目 + 旧快照桶，没有记忆�
 
   const global = ov.buckets[0]!;
   assert.equal(global.ws, GLOBAL_WS);
-  assert.equal(global.promptChars, 0, "全局层只有待确认的：不进提示");
+  // 记忆放宽（m 线）：待确认的也以索引行（带 unconfirmed）进提示（以前钉的是「只有待确认的就是 0」）
+  assert.ok(global.promptChars > 0, "全局层只有待确认的：也列进索引");
 
   const project = ov.buckets[1]!;
   assert.equal(project.current, true);

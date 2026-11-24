@@ -1,4 +1,4 @@
-<!-- Claude 页·侧栏正文（常驻列与手机抽屉共用一份）：入口行、临时对话区、收藏、项目组、已归档视图、账户卡、行尾 ⋮ 菜单。 -->
+<!-- Claude 页·侧栏正文（常驻列与手机抽屉共用一份）：入口行、临时对话区、收藏、项目组、已归档视图、账户卡、行菜单（会话行尾 ⋮；项目行只认右键 / 长按）。 -->
 <script>
   import ClaudeCodeWordmark from '../ClaudeCodeWordmark.svelte';
   import { ui, session, pluginOn } from '../../../lib/state.svelte.js';
@@ -13,15 +13,25 @@
   import { arch, loadArchived, openArchivedView, closeArchivedView } from '../../../lib/sessionArchive.svelte.js';
   import { relTime } from '../../../lib/format.js';
   import { pluginUi, uiIcon } from '../../../lib/pluginUi.svelte.js';   // 插件的会话动作（ctx.ui.sessionAction）
+  // 插件的工作区外观（ctx.ui.workspaceDecor / workspaceAction）：画法在 ../workspace/，这里只接入
+  import { decorFor, sessionMark, workspaceMenuItems, runWorkspaceAction } from '../../../lib/pluginUi.svelte.js';
+  import ClaudeSpark from '../workspace/ClaudeSpark.svelte';
+  import AgentTile from '../workspace/AgentTile.svelte';
+  import DecorTile from '../workspace/DecorTile.svelte';
+  import PeerSessions from '../workspace/PeerSessions.svelte';
+  import WorkspaceIcon from '../workspace/WorkspaceIcon.svelte';
+  import { noteLine, agentName } from '../workspace/decor.js';
   import { appKey as appKeyOf, appIconUrl } from '../../../lib/pluginApps.svelte.js';
   import { appTagOf } from '../../../lib/claudePage/sessionAppTag.js';
   import { usePage } from '../../../lib/claudePage/context.js';
 
   const pc = usePage();
+  const runWsAction = (wa, p) => { closeMenu(); if (p?.path) runWorkspaceAction('claude', { plugin: wa.plugin, id: wa.id, path: p.path, projectId: p.id }); };
   const { onSessDragStart, onSideDragEnd, onRowDragOver, onRowDragLeave, onRowDrop, sessHoldDown, sessHoldMove, sessHoldUp, rowCtx, sessionDrop, pickSession, isQuickSession, quickWarnDays, openMenu, closeDrawer, openArchived, projName, onProjDragStart, projHoldDown, projHoldMove, projHoldUp, newInProject, toggleFold, serverRest, pendIn, showMore, showLess, slideOut, newChat, NEW_KBD, openSearch, IS_MAC, openProjectModal, newQuick, openRoutines, openOrphan, showMoreQuick, openBin, projListZone, onProjDragOver, onProjDragLeave, onProjDrop, toggleUserMenu, closeMenu, menuSession, saveQuick, keepQuick, doStar, doRename, doArchive, runSessionAction, doDelete, doUnarchive, doRenameProject, menuProject, doArchiveProject, doDeleteProject, openSideApp } = pc;
 </script>
-{#snippet convRow(s, indent)}
+{#snippet convRow(s, indent, deco = false)}
     {@const kn = pc.kidCount.get(s.id) || 0}
+    {@const by = sessionMark('claude', s.id)?.by}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="d-row" class:cur={s.id === pc.curId} class:alt={!!pc.altId && s.id === pc.altId} class:indent class:child={pc.childIds.has(s.id)} class:fam={!!kn} class:folded={!!kn && !!pc.famFolded[s.id]} class:dnd-on={drag.overKey === 'chat:claude:' + s.id || pc.rowHover === s.id}
       class:lifted={pc.liftedId === s.id} draggable={pc.mouseDnd ? 'true' : 'false'} ondragstart={(e) => onSessDragStart(e, s)} ondragend={onSideDragEnd}
@@ -31,7 +41,9 @@
       <!-- 落点挂在按钮上而不是外层 div：它本来就是可交互元素，省掉一条 a11y 例外 -->
       <button class="d-recent" use:dropZone={sessionDrop(s)} onclick={() => pickSession(s)}>
         <!-- 待回答（提问 / 审批卡）压过「在跑」：等人的那一轮本来就还在跑，不压过去这个点永远亮不出来（官方 Needs your input） -->
-        {#if s.thinking || s.pending}<span class="d-dot {s.pending ? 'ask' : 'work'}"></span>{/if}
+        <!-- 共用项目块里状态挪到行尾（行首那一格留给「谁开的」小方块），在跑的画官方星芒 -->
+        {#if (s.thinking || s.pending) && !deco}<span class="d-dot {s.pending ? 'ask' : 'work'}"></span>{/if}
+        {#if by && by !== 'claude'}<span class="d-by" title={t('{agent} 开的会话', { agent: agentName(by) })}><AgentTile agent={by} size={15} /></span>{/if}
         <!-- 项目对话：标题前一枚项目字形（协调者带两条讨论串）；讨论串在等你时行尾一个红点 -->
         {#if s.shape === 'project'}<svg class="d-pj" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-label={t('项目对话')}><circle cx="8" cy="3.9" r="1.85"/><circle cx="3.9" cy="12.1" r="1.85"/><circle cx="12.1" cy="12.1" r="1.85"/><path d="M7 5.5 4.9 10.4M9 5.5l2.1 4.9"/></svg>{/if}
         <span class="d-title" use:marquee><span class="d-scroll">{tr(titleFor(s.id, s.title)) || t('（无标题）')}</span></span>
@@ -45,6 +57,8 @@
           {@const qd = quickWarnDays(s.projectId)}
           {#if qd != null}<span class="d-exp" title={t('{n} 天后清理', { n: qd })}>{qd ? t('剩 {n} 天', { n: qd }) : t('今天清理')}</span>{/if}
         {/if}
+        {#if deco && s.pending}<span class="d-dot ask d-end"></span>
+        {:else if deco && s.thinking}<span class="d-spark" aria-label={t('正在工作')}><ClaudeSpark size={15} think /></span>{/if}
       </button>
       <!-- 名下有子会话 / 讨论串：行尾一枚折叠钮（收起时带上条数，常显；展开时同 ⋮ 悬停才浮现） -->
       {#if kn}
@@ -84,34 +98,43 @@
   {/snippet}
 
   {#snippet projRow(p, i)}
-    <div class="d-pblock" class:ins={pc.insShown === i}>
+    {@const dc = decorFor('claude', p.path)}
+    {@const nl = dc ? noteLine(dc) : ''}
+    <!-- 插件给了外观：项目自成一块（极淡底 + 1px 细描边），名字下一行插件给的 note（不给就不写），右端对方的连接器方块（点了去哪由插件的 open 定），块内多一组对方的会话 -->
+    <div class="d-pblock" class:ins={pc.insShown === i} class:deco={!!dc?.panel}>
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="d-row proj" title={p.path || ''} class:lifted={pc.liftedId === p.id}
+    <div class="d-row proj" class:co={!!dc} class:two={!!nl} title={p.path || ''} class:lifted={pc.liftedId === p.id}
       draggable={pc.mouseDnd ? 'true' : 'false'} ondragstart={(e) => onProjDragStart(e, p)} ondragend={onSideDragEnd}
       onpointerdown={(e) => projHoldDown(e, p)} onpointermove={projHoldMove} onpointerup={projHoldUp} onpointercancel={projHoldUp}
       oncontextmenu={(e) => rowCtx(e, 'project', p.id)}>
       <button class="d-recent" onclick={() => newInProject(p)}>
         <span class="d-bub"><span class="ic pj">&#xe0c9;</span></span>
-        <span class="d-title">{tr(p.name)}</span>
+        {#if nl}
+          <span class="d-two"><span class="d-title">{tr(p.name)}</span>{#key nl}<span class="d-sub d-note">{nl}</span>{/key}</span>
+        {:else}
+          <span class="d-title">{tr(p.name)}</span>
+        {/if}
       </button>
-      {#if (pc.grouped.get(p.id) || []).length}
+      {#if (pc.grouped.get(p.id) || []).length || (dc?.peerSessions || []).some((g) => g.items.length)}
         <button class="d-more d-fold" class:closed={!!pc.collapsed[p.id]} aria-label={pc.collapsed[p.id] ? t('展开会话') : t('收起会话')} onclick={(e) => toggleFold(e, p.id)}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
         </button>
       {/if}
-      <button class="d-more" aria-label={t('项目选项')} onclick={(e) => openMenu(e, 'project', p.id)}><span class="ic">&#xe062;</span></button>
+      <!-- 项目行不放 ⋮（11-24 维护者：插件的连接器方块进来后尾巴挤不下、压住名字）：菜单只从右键 / 触屏长按原地松手出（见 rowCtx、projHoldDown） -->
+      {#if dc}<DecorTile item={dc} />{/if}
     </div>
     {#if !pc.collapsed[p.id] && !pc.projDragging}
       {@const pg = pc.paged.get(p.id)}
       {@const more = (pg?.rest || 0) + serverRest(p.id)}
       {#each pendIn(p.id) as pn (pn.key)}{@render pendRow(pn, true)}{/each}
-      {#each pg?.rows || [] as s (s.id)}{@render convRow(s, true)}{/each}
+      {#each pg?.rows || [] as s (s.id)}{@render convRow(s, true, !!dc)}{/each}
       {#if more}
         <!-- 剩余数 = 本地还没放出来的 + 服务端还没拿到的（老会话翻页，见 loadOlder） -->
         <button class="d-pager" disabled={!!pc.olderBusy[p.id]} onclick={() => showMore(p.id)}>{pc.olderBusy[p.id] ? t('加载中…') : t('显示更多（{n}）', { n: more })}</button>
       {:else if pc.shown[p.id]}
         <button class="d-pager" onclick={() => showLess(p.id)}>{t('收起')}</button>
       {/if}
+      {#if dc}<PeerSessions item={dc} path={p.path} onopen={closeDrawer} />{/if}
     {/if}
     </div>
   {/snippet}
@@ -268,6 +291,16 @@
         {#if (pc.grouped.get(pc.menuFor.id) || []).length || pc.projCounts[pc.menuFor.id]}
           <button onclick={() => doArchiveProject(menuProject())}><span class="ic mi">&#xe008;</span>{t('归档全部会话')}</button>
         {/if}
+        {@const mp = menuProject()}
+        {@const wsItems = !IS_CSNAP && mp?.path ? workspaceMenuItems('claude', { path: mp.path }) : []}
+        {#if wsItems.length}
+          <!-- 插件的文件夹菜单项（ctx.ui.workspaceAction）：确认框由 ClaudeWorkspaceDialog 画 -->
+          <div class="rowmenu-sep" role="presentation"></div>
+          {#each wsItems as wa (wa.plugin + '/' + wa.id)}
+            <button class:danger={wa.danger} title={wa.pluginName} onclick={() => runWsAction(wa, mp)}><span class="ic plg-ic" aria-hidden="true"><WorkspaceIcon name={wa.icon} /></span><span class="plg-lab">{tr(wa.label)}</span></button>
+          {/each}
+          <div class="rowmenu-sep" role="presentation"></div>
+        {/if}
         <!-- 默认工作空间只能改名，不能删（服务端也拦） -->
         {#if !menuProject()?.def}
           <button class="danger" onclick={() => (pc.delConfirm ? doDeleteProject(pc.menuFor.id) : (pc.delConfirm = true))}><span class="ic mi">&#xe101;</span>{pc.delConfirm ? tc('claude', '确认删除') : t('删除项目')}</button>
@@ -362,6 +395,34 @@
   .d-pblock.ins::before, .d-projs.ins-end::after { content: ''; position: absolute; left: 6px; right: 6px; height: 2px; border-radius: 2px;
     background: var(--coral); pointer-events: none; z-index: 2; }
   .d-pblock.ins::before { top: -1px; }
+  /* 插件外观（工作区插槽）：项目自成一块。外扩 2px 再内衬 2px，块里每一行的几何和没外观时一样；
+     底和描边 200ms 淡进（ease-out），没有彩边、不发光 */
+  .d-pblock { border-radius: 10px; box-shadow: inset 0 0 0 1px transparent;
+    transition: background-color 200ms cubic-bezier(.165, .84, .44, 1), box-shadow 200ms cubic-bezier(.165, .84, .44, 1); }
+  .d-pblock.deco { background: var(--cc-box); box-shadow: inset 0 0 0 1px var(--cc-box-bd); margin: 2px -2px 6px; padding: 3px 2px 4px; }
+  .d-pblock.deco + .d-pblock.deco { margin-top: 0; }
+  /* 两行的项目行：图标、折叠钮、方块都对齐第一行（名字）；小字那一行从名字下面一直铺到块的右缘（压在尾按钮下面，
+     不跟它们抢宽度——手机上折叠钮常显，小字挤在它左边会只剩半句）。
+     折叠钮和普通项目行一样待在排版流里（桌面悬停才浮现，位置常留）：名字照常在它前面截断，不会再被压住。
+     原来它和 ⋮ 悬浮在名字上、只靠两行时的渐隐让位，单行名字（插件不给小字）就被盖住了——11-24 去掉 ⋮ 时一起改回来 */
+  .d-row.proj.co { align-items: flex-start; }
+  .d-row.proj.co .d-recent { align-items: flex-start; }
+  .d-row.proj.co.two .d-recent { padding-top: 7px; padding-bottom: 25px; }
+  .d-row.proj.co .d-title { font-weight: 500; color: var(--text); }
+  .d-row.proj.co .d-note { position: absolute; left: 36px; right: 10px; top: 28px; pointer-events: none; }
+  .d-row.proj.co > .d-more, .d-row.proj.co > :global(.dtile) { margin-top: 3px; }
+  .d-note { animation: dNoteIn 200ms cubic-bezier(.165, .84, .44, 1) both; }
+  @keyframes dNoteIn { from { opacity: 0; transform: translateY(3px); } }
+  /* 「谁开的」小方块：缩进带里正对项目图标那一列（同 .d-dot 的位置），收藏区没有缩进带就内联在标题前 */
+  .d-by { flex: none; display: inline-flex; line-height: 0; margin-right: -2px; }
+  .d-row.indent .d-by { position: absolute; left: -21.5px; top: 50%; transform: translateY(-50%); margin: 0; }
+  .d-row.indent.child .d-by { left: -39.5px; }
+  /* 共用块里的状态在行尾：在跑 = 官方星芒，等你 = 琥珀点；悬停时让位给 ⋮ */
+  .d-spark { flex: none; display: inline-flex; margin: 0 6px 0 auto; color: var(--coral); transition: opacity .12s ease; }
+  .d-row.indent .d-dot.d-end { position: static; transform: none; margin: 0 10px 0 auto; transition: opacity .12s ease; }
+  .d-apptag ~ .d-spark, .d-pwait ~ .d-spark, .d-exp ~ .d-spark, .d-apptag ~ .d-dot.d-end { margin-left: 2px; }
+  @media (hover: hover) { .d-row:hover .d-spark, .d-row:focus-within .d-spark, .d-row:hover .d-end, .d-row:focus-within .d-end { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .d-note { animation: none; } .d-pblock { transition: none; } }
   .d-projs.ins-end::after { bottom: 16px; }
   /* 会话缩进到项目标题文字正下方（项目行 8 padding + 20 图标 + 8 gap = 36 − 本行 8 padding） */
   .d-row.indent { margin-left: 28px; }
@@ -424,7 +485,7 @@
     .d-more:hover { color: var(--text); }
     .d-fold.closed { opacity: 1; pointer-events: auto; }   /* 折叠着的组：chevron 常显，不然看不出折了 */
     /* 官方同款：会话行 ⋮ 改绝对定位悬浮在行尾（不占排版位）——标题非悬停时吃满整行，
-       悬停时由跑马灯的 mask 在右侧 44→20px 挖出渐隐区给按钮让位。项目行有两枚尾按钮，维持原排版。 */
+       悬停时由跑马灯的 mask 在右侧 44→20px 挖出渐隐区给按钮让位。项目行只有折叠钮，留在排版流里。 */
     .d-row:not(.proj) .d-more { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); margin-right: 0; }
     .d-row:hover .d-title:global([data-ov]), .d-row:focus-within .d-title:global([data-ov]) {
       mask-image: linear-gradient(to right, transparent, #000 var(--mq-lf, 0px), #000 calc(100% - 44px), transparent calc(100% - 20px));

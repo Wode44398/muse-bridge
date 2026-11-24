@@ -20,7 +20,7 @@ export const PLUGIN_FEATURES = Object.freeze([
   'config.hot', 'config.self', 'status', 'action', 'configOptions', 'store', 'panel', 'panel.config', 'process.args', 'sandbox.readDirs', 'claude.tool', 'claude.prompt', 'claude.mcp', 'agentOp', 'manual',
   'models.provide',
   // 四期：改到核心
-  'events', 'claude.hook', 'claude.permission', 'claude.input', 'claude.options', 'tools.agents', 'tools.agy', 'net', 'oauth', 'models.middleware', 'tool.card',
+  'events', 'claude.hook', 'claude.permission', 'claude.input', 'claude.options', 'tools.agents', 'tools.agy', 'tools.codex', 'net', 'oauth', 'models.middleware', 'tool.card',
   'replaces', 'service.priority', 'notify.channel', 'auth.provider',
   'ui.homeCard', 'ui.workbench', 'ui.command', 'ui.composerAction', 'ui.messageAction', 'ui.sessionAction', 'ui.theme',
   // 插件应用：主页图标 + 全屏分页（ctx.ui.app / 清单 ui.apps）；没有 index.mjs 的纯页面插件
@@ -31,6 +31,14 @@ export const PLUGIN_FEATURES = Object.freeze([
   'ui.app.view', 'ui.refresh', 'ui.blocks',
   // 更多插槽：文件「用 X 打开」、命令面板收录插件命令、应用固定到 Claude 侧栏、市场的应用分类
   'ui.fileHandler', 'ui.command.palette', 'ui.app.pin', 'market.app',
+  // 工作区插槽：文件夹外观与菜单项（plugins/workspace.mjs）、Claude 记忆目录、Antigravity 的回合事件、agy 插件提示带会话目录
+  'ui.workspaceDecor', 'ui.workspaceAction', 'ui.refreshDecor', 'claude.memory', 'events.agy', 'prompt.agy.cwd',
+  // 六期：实时通道（ctx.socket / 页面 bridge.socket）、工作区卡片进各 agent 分页（ctx.ui.workbench 的 hosts）、页面下载（bridge.download）
+  'socket', 'page.socket', 'ui.workbench.hosts', 'page.download', 'tools.codex',
+  // 八期：插件以某个身份调只读的 agent 操作（ctx.ops.call）、审批策略能要求用户本人批（'ask'）、别的 agent 经 bridge 操作发来的轮带 via
+  'ops.call', 'claude.permission.ask', 'events.via',
+  // 审批策略也管 Antigravity（agents:['agy']）、确保 Claude 项目、消息改写给模型的旁注（hint，不进标题、界面不显示）
+  'claude.permission.agy', 'claude.ensureProject', 'claude.input.hint',
 ]);
 
 const parse = (v) => {

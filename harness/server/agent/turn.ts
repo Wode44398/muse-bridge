@@ -23,7 +23,10 @@ export interface ArtifactRef {
 export type Block =
   | { t: "text"; text: string }
   // Anthropic needs `signature` echoed back to continue an interrupted thought.
-  | { t: "thinking"; text: string; signature?: string }
+  // 一条 assistant 消息里可以有多块思考，与正文、工具调用按模型产出的原顺序排（旧会话里是拼成一块、排在最前，照样能回放）。
+  // redacted：Anthropic 的 redacted_thinking 原样数据（text 为空）；wire：OpenAI 兼容流里出自 reasoning_content。
+  // details：OpenRouter 的 reasoning_details 原样条目（按流里的顺序，同一条的分片已拼好），带工具调用的回合要原样回传。
+  | { t: "thinking"; text: string; signature?: string; redacted?: string; wire?: "reasoning_content"; details?: Record<string, unknown>[] }
   // `asset` points at an immutable, session-owned local image. AgentState
   // materializes it to `data` immediately before a provider call, keeping
   // persisted transcripts small without exposing a local URL to vendors.
@@ -106,6 +109,8 @@ export interface CacheHint {
 
 // Q4：adapter 编码后的请求体的三种 wire 形状（OpenAI 兼容的几家共用 "openai"）。
 export type WireShape = "anthropic" | "openai" | "gemini";
+// adapter 自报的历史改写原因（replay-refused：端点拒收回传的思考字段，之后都去掉这些字段编码）
+export type WireRewrite = "replay-refused";
 
 export interface Hints {
   cache?: CacheHint[];
@@ -114,7 +119,8 @@ export interface Hints {
   providerExtras?: Record<string, unknown>;
   // Q4：请求观察者。adapter 在 fetch 之前把编码好的请求体交过来（只读）；只做前缀守恒判定这类诊断，
   // 出错也不影响请求（见 providers/wire-fingerprint.ts 的 observeWire）。
-  onWire?: (shape: WireShape, body: Record<string, unknown>) => void;
+  // rewrite：adapter 自己改写了历史的编码再发（端点拒收回传的思考字段、去掉重发），报备给判定器，这次断开不算未报备。
+  onWire?: (shape: WireShape, body: Record<string, unknown>, rewrite?: WireRewrite) => void;
 }
 
 export interface Turn {

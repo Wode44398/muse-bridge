@@ -42,7 +42,7 @@
     navigator.clipboard?.writeText(item.text).then(() => toast(t("已复制")));
   }
   const attIcon = (k: string): IconName => (k === "audio" ? "audio" : k === "video" ? "play" : k === "image" ? "camera" : k === "folder" ? "folder" : "file");
-  const attName = (p: string) => p.replace(/\/$/, "").split("/").pop() ?? p;
+  const attName = (p: string) => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
   // 附件：图片画成小缩略图、点开进本会话画廊；其它文件（pdf / 文档 / 音视频）点开进查看器；文件夹只是标注。
   // 读法同工作区文件（dock 接口按本会话的工作区解析 .dimensio/uploads/… 路径）。缩略图加载失败就退回文件芯片。
   // 视频（浏览器画得出的 mp4 / mov / webm）同样画成小图（取第 0.1 秒那一帧 + ▶），点开进查看器

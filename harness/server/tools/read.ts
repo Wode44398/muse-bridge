@@ -18,6 +18,10 @@ import {
   videoDurationSeconds,
   type SupportedVideoMime,
 } from "../video.ts";
+import { ARG_ALIASES } from "./arg-aliases.ts";
+import { looksLikePdf, MAX_PDF_PAGES_PER_READ, readPdf } from "./read/pdf.ts";
+import { looksLikeNotebook, readNotebook } from "./read/notebook.ts";
+import { withheldNoteText } from "../memory-files.ts";
 
 const MAX_LINES = 2000;
 const MAX_LINE_LEN = 2000;
@@ -26,21 +30,21 @@ const BINARY_SNIFF_BYTES = 8192;
 export const readTool: Tool = {
   effect: "read",
   concurrencySafe: true,
+  aliases: ARG_ALIASES.Read,
   def: {
     name: "Read",
     description:
-      "Read a text file, inspect a PNG/JPEG/WebP image, watch an MP4/WebM/MOV video, or listen to MP3/WAV/FLAC/M4A/OGG audio from the sandbox. " +
-      "Text returns cat -n style numbered lines. A video goes to the model whole when it reads video, otherwise it is " +
-      "sampled into evenly spaced frames (use limit to change how many). Audio is sent natively only to an audio-capable model such as MiMo (24 MB/file). " +
-      "A multimodal main model receives image pixels natively; a text-only model receives an auxiliary vision description. " +
-      "Use offset/limit for large files; ranges accumulate. You must Read a file before you can Edit it, " +
-      "and must have read every line before overwriting it with Write.",
+      "Read a file: text (cat -n style numbered lines), PDF (text per page), Jupyter notebook (cells with outputs), " +
+      "PNG/JPEG/WebP image, MP4/WebM/MOV video, or MP3/WAV/FLAC/M4A/OGG audio. " +
+      "A model that cannot see images or video gets a vision description or sampled frames instead; audio needs an audio-capable model. " +
+      "Use offset/limit for large files.",
     parameters: {
       type: "object",
       properties: {
-        path: { type: "string", description: "File path (relative to the sandbox root or absolute within it)." },
-        offset: { type: "integer", description: "1-based line to start from." },
-        limit: { type: "integer", description: `Max lines to read (default ${MAX_LINES}); for a video, how many frames to sample (default ${DEFAULT_FRAMES}).` },
+        path: { type: "string", description: "File path (relative to the workspace root, or absolute)." },
+        offset: { type: "integer", description: "1-based line to start from (for a notebook: cell)." },
+        limit: { type: "integer", description: `Max lines to read (default ${MAX_LINES}); notebook: cells; video: frames to sample (default ${DEFAULT_FRAMES}).` },
+        pages: { type: "string", description: `PDF pages to read, e.g. "3", "1-5", "2,7-9" (max ${MAX_PDF_PAGES_PER_READ} per call; default the first ${MAX_PDF_PAGES_PER_READ}).` },
         question: { type: "string", description: "For media, the specific question to answer." },
         fullRes: {
           type: "boolean",
@@ -52,6 +56,9 @@ export const readTool: Tool = {
   },
   async run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolRunResult> {
     const abs = ctx.sandbox.resolve(String(args.path));
+    // K9：自己记忆目录里命中注入特征的笔记只给扣留说明（索引、Recall 同样只露标题）
+    const withheld = withheldNoteText(abs, ctx.sandbox.root);
+    if (withheld) return ok(`withheld ${ctx.sandbox.rel(abs)}`, withheld);
     let bytes: Buffer;
     let mtimeMs: number;
     try {
@@ -151,6 +158,31 @@ export const readTool: Tool = {
         "unsupported video",
         `${args.path} is not an MP4, WebM, or MOV. Convert it first (ffmpeg -i "${args.path}" out.mp4) and Read that.`,
       );
+    }
+
+    // PDF：按页抽文本（不进 readFileState——它不是能按文本改写的文件）
+    if (looksLikePdf(bytes)) {
+      const pdf = await readPdf(bytes, ctx.sandbox.rel(abs), args.pages);
+      return { ...(pdf.ok ? ok(pdf.summary, redactOutput(pdf.text)) : fail(pdf.summary, pdf.text)), ...(pdf.outcome ? { outcome: pdf.outcome } : {}) };
+    }
+    // notebook：按单元格渲染。读过就记一笔；一次渲染了全部单元格算读全（否则「读全」档下永远没法整份覆盖 notebook——
+    // 渲染视图没有按行的原文可读），只读了一部分的照旧算没读全。重读会清掉工具刷新视图的 stale 标记
+    if (looksLikeNotebook(abs) && bytes.subarray(0, BINARY_SNIFF_BYTES).indexOf(0) === -1) {
+      const raw = bytes.toString("utf8");
+      const nb = readNotebook(raw, ctx.sandbox.rel(abs), args.offset, args.limit);
+      if (nb.ok) {
+        const previous = ctx.readFileState.get(abs);
+        const keep = previous?.content === raw && !previous.stale && (previous.complete || !nb.complete);
+        ctx.readFileState.set(
+          abs,
+          keep && previous
+            ? previous
+            : nb.complete
+              ? { mtimeMs, content: raw, readRanges: [[1, raw.split("\n").length]], complete: true }
+              : { mtimeMs, content: raw, readRanges: [], complete: false },
+        );
+        return { ...ok(nb.summary, redactOutput(nb.text)), ...(nb.outcome ? { outcome: nb.outcome } : {}) };
+      }
     }
 
     // A binary file decoded as UTF-8 is a context bomb: an mp4/apk turns into

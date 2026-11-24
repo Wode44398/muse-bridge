@@ -23,6 +23,7 @@
 // 带关闭动画的层（设置页的「模糊→清晰」收场、claude/studio 整页右滑出）由组件用 registerCloser
 // 注册其带动画的关闭函数；其余层直接置 false（关闭动画走各自 CSS/transition）。
 import { ui, rootScreen } from './state.svelte.js';
+import { isPageWindow } from './windowPage.svelte.js';
 import { preview, closePreview } from './preview.svelte.js';
 import { closePage, switchPage } from './pageMorph.js';
 import { takeScreenReturn, takeNativeReturn } from './screenReturn.svelte.js';
@@ -91,8 +92,8 @@ function closeTopLayer() {
   // 放在各分页自己的层之后（先关这一页里开着的东西）、根页判断之前：单 agent 模式下从应用跳到根页（Claude 页）同样该回应用。只认一次，之后照常。
   const back = takeScreenReturn();
   if (back) { switchPage(back); return true; }
-  // 单 agent 模式：根页就是「主页」——到这儿无层可关，交给原生退后台
-  if (ui.screen !== rootScreen()) {
+  // 单 agent 模式或独立分页窗口：根页就是底——到这儿无层可关
+  if (!isPageWindow() && ui.screen !== rootScreen()) {
     // 按当前分页分派各自的返回逻辑（此前 files/antigravity 也被派去 claudeSlide——
     // 隐藏的 ClaudePage 播滑出动画、工作空间的面包屑逐级返回被跳过）。
     // 回主页一律走 closePage：这一页收回它在主页上的入口（lib/pageMorph.js）。

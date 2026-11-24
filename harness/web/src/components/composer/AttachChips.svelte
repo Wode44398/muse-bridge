@@ -29,7 +29,7 @@
   let broken = $state<string[]>([]);
   let dur = $state<Record<string, string>>({});
 
-  const baseName = (p: string) => p.replace(/\/$/, "").split("/").pop() || p;
+  const baseName = (p: string) => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
   const srcOf = (p: string) => attachLocal[p]?.url ?? api.dockFileUrl(pane.chat.id ? { chatId: pane.chat.id } : {}, p);
   const thumbOf = (p: string) => (broken.includes(p) ? null : previewable(p));
   function iconOf(p: string): IconName {

@@ -6,7 +6,7 @@
 //     不混进管理员那份 registry.json——管理员侧的读取方（Claude 注入、Codex、管理员的 dimensio、扩展列表）一个都看不到它，
 //     不会把某个成员的技能漏给管理员或别的成员。
 //   · 只收技能（SKILL.md）。连接器要在服务器上起进程、插件能带 hooks，都是主机级能力，不下放给成员。
-//   · 生效的 agent 只有 claude 与 dimensio（codex 不支持多用户）。
+//   · 生效的 agent 只有 claude 与 dimensio（Codex 的扩展中心注入只给管理员会话，成员的技能没接过去）。
 //   · Claude：聚合成一个本地插件（名 mine，技能叫 mine:<名>），claudeExtensionsFor 给成员注入「全服 + 自己的」；
 //     沙箱对这棵目录只读放行（claude.mjs sandboxFence）。
 //   · dimensio：成员实例经 DIMENSIO_SKILL_REGISTRIES 读「自己的注册表 + 全服技能清单」（harness/server/extensions.ts）。

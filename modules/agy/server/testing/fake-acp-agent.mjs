@@ -6,7 +6,10 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
 import { maybeHandleFakeCliSubcommand } from './fake-cli-subcommands.mjs';
+
+const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
 
 maybeHandleFakeCliSubcommand();
 
@@ -365,6 +368,9 @@ saveDiskState(disk);
 const liveSessions = new Map();
 const activePrompts = new Map();
 const pendingClientCalls = new Map();
+// 模拟真 agy：子代理卡在待审批（steps.status=9）时不会主动推 session/request_permission，
+// 必须等客户端对该 subId 调 session/resume 才立刻推送权限请求。
+const pendingSubagentPerms = new Map(); // subId -> () => Promise<void>
 let clientReqSeq = 1;
 
 function thoughtOptionsFor(model) {
@@ -535,7 +541,10 @@ rl.on('line', async (line) => {
         agentInfo: { name: 'Antigravity ACP Server', version: '1.5.10' },
         agentCapabilities: {
           loadSession: true,
-          promptCapabilities: { image: true, audio: false, embeddedContext: true },
+          // 状态文件里写了 promptCapabilities 就按它报（null = 像老版本那样不报），用来测附件按能力分流
+          ...('promptCapabilities' in disk
+            ? (disk.promptCapabilities ? { promptCapabilities: disk.promptCapabilities } : {})
+            : { promptCapabilities: { image: true, audio: false, embeddedContext: true } }),
           sessionCapabilities: { resume: {}, close: {}, load: {}, list: {}, additionalDirectories: {} },
           auth: { logout: {} },
           _meta: { antigravity: { tier: true, systemPrompt: { append: true } } },
@@ -603,6 +612,15 @@ rl.on('line', async (line) => {
 
   if (method === 'session/resume') {
     const sid = params.sessionId;
+    if (pendingSubagentPerms.has(sid)) {
+      const cfg = { model: 'gemini-4-carbon', thought_level: 'medium', mode: 'default' };
+      liveSessions.set(sid, { cwd: params.cwd, cfg, append: '' });
+      send({ id, result: sessionResultPayload(sid, cfg) });
+      const trigger = pendingSubagentPerms.get(sid);
+      pendingSubagentPerms.delete(sid);
+      setImmediate(() => { trigger().catch(() => {}); });
+      return;
+    }
     if (!disk.sessions[sid]) {
       send({ id, error: { code: -32602, message: `Unknown session: ${sid}` } });
       return;
@@ -786,6 +804,12 @@ rl.on('line', async (line) => {
     }
 
     const blocks = Array.isArray(params.prompt) ? params.prompt : [];
+    // 状态文件里的 rejectPromptBlockTypes：带了这些类型的内容块就整条拒收（模拟 agy 不认某种块）
+    const rejectTypes = loadDiskState().rejectPromptBlockTypes;
+    if (Array.isArray(rejectTypes) && blocks.some((b) => rejectTypes.includes(b?.type))) {
+      send({ id, error: { code: -32602, message: 'unsupported content block type' } });
+      return;
+    }
     const textBlock = blocks.find((b) => b.type === 'text');
     const imageCount = blocks.filter((b) => b.type === 'image').length;
     const promptText = textBlock?.text || '';
@@ -869,6 +893,114 @@ rl.on('line', async (line) => {
       saveDiskState(disk);
       activePrompts.delete(sid);
       send({ id, result: { stopReason: 'end_turn', usage: { inputTokens: 80, outputTokens: 32, cachedReadTokens: 0, thoughtTokens: 6, totalTokens: 118 } } });
+      return;
+    }
+
+    // [TEAMWORK_SUB_PERM]：两层子代理里第 2 层 worker 卡在 steps.status=9 待审批，
+    // 复现真 agy 行为：不经 session/resume(workerId) 绝不发 session/request_permission；resume 后立即推送。
+    if (promptText.includes('[TEAMWORK_SUB_PERM]') && fakeDataDir) {
+      saved.history.push({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: promptText } });
+      const coordId = crypto.randomUUID();
+      const workerId = crypto.randomUUID();
+      const rootSys = path.join(brainDirOf(sid), '.system_generated');
+      const coordSys = path.join(brainDirOf(coordId), '.system_generated');
+      const workerSys = path.join(brainDirOf(workerId), '.system_generated');
+      fs.mkdirSync(path.join(rootSys, 'subagents'), { recursive: true });
+      fs.mkdirSync(path.join(rootSys, 'messages'), { recursive: true });
+      fs.mkdirSync(path.join(coordSys, 'subagents'), { recursive: true });
+      fs.mkdirSync(path.join(coordSys, 'logs'), { recursive: true });
+      fs.mkdirSync(path.join(workerSys, 'logs'), { recursive: true });
+      const convDir = path.join(fakeDataDir, 'conversations');
+      fs.mkdirSync(convDir, { recursive: true });
+
+      const nowIso = new Date().toISOString();
+      fs.writeFileSync(path.join(rootSys, 'subagents', coordId + '.json'), JSON.stringify({
+        conversationId: coordId,
+        subagentDescriptor: { typeName: 'teamwork_coordinator', role: 'Teamwork Coordinator' },
+        state: 'SUBAGENT_STATE_ALIVE',
+        spawnStepIndex: 1,
+      }), 'utf8');
+      fs.writeFileSync(path.join(coordSys, 'subagents', workerId + '.json'), JSON.stringify({
+        conversationId: workerId,
+        subagentDescriptor: { typeName: 'teamwork_worker', role: 'M1 Live Sync Worker' },
+        state: 'SUBAGENT_STATE_ALIVE',
+        spawnStepIndex: 2,
+      }), 'utf8');
+
+      fs.writeFileSync(path.join(coordSys, 'logs', 'transcript_full.jsonl'), [
+        JSON.stringify({ step_index: 0, source: 'SYSTEM', type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: nowIso, content: '协调抓取任务' }),
+        JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: nowIso, model: 'gemini-4-neon-high', tool_calls: [{ name: 'invoke_subagent', args: { TypeName: 'teamwork_worker', Role: 'M1 Live Sync Worker' } }] }),
+        JSON.stringify({ step_index: 2, source: 'SYSTEM', type: 'GENERIC', status: 'DONE', created_at: nowIso, content: `Subagent launched with conversationId: ${workerId}` }),
+      ].join('\n') + '\n', 'utf8');
+
+      fs.writeFileSync(path.join(workerSys, 'logs', 'transcript_full.jsonl'), [
+        JSON.stringify({ step_index: 0, source: 'SYSTEM', type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: nowIso, content: '运行线上榜单抓取脚本' }),
+        JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: nowIso, model: 'gemini-4-hydrogen-tiered-high', tool_calls: [{ name: 'run_command', args: { CommandLine: 'python aa_data/fetch_ca.py', BypassSandbox: true, toolSummary: '抓取线上榜单' } }] }),
+      ].join('\n') + '\n', 'utf8');
+
+      const workerDbFile = path.join(convDir, workerId + '.db');
+      const wdb = new DatabaseSync(workerDbFile);
+      wdb.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; CREATE TABLE steps (idx integer PRIMARY KEY, step_type integer NOT NULL DEFAULT 0, status integer NOT NULL DEFAULT 0)');
+      wdb.prepare('INSERT INTO steps (idx, step_type, status) VALUES (?, ?, ?)').run(0, 101, 3);
+      wdb.prepare('INSERT INTO steps (idx, step_type, status) VALUES (?, ?, ?)').run(1, 15, 3);
+      wdb.prepare('INSERT INTO steps (idx, step_type, status) VALUES (?, ?, ?)').run(2, 132, 9);
+      wdb.close();
+
+      pendingSubagentPerms.set(workerId, async () => {
+        const permRes = await callClientWithStringId('subperm', 'session/request_permission', {
+          sessionId: workerId,
+          toolCall: {
+            toolCallId: 'sub_cmd_1',
+            name: 'run_command',
+            kind: 'execute',
+            status: 'pending',
+            title: 'python aa_data/fetch_ca.py',
+            rawInput: { CommandLine: 'python aa_data/fetch_ca.py', BypassSandbox: true, toolSummary: '抓取线上榜单' },
+          },
+          options: [
+            { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+            { optionId: 'deny', name: 'Deny', kind: 'reject_once' },
+          ],
+        });
+        const opt = permRes?.outcome?.optionId || permRes?.outcome?.outcome || 'cancelled';
+        const udb = new DatabaseSync(workerDbFile);
+        udb.exec('PRAGMA busy_timeout=5000;');
+        udb.prepare('UPDATE steps SET status = ? WHERE idx = 2').run(opt === 'allow' ? 3 : 7);
+        udb.close();
+        appendTranscript(workerId, {
+          step_index: 2,
+          source: 'SYSTEM',
+          type: 'GENERIC',
+          status: opt === 'allow' ? 'DONE' : 'ERROR',
+          content: `subperm=${opt}`,
+        });
+        appendTranscript(sid, {
+          step_index: 2,
+          source: 'MODEL',
+          type: 'PLANNER_RESPONSE',
+          content: `子代理权限结果：${opt}`,
+        });
+      });
+
+      const call = {
+        toolCallId: 'call_tw_perm_' + Date.now(),
+        name: 'invoke_subagent',
+        kind: 'other',
+        title: 'Run invoke_subagent',
+        rawInput: { TypeName: 'teamwork_coordinator', Role: 'Teamwork Coordinator', Prompt: '协调抓取' },
+        rawOutput: { output: `Subagent launched with conversationId: ${coordId}` },
+      };
+      sendUpdate(sid, { sessionUpdate: 'tool_call', status: 'in_progress', ...call });
+      sendUpdate(sid, { sessionUpdate: 'tool_call_update', status: 'completed', ...call });
+      saved.history.push({ sessionUpdate: 'tool_call', status: 'completed', ...call });
+      const text = '已派出 Teamwork 团队执行抓取。';
+      appendTranscript(sid, { step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: promptText });
+      appendTranscript(sid, { step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', content: text });
+      sendUpdate(sid, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
+      saved.history.push({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
+      saveDiskState(disk);
+      activePrompts.delete(sid);
+      send({ id, result: { stopReason: 'end_turn', usage: { inputTokens: 60, outputTokens: 20, cachedReadTokens: 0, thoughtTokens: 5, totalTokens: 85 } } });
       return;
     }
 
@@ -1114,7 +1246,18 @@ export const EASE = {
       const cmdLine = promptText.includes('[PERM_CD]')
         ? `Set-Location "${live.cwd}"; node app.js --verify`
         : 'echo ok';
-      const toolCall = {
+      // [PERM_BRIDGE]：换成 bridge 自家工具的审批（mcp_bridge_call + chat.send 发给 Claude），验插件审批策略
+      const bridgeArgs = { op: 'chat.send', args: { message: '帮我出 apk' } };
+      const toolCall = promptText.includes('[PERM_BRIDGE]') ? {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'call_cmd_1',
+        name: 'mcp_bridge_call',
+        kind: 'other',
+        status: 'pending',
+        title: 'bridge / call',
+        args: bridgeArgs,
+        rawInput: bridgeArgs,
+      } : {
         sessionUpdate: 'tool_call',
         toolCallId: 'call_cmd_1',
         name: 'run_command',

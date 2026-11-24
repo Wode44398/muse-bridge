@@ -1266,7 +1266,7 @@ Plural forms are shown as `one / other`.
 | 有对话正在跑，停下后才能X | A chat is running. Stop it first to {verb}. | — |
 | {time} 前没人批，就拒绝 | If no one approves by {time}, it will be denied | review: If no one reviews by {time}, … |
 | 已开启：{后果} | On. {Consequence}. | 已开启：Claude 可以读屏… → On. Claude can read the screen… |
-| 未开启 · 点此… | Off · Tap to {verb} | Off · Tap to turn on “Claude Bridge” in Settings |
+| 未开启 · 点此… | Off · Tap to {verb} | Off · Tap to turn on “Bridge” in Settings |
 | 已关闭，{后果} | Off. {Consequence}. | Off. Agents can’t access this computer. |
 | 去开启 / 去允许 / 去配置 | Turn on / Allow / Set up | jumps to system settings: Open Settings |
 | 留空＝X | Leave blank to {verb} | 留空＝不改 → Leave blank to keep current |

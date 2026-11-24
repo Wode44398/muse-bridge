@@ -1,0 +1,21 @@
+{
+  "id": "workspace-demo",
+  "name": "协作工作空间（示例插件）",
+  "version": "1.0.0",
+  "description": "工作区插槽的示例：把一个文件夹标成 Antigravity 与 Claude 共用，两个分页各按自己的样子画底板、标识、状态行、悬停卡与会话标记；文件夹菜单里设为 / 取消协作（带开关的确认框、可撤销）。",
+  "author": "claude-bridge",
+  "category": "third-party",
+  "entry": "index.mjs",
+  "engines": { "pluginApi": 3 },
+  "permissions": ["ui", "events", "claude.tools", "claude.memory"],
+  "config": {
+    "seedFolder": {
+      "type": "string", "default": "", "max": 1024, "label": "第一次启用时预先共用的文件夹",
+      "desc": "绝对路径；留空 = bridge 程序目录。只在第一次启用时用一次，之后在文件夹菜单里设"
+    },
+    "demoBusy": {
+      "type": "boolean", "default": true, "label": "演示「在干活」",
+      "desc": "每 20 秒在 Claude / Antigravity / 都不 之间轮换一次，给界面验证用"
+    }
+  }
+}

@@ -18,6 +18,7 @@ import { attachSession, send } from "./test-harness/session-fixture.ts";
 import { call, calls, fakeSummary, say, scripted, useTool } from "./test-harness/scripted-adapter.ts";
 import { drive, loopState } from "./test-harness/trajectory.ts";
 import { anthropicCacheModel, fakeAnthropicFetch } from "./test-harness/wire-fakes.ts";
+import { defaultProfile } from "./agent/profile.ts";
 import { memoryAuditTool } from "./tools/memoryaudit.ts";
 import { ok, type Tool } from "./tools/types.ts";
 
@@ -26,6 +27,8 @@ const KNOWN_BROKEN: Record<string, string> = {};
 // 语义召回要调嵌入接口；测试一律走词法召回，不出网。
 const SAVED_SEMANTIC = process.env.KNOWLEDGE_AUTO_SEMANTIC;
 process.env.KNOWLEDGE_AUTO_SEMANTIC = "0";
+// 每轮自动召回是档案开关（lean 默认关、hardened 开）：这里量的是召回本身，夹具用打开了它的默认档案
+const RECALL_ON = { ...defaultProfile(), memory: { autoRecall: true } };
 const roots: string[] = [];
 after(() => {
   if (SAVED_SEMANTIC === undefined) delete process.env.KNOWLEDGE_AUTO_SEMANTIC;
@@ -121,7 +124,7 @@ test("Q2 ① 单 run 多个工具轮：1 个窗（召回插在本轮用户消息
     useTool("r3", "Read", { path: "package.json" }),
     say("看完了"),
   );
-  const session = attachSession(adapter, root);
+  const session = attachSession(adapter, root, { profile: RECALL_ON });
   await send(session, "看一下 src/api.ts 里的 /health 路由");
   assert.ok(hasRecall(adapter.inputs[0].messages), "前提：这一轮要真的召回到东西");
   expectLayout(t, "one-run", adapter.inputs, { windows: 1 });
@@ -131,7 +134,7 @@ test("Q2 ① 单 run 多个工具轮：1 个窗（召回插在本轮用户消息
 test("Q2 ② 连续三条用户消息（各带召回）：应当 1 个窗", async (t) => {
   const root = workspace("dimensio-layout-2-");
   const adapter = scripted(t);
-  const session = attachSession(adapter, root);
+  const session = attachSession(adapter, root, { profile: RECALL_ON });
   const asks = ["看一下 src/api.ts 里的 /health 路由", "src/api.ts 的 port 从哪来", "src/math.ts 的 add 怎么用"];
   for (const [i, ask] of asks.entries()) {
     const first = adapter.callCount;
@@ -241,7 +244,7 @@ test("Q2 Anthropic：跨 run 的首个请求应当命中上一 run 的最后写�
     useTool("r2", "Read", { path: "src/api.ts" }), say("答二"),
   ]);
   const adapter = createAdapter({ provider: "anthropic", apiKey: "FAKE-DUMMY-KEY", model: "claude-sonnet-4-6", baseUrl });
-  const session = attachSession(adapter, root);
+  const session = attachSession(adapter, root, { profile: RECALL_ON });
   await send(session, "看一下 src/api.ts 里的 /health 路由");
   const run2 = wire.bodies.length;
   await send(session, "src/api.ts 的 port 从哪来");

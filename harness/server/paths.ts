@@ -100,6 +100,20 @@ export function projectMemoryRoot(): string {
   return guard("项目记忆目录", path.join(path.dirname(configFile()), "project-memory"));
 }
 
+// 子 agent 的隔离 worktree（agent/subagent/worktree.ts）：每个一个子目录。同会话协作台账，放在运行配置同目录、跟着数据目录走；
+// 不另设环境变量。
+export function worktreesRoot(): string {
+  return guard("子 agent worktree 目录", path.join(path.dirname(configFile()), "worktrees"));
+}
+
+// 用户级的 agent 定义目录（Claude Code 的 ~/.claude/agents 与 dimensio 自己的 ~/.dimensio/agents）。测试进程只认临时目录下的
+// （测试把 HOME / USERPROFILE 指到临时目录才读得到），否则一个都不给。
+export function userAgentDirs(): string[] {
+  const home = os.homedir();
+  const dirs = [path.join(home, ".claude", "agents"), path.join(home, ".dimensio", "agents")];
+  return inTestProcess() ? dirs.filter((d) => underTmp(d)) : dirs;
+}
+
 // 自定义模型服务（custom-providers.ts）：providers.json 是地址与备注，同目录的 connector-secrets.* 是加密的 API key。
 export function customProvidersDir(): string {
   return guard("自定义模型服务目录", fromEnv("DIMENSIO_CUSTOM_PROVIDERS_DIR") ?? path.resolve(dataHome(), "custom-providers"));
@@ -149,6 +163,23 @@ export function defaultWorkspace(): string {
 // 机器级 GUIDE（对所有工作区生效，注入 system prompt）。
 export function globalGuideFile(): string {
   return guard("全局 GUIDE", fromEnv("DIMENSIO_GLOBAL_GUIDE") ?? path.join(os.homedir(), ".dimensio", "GUIDE.md"));
+}
+
+// 用户级的 agent 配置目录（hooks 的 settings.json、技能 skills/、命令 commands/）：默认 ~/.dimensio 与 ~/.claude，
+// 前面的优先。DIMENSIO_USER_CONFIG_DIRS 按 PATH 分隔符给出就只认它们。测试进程只认临时目录下的，没给就一个都没有
+// （不读本机真实的 ~/.claude）。
+export function userConfigDirs(): string[] {
+  const list = process.env.DIMENSIO_USER_CONFIG_DIRS;
+  const dirs =
+    list !== undefined
+      ? list.split(path.delimiter).map((s) => s.trim()).filter(Boolean).map((s) => path.resolve(s))
+      : [path.join(os.homedir(), ".dimensio"), path.join(os.homedir(), ".claude")];
+  return inTestProcess() ? dirs.filter((d) => underTmp(d)) : dirs;
+}
+
+// 项目级 hooks 的信任记录（工作区 + 配置内容哈希）。放在运行配置同目录、跟着数据目录走；不另设环境变量。
+export function hookTrustFile(): string {
+  return guard("hooks 信任记录", path.join(path.dirname(configFile()), "hook-trust.json"));
 }
 
 // .env（各家 API key）。测试进程只认显式指到临时目录下的文件，否则一个都不加载。

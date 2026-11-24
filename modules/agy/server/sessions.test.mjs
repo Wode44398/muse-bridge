@@ -15,12 +15,14 @@ import {
   applyToolApprovalsMeta,
   extractRecentSessionDirs,
   getSessionMeta,
+  hideSessions,
+  markSessionDeleted,
   noteSessionMeta,
 } from './sessions.mjs';
 import { buildEffectiveAgySystemPrompt } from './settings.mjs';
 import { createProject } from './projects.mjs';
 import { reconstructHistoryMessages } from './events.mjs';
-import { agyCredentialsPresent, prepareReadOnlyDaemonDir, unlockDaemonDir } from './acp/binary.mjs';
+import { agyCredentialsPresent, prepareReadOnlyDaemonDir, unlockDaemonDir, defaultDaemonCwd } from './acp/binary.mjs';
 import { setAcpClientForTest } from './acp/index.mjs';
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'bridge-agy-sessions-'));
@@ -397,11 +399,27 @@ test('会话 cwd 强提示与只读空 daemon-cwd 守卫：注入真实项目绝
   assert.match(prompt, /`C:\\shared\\docs`/);
   assert.doesNotMatch(prompt, /已授权附加工作目录：.*daemon-cwd/);
 
-  // 若传入的本身是 daemon-cwd 伪目录，绝不把它写进系统提示冒充项目目录
+  // 若传入的本身是 daemon-cwd 伪目录（含迁出仓库后的系统临时目录形态），绝不把它写进系统提示冒充项目目录
   const pseudoPrompt = buildEffectiveAgySystemPrompt({}, {
     cwd: 'C:\\data\\agy\\daemon-cwd',
   });
   assert.doesNotMatch(pseudoPrompt, /【当前会话工作目录】/);
+  const tmpPseudoPrompt = buildEffectiveAgySystemPrompt({}, {
+    cwd: path.join(os.tmpdir(), 'claude-bridge-agy', 'abc123-main', 'daemon-cwd'),
+  });
+  assert.doesNotMatch(tmpPseudoPrompt, /【当前会话工作目录】/);
+
+  // defaultDaemonCwd 必须落在 os.tmpdir() 下、远离仓库/数据根，且不同 slot / scope 互相隔离
+  const repoRoot = 'C:\\Users\\you\\claude-bridge';
+  const mainDaemon = defaultDaemonCwd('main', repoRoot);
+  const desktopDaemon = defaultDaemonCwd('desktop', repoRoot);
+  const otherDaemon = defaultDaemonCwd('main', 'C:\\tmp\\other-data-root');
+  assert.equal(path.basename(mainDaemon), 'daemon-cwd');
+  assert.equal(mainDaemon.toLowerCase().startsWith(path.resolve(os.tmpdir()).toLowerCase()), true);
+  assert.equal(mainDaemon.toLowerCase().startsWith(repoRoot.toLowerCase()), false);
+  assert.notEqual(mainDaemon, desktopDaemon);
+  assert.notEqual(mainDaemon, otherDaemon);
+  assert.equal(isDaemonPseudoCwd(mainDaemon), true);
 
   // prepareReadOnlyDaemonDir 清空残留文件并锁定为只读空目录
   const roDaemon = path.join(tmp, 'ro', 'daemon-cwd');
@@ -492,4 +510,32 @@ test('applyLastTurnStatsMeta：最后一轮的用时与 token 只挂到提问对
   const other = [{ role: 'user', text: '在 agy 自己界面里问的' }, { role: 'assistant', text: 'c' }];
   applyLastTurnStatsMeta(other, meta);
   assert.equal(other[1].stats, undefined);
+
+  // 用户消息带「本轮附加文件路径：」前缀（附带原图或文件）时，裸 prompt 仍能正确命中用时统计与中断标记
+  const withAtt = [
+    { role: 'user', text: '本轮附加文件路径：\n- C:\\uploads\\1795-a.png\n\n现在来做那个 editing' },
+    { role: 'assistant', text: '半截回答' },
+  ];
+  applyLastTurnStatsMeta(withAtt, meta);
+  assert.deepEqual(withAtt[1].stats, { ms: 4200, tokens: 321 });
+  applyInterruptedMeta(withAtt, {
+    lastTurnStatus: 'interrupted',
+    interruptedTurns: [{ prompt: '现在来做那个 editing', partialText: '半截回答' }],
+  });
+  assert.equal(withAtt[1].status, 'interrupted');
+});
+
+test('hideSessions：批量隐藏去重、保留原 updatedAt、跳过已彻底删除的墓碑', () => {
+  const dir = path.join(tmp, 'batch-hide');
+  mkdirSync(dir, { recursive: true });
+  noteSessionMeta(dir, 's-1', { title: '第一条', updatedAt: '2026-11-10T01:00:00.000Z' });
+  markSessionDeleted(dir, 's-del');
+
+  const hidden = hideSessions(dir, ['s-1', 's-2', 's-1', 's-del', '']);
+  assert.deepEqual(hidden, ['s-1', 's-2']);
+  assert.equal(getSessionMeta(dir, 's-1').hidden, true);
+  assert.equal(getSessionMeta(dir, 's-1').updatedAt, '2026-11-10T01:00:00.000Z');
+  assert.equal(getSessionMeta(dir, 's-2').hidden, true);
+  assert.equal(getSessionMeta(dir, 's-del').deleted, true);
+  assert.equal(getSessionMeta(dir, 's-del').hidden, undefined);
 });

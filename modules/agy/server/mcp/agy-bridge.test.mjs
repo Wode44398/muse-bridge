@@ -1129,11 +1129,22 @@ test('11-20 接入复查：改口补漏、不可用原因、系统提示按类�
   const few = await hub.listHubTools(ctx, { bridgeTools: { browser: false, terminal: false, device: false } });
   assert.ok(few.length && few.find((t) => t.name === 'tool_docs'), '只剩小工具时也要有 tool_docs');
 
-  // 精简参数表：batch 单步保留可用动作；完整说明里也列
-  const full = { name: 'device_act', description: 'x'.repeat(4000), inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['launch', 'batch'] }, actions: { type: 'array', items: { type: 'object', properties: { action: { type: 'string', enum: ['click', 'screenshot'] }, x: { type: 'number' } } } } } } };
+  // 精简参数表：batch 单步保留可用动作，且每个字段名都要留（agy 把 properties 当封闭表，没列的字段直接拒——11-22 反馈）
+  const full = { name: 'device_act', description: 'x'.repeat(4000), inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['launch', 'batch'] }, actions: { type: 'array', items: { type: 'object', properties: { action: { type: 'string', enum: ['click', 'screenshot'] }, x: { type: 'number', description: '很长的说明'.repeat(10) }, expect: { type: 'object', properties: { text: { type: 'string', description: 'x' } } } } } } } } };
   const compact = hub.compactAgyTool(full);
-  assert.deepEqual(compact.inputSchema.properties.actions.items.properties.action.enum, ['click', 'screenshot']);
-  assert.equal(compact.inputSchema.properties.actions.items.properties.x, undefined);
+  const stepProps = compact.inputSchema.properties.actions.items.properties;
+  assert.deepEqual(stepProps.action.enum, ['click', 'screenshot']);
+  assert.deepEqual(stepProps.x, { type: 'number' });
+  assert.deepEqual(stepProps.expect, { type: 'object', properties: { text: { type: 'string' } } });
+  // 真工具：device_browser / browser 的批内单步要能写 text / ref / x / selector / key
+  const real = await hub.listHubTools(ctx, {});
+  for (const name of ['browser', 'device_browser', 'device_act']) {
+    const t = real.find((x) => x.name === name);
+    if (!t) continue;
+    const p = t.inputSchema.properties.actions?.items?.properties || {};
+    const want = name === 'device_act' ? ['x', 'y', 'text', 'key'] : ['text', 'ref', 'x', 'y', 'selector', 'key', 'url', 'expect'];
+    for (const f of want) assert.ok(p[f], `${name} 的 batch 单步缺字段 ${f}`);
+  }
 
   // 系统提示：旧存档里那一行被剥掉；本地工具提示按类别拼，关掉的类别不提
   const s = await import('../settings.mjs');

@@ -4,6 +4,7 @@
   import '../../components/agy/theme.css';
   import { untrack, onMount } from 'svelte';
   import { ui, rootScreen } from '../../lib/state.svelte.js';
+  import { isPageWindow } from '../../lib/windowPage.svelte.js';
   import { closePage } from '../../lib/pageMorph.js';
   import { registerCloser } from '../../lib/nav.js';
   import { layout, makeSideYield } from '../../lib/layout.svelte.js';
@@ -25,6 +26,12 @@
   import ModelSheet from './ModelSheet.svelte';
   import ProjectSheet from './ProjectSheet.svelte';
   import AgyWorkspace from './AgyWorkspace.svelte';
+  import AgyPeerDuo from './AgyPeerDuo.svelte';
+  import AgyWorkspaceDialog from './AgyWorkspaceDialog.svelte';
+  import AgyWorkspaceSnack from './AgyWorkspaceSnack.svelte';
+  import { decorFor } from '../../lib/pluginUi.svelte.js';
+  import { decorFx, shownDecor } from '../../lib/agy/decor-flight.svelte.js';
+  import { decorKey, duoPeers } from '../../lib/agy/decor-view.js';
 
   const SB_KEY = 'bridge-agy-sidebar';
   const SB_W_KEY = 'bridge-agy-sidebar-w';
@@ -95,6 +102,9 @@
   const folderName = $derived(
     agy.cwd ? (agy.cwd.split(/[\\/]/).filter(Boolean).pop() || agy.cwd) : ''
   );
+  // 面包屑文件夹名后的小头像组：这个文件夹带插件外观（共用）时才有
+  const crumbDecor = $derived(agy.cwd ? shownDecor(decorFor('agy', agy.cwd), agy.cwd) : null);
+  const crumbKey = $derived(crumbDecor ? decorKey(agy.cwd) : '');
 
   const yielder = makeSideYield(() => sidebarOpenWide, (v) => { sidebarOpenWide = v; });
   $effect(() => {
@@ -106,6 +116,8 @@
   function setSidebar(open) {
     sidebarOpenWide = open;
     if (agyDock.open) yielder.forget();
+    // medium 档（折叠屏展开 / 小平板）只塞得下一根侧列：工作区开着时手动展开侧栏，把工作区收起让位，与 Claude 分页一致
+    if (open && layout.medium && agyDock.open) closeAgyDock();
     try { localStorage.setItem(SB_KEY, open ? '1' : '0'); } catch {}
   }
 
@@ -271,7 +283,8 @@
       </div>
     {/if}
 
-    <main class="agy-main" class:welcome={!chatMode}>
+    <div class="agy-pane">
+      <main class="agy-main" class:welcome={!chatMode}>
       <header class="agy-topbar">
         <div class="tb-left">
           {#if !wide}
@@ -285,7 +298,7 @@
               <span class="msr4">menu</span>
             </button>
           {:else if !sidebarShown}
-            {#if rootScreen() !== 'agy'}
+            {#if rootScreen() !== 'agy' && !isPageWindow()}
               <button
                 type="button"
                 class="tb-icon-btn"
@@ -339,6 +352,11 @@
               >
                 <span class="msr">folder</span>
                 <span class="tb-folder">{folderName}</span>
+                {#if crumbDecor}
+                  <span class="tb-duo" class:hide={!!decorFx.flying[crumbKey]} data-crumb-decor={crumbKey}>
+                    <AgyPeerDuo peers={duoPeers(crumbDecor)} busy={crumbDecor.busy} size={16} cut="var(--ag-bg)" />
+                  </span>
+                {/if}
               </button>
             {/if}
             {#if chatMode}
@@ -386,12 +404,10 @@
           <Composer centered docked={!wide} />
         </div>
       {/if}
-    </main>
+      </main>
 
-    <AgyWorkspace
-      {wide}
-      leftSidebarWidth={sidebarShown ? effectiveSidebarW : 0}
-    />
+      <AgyWorkspace {wide} />
+    </div>
   </div>
 
   {#if agy.sheetKind}
@@ -403,6 +419,9 @@
   {#if agy.projectSheetOpen}
     <ProjectSheet mode="project" onClose={() => { agy.projectSheetOpen = false; }} />
   {/if}
+
+  <AgyWorkspaceDialog compact={!wide} />
+  <AgyWorkspaceSnack compact={!wide} />
 
   {#if agy.hiddenOpen}
     <ProjectSheet mode="hidden" onClose={() => { agy.hiddenOpen = false; }} />
@@ -504,10 +523,19 @@
     from { transform: translateX(-100%); }
   }
 
+  /* 对话列 + 右侧工作区的共同容器（不含左侧会话栏）：让统一工作区外壳按这一格算宽度、限位、两列门槛与放大铺满，与 Claude 分页一致 */
+  .agy-pane {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+  }
+
   .agy-main {
     position: relative;
     flex: 1;
-    min-width: min(360px, 100%);
+    min-width: 0;
     min-height: 0;
     display: flex;
     flex-direction: column;
@@ -570,7 +598,8 @@
     min-width: 0;
   }
   .tb-folder-btn {
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
     display: inline-flex;
     align-items: center;
     gap: 4px;
@@ -592,6 +621,10 @@
     color: var(--ag-on-sub);
   }
   .tb-folder-btn .msr { font-size: 14px; }
+  .tb-duo { display: inline-flex; flex: none; margin-left: 2px; animation: agy-tb-duo-in 260ms var(--ag-ease-decel) backwards; }
+  .tb-duo.hide { visibility: hidden; }
+  @keyframes agy-tb-duo-in { from { opacity: 0; transform: scale(0.6); } }
+  @media (prefers-reduced-motion: reduce) { .tb-duo { animation: none; } }
   .tb-folder {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -640,6 +673,7 @@
   .agy-page.ag-compact .tb-icon-btn .msr4 { font-size: 24px; }
   .agy-page.ag-compact .tb-title-wrap { padding: 0 2px; gap: 5px; }
   .agy-page.ag-compact .tb-folder-btn { height: 32px; max-width: 136px; padding: 0 8px; gap: 5px; border-radius: 8px; font-size: 14.5px; }
+  .agy-page.ag-compact .tb-folder-btn:has(.tb-duo) { max-width: 160px; }
   .agy-page.ag-compact .tb-folder-btn .msr { font-size: 18px; }
   .agy-page.ag-compact .tb-folder-btn .tb-chev { font-size: 18px; }
   .agy-page.ag-compact .tb-title { font-size: 15.5px; }

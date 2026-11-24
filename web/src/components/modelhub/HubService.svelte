@@ -18,9 +18,11 @@
   import HsBar from './HsBar.svelte';
   import HsModelAdv from './HsModelAdv.svelte';
   import HsServiceAdv from './HsServiceAdv.svelte';
+  import HsMediaAdv from './HsMediaAdv.svelte';
+  import { mediaCustom } from './mediaAdv.js';
   import DpMenu from '../claude/dispatch/DpMenu.svelte';
   import { G, svg, AGENT_ORDER, ordAgents, claudeBlock, planAssign, pinFirst, normUrl, urlOk, hostOf, isLocal, keyTail, tailText, fmtCtx, fmtCacheMin, CACHE_STEPS } from './HsKit.js';
-  import { hub, hubPost, hubAsk, hubGet, loadHub, KINDS, KIND_NAME, AGENT_NAME, PROTO_NAME } from '../../lib/modelHub.svelte.js';
+  import { hub, hubPost, hubAsk, hubGet, loadHub, KINDS, KIND_NAME, AGENT_NAME, PROTO_NAME, mediaConfigList } from '../../lib/modelHub.svelte.js';
   import { providerOf, vendorOf, vendorInfo } from '../../../../src/model-knowledge/brands.mjs';
   import { pushBackLayer } from '../../lib/nav.js';
   import { uiConfirm } from '../../lib/dialogs.js';
@@ -105,6 +107,9 @@
   // 老服务端的 Claude 不认 Gemini 原生协议（新服务端总览带 claudeGemini）
   const noGemini = $derived(proto === 'gemini' && !hub.claudeGemini);
   const dimOn = $derived(hub.dimensio !== null);
+  const codexOn = $derived(hub.codexHub === true);
+  // Codex 只认 Responses：Gemini 协议的服务要借官方接口的 OpenAI 兼容地址才转得过去，别的地址不知道兼容接口在哪
+  const codexGeminiOk = $derived(proto !== 'gemini' || /^generativelanguage\.googleapis\.com(:\d+)?$/i.test(svc ? svc.host || hostOf(svc.baseUrl) : hostOf(d.url)));
   const lastAt = $derived(Math.max(sid ? svc?.detectedAt || 0 : 0, catAt));
   // 401 / 403 时总览拿不到（hub.ok 假、hub.err 空）也落到这里，不会一直「正在读取…」
   const missing = $derived(!!sid && checked && !svc && !hub.loading && !hub.err && !closing);
@@ -127,7 +132,10 @@
     const vName = vi?.name || '';
     const vLogo = vi?.logo || '';
     const agents = ordAgents(a?.agents || []);
-    const label = m.label || a?.label || '';
+    // 显示名：已添加的以服务里存的为准（用户改过的备注就在这里），其次目录识别到的名字
+    const label = a?.label || m.label || '';
+    // 目录识别到的原名（备注清空后回到它）；已添加、目录里却没有的 m 就是 a，没有原名
+    const orig = m !== a && m.label && m.label !== id ? m.label : '';
     // 上下文：高级设置里改过的优先（行上显示的、Claude 收不收都按生效值）
     const ctxN = tab === 'text' ? Number(a?.over?.contextWindow || m.contextWindow || a?.contextWindow) || 0 : 0;
     const ctx = ctxN ? fmtCtx(ctxN) : '';
@@ -149,11 +157,15 @@
     // 提示缓存（11-14）：已添加的文本模型才有（服务视图带 cacheTtl? 用户填的 / cacheAuto 自动值）。行上一个小按钮写当前生效的时长
     const cache = a && tab === 'text' && a.cacheAuto ? cacheView(a) : null;
     // 高级调用配置（11-15）：已添加的文本模型才有入口；改过的（能力 / 思考写法 / 调用参数）行上标出来
-    const adv = !!(sid && a && tab === 'text' && a.auto);
-    const custom = !!a?.custom;
+    const madv = !!(sid && a && tab !== 'text' && KINDS.includes(k) && (a.agents || []).includes('studio') && media?.providerId);
+    const adv = !!(sid && a && tab === 'text' && a.auto) || madv;
+    // 媒体模型的「已自定义」看 Studio 模型配置层（mediaCfg：这个服务在 Studio 那边哪些模型配过）
+    const custom = madv ? mediaCustom(mediaCfg[id]) : !!a?.custom;
     // 手动添加的（目录里 source = manual，或已添加却不在目录里的老配置）：标出来、能删
     const manual = m.source === 'manual';
-    return { id, label, kind: k, tab, vKey, vName, vLogo, agents, ctx, block, can: !why, why, hay, cache, adv, custom, manual };
+    // 改备注名：已有服务里已添加的模型才能改（名字存在服务里、跟着发布给 Claude / dimensio / Studio）
+    const ren = !!(sid && a && agents.length);
+    return { id, label, orig, kind: k, tab, vKey, vName, vLogo, agents, ctx, block, can: !why, why, hay, cache, adv, custom, media: madv, manual, ren };
   }
   const blockText = (b) => (b === 'ctx' ? t('上下文窗口不到 4096，Claude 用不了') : t('模型 ID 不合 Claude 格式'));
 
@@ -200,8 +212,38 @@
   let advFor = $state('');        // 开着高级调用配置的模型 id
   let svcAdvOpen = $state(false);
   const advModel = $derived(advFor && sid ? (svc?.models || []).find((m) => m.id === advFor) || null : null);
+  const advMedia = $derived(!!advModel && advModel.kind !== 'text');
   function openAdv(id) { if (sid && svc && (svc.models || []).some((m) => m.id === id)) { cacheMenu = null; advFor = id; } }
+  // 媒体模型的调用配置存在 Studio 那边（按 Studio 服务 id 列出哪些模型配过）：服务托管到 Studio 之后才有
+  let mediaCfg = $state({});
+  $effect(() => {
+    const pid = sid && studioOn ? media?.providerId : '';
+    if (!pid) { mediaCfg = {}; return; }
+    let live = true;
+    mediaConfigList(pid).then((m) => { if (live) mediaCfg = m; }, () => {});
+    return () => { live = false; };
+  });
+  function onMediaSaved(mid, config) {
+    const next = { ...mediaCfg };
+    if (config && (config.over || config.recipe)) next[mid] = { over: !!config.over, recipe: !!config.recipe }; else delete next[mid];
+    mediaCfg = next;
+  }
   function onAdvSaved(service) { if (service) fresh = { svc: service, base: hub.services }; }
+
+  // —— 改备注名（显示名）→ 出错回人话，成功回 '' ——
+  async function renameModel(model, label) {
+    if (!sid) return '';
+    const g = gen;
+    try {
+      const r = await hubPost('model/label', { id: sid, model, label });
+      if (g !== gen) return '';
+      if (r.service) fresh = { svc: r.service, base: hub.services };
+      for (const w of r.warnings || []) showToast(tr(w), 'warn');
+      return '';
+    } catch (e) {
+      return g === gen ? tr(e.message) : '';
+    }
+  }
 
   // —— 删掉手动添加的模型 ——
   async function delManual(id) {
@@ -283,7 +325,7 @@
   // —— 勾选 → 去向 ——
   // 勾选跨搜索保留（搜一下、勾几个、再搜别的接着勾），所以按整栏算，不只算眼前筛出来的
   const selRows = $derived(rowsKind.filter((r) => r.can && picked.has(r.id)));
-  const destIds = $derived(kind === 'text' ? ['claude', 'dimensio'] : ['studio']);
+  const destIds = $derived(kind === 'text' ? ['claude', 'dimensio', ...(codexOn ? ['codex'] : [])] : ['studio']);
   // 勾中的模型去向是否一致：'' 没勾；'c:<去向>' 一致；'*' 不一致
   const initSig = $derived.by(() => {
     if (!selRows.length) return '';
@@ -305,6 +347,7 @@
   const destOff = $derived({
     claude: noGemini ? t('Gemini 协议的服务不能给 Claude') : '',
     dimensio: dimOn ? '' : t('dimensio 未开启'),
+    codex: codexGeminiOk ? '' : t('Gemini 协议的服务只有接的是 Google 官方接口才能给 Codex'),
     studio: !studioOn ? t('这台服务器没装 Media Studio')
       : !media || !(media.kinds || []).includes(kind) ? t('Media Studio 接不了这个服务的{kind}模型', { kind: tr(KIND_NAME[kind]) }) : '',
   });
@@ -856,7 +899,7 @@
 </script>
 
 {#snippet tools()}
-  <HsTools bind:qIn bind:searchEl {vendors} {vf} onvendor={(k) => { vf = k; }} {onlyAdded} addedN={counts[kind]?.added || 0}
+  <HsTools bind:qIn bind:searchEl {vendors} {vf} allN={counts[kind]?.all || 0} onvendor={(k) => { vf = k; }} {onlyAdded} addedN={counts[kind]?.added || 0}
     onadded={(v) => { onlyAdded = v; }} total={rows.length} {allState} selectableN={selectable.length} onall={onAll}
     catAt={lastAt} {now} {detecting} canDetect={canRedetect && !saving} ondetect={redetectAny} nudge={connMoved} {narrow} />
 {/snippet}
@@ -962,7 +1005,7 @@
             </div>
           {/if}
           <HsList {rows} {picked} onpick={pick} busy={listBusy} {filtered} onclearfilters={clearFilters} {revealKey} {narrow}
-            listId="hs-list" label={tr(KIND_NAME[kind])} onmanual={addManual} {manualOk} {pinN} oncache={openCache} onadv={openAdv} ondel={delManual} />
+            listId="hs-list" label={tr(KIND_NAME[kind])} onmanual={addManual} {manualOk} {pinN} oncache={openCache} onadv={openAdv} ondel={delManual} onrename={renameModel} />
           {#if cacheMenu}<DpMenu at={cacheMenu.at} title={cacheMenu.title} items={cacheMenu.items} onClose={() => (cacheMenu = null)} />{/if}
           <!-- 操作条升起时给列表底部让出同样高的空间：最后几行能滚到操作条上面 -->
           <div class="barpad" style:height="{barUp ? barH : 0}px"></div>
@@ -970,7 +1013,9 @@
       {/if}
     </div>
 
-    {#if advModel && svc}
+    {#if advModel && svc && advMedia}
+      <HsMediaAdv {svc} model={advModel} {narrow} onclosed={() => { advFor = ''; }} onsaved={onMediaSaved} />
+    {:else if advModel && svc}
       <HsModelAdv {svc} model={advModel} {narrow} onclosed={() => { advFor = ''; }} onsaved={onAdvSaved} />
     {/if}
     {#if svcAdvOpen && svc}

@@ -442,7 +442,7 @@ export function registerDeviceRoutes(router, { identify, adminCredential = null,
       const cred = adminCredential(req);
       if (cred && cred.via === 'session') {
         const si = sessionInfo(cred.token);
-        if (si) { login = { kind: 'admin', sid: si.sid }; loginAt = si.created || 0; }
+        if (si) { login = { kind: 'admin', sid: si.sid }; loginAt = si.since || si.created || 0; }
       } else if (cred && cred.via === 'master' && adminGen) login = { kind: 'master', gen: adminGen };
     }
     const out = registerDevice({

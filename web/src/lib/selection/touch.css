@@ -1,0 +1,43 @@
+/* 触屏选区：选择柄与放大镜（和墨同在滚动容器里；也会原样注入 Codex 的 iframe）。工具条的样式在 selection.css。
+   不设 z-index：在滚动容器自己的层叠顺序里排在正文之后，浮在页面上的输入栏照样压在它们上面。 */
+
+/* 选择柄：2px 的杆 + 杆外的圆头；看得见的 11px，能按的 44px（.hit），按住不滚页面 */
+.sel-hd { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; visibility: hidden; --h: 20px; }
+.sel-hd.on { visibility: visible; }
+.sel-hd .stem { position: absolute; left: -1px; top: 0; width: 2px; height: var(--h); border-radius: 1px; background: var(--acc); }
+.sel-hd .knob { position: absolute; left: -5.5px; width: 11px; height: 11px; border-radius: 50%; background: var(--acc);
+  box-shadow: 0 1px 3px rgba(0,0,0,.28); transition: transform 160ms cubic-bezier(.3,1.4,.5,1); }
+.sel-hd.s .knob { top: -10px; }
+.sel-hd.e .knob { top: calc(var(--h) - 1px); }
+.sel-hd .hit { position: absolute; left: -22px; width: 44px; height: 44px; border-radius: 50%; pointer-events: auto; touch-action: none;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.sel-hd.s .hit { top: -32px; }
+.sel-hd.e .hit { top: calc(var(--h) - 8px); }
+/* 拿起来：圆头放大，像被提起来 */
+.sel-hd.grab .knob { transform: scale(1.32); transition: transform 120ms cubic-bezier(.2,.8,.3,1); }
+
+/* 柄的颜色 = 各分页的强调色（其他分页用正文色） */
+.sel-hd[data-skin="claude"][data-theme="dark"], .sel-lp[data-skin="claude"][data-theme="dark"] { --acc: #d97757; }
+.sel-hd[data-skin="claude"][data-theme="light"], .sel-lp[data-skin="claude"][data-theme="light"] { --acc: #c96442; }
+.sel-hd[data-skin="codex"][data-theme="dark"], .sel-lp[data-skin="codex"][data-theme="dark"] { --acc: #48aaff; }
+.sel-hd[data-skin="codex"][data-theme="light"], .sel-lp[data-skin="codex"][data-theme="light"] { --acc: #0285ff; }
+.sel-hd[data-skin="agy"][data-theme="dark"], .sel-lp[data-skin="agy"][data-theme="dark"] { --acc: #4a90f0; }
+.sel-hd[data-skin="agy"][data-theme="light"], .sel-lp[data-skin="agy"][data-theme="light"] { --acc: #2f80ed; }
+.sel-hd[data-skin="dimensio"][data-theme="dark"], .sel-lp[data-skin="dimensio"][data-theme="dark"] { --acc: #e4553a; }
+.sel-hd[data-skin="dimensio"][data-theme="light"], .sel-lp[data-skin="dimensio"][data-theme="light"] { --acc: #c8412b; }
+.sel-hd[data-skin="bridge"][data-theme="dark"], .sel-lp[data-skin="bridge"][data-theme="dark"] { --acc: #f8f8f6; }
+.sel-hd[data-skin="bridge"][data-theme="light"], .sel-lp[data-skin="bridge"][data-theme="light"] { --acc: #121212; }
+
+/* 放大镜：胶囊里是 1.4 倍的正文克隆；自成隔离组（里面的墨用了混合模式，不许把外面的磨砂层带成隔离组） */
+.sel-lp { position: absolute; left: 0; top: 0; width: 132px; height: 46px; border-radius: 23px; overflow: hidden; isolation: isolate;
+  pointer-events: none; visibility: hidden; transform-origin: 50% 100%; contain: layout paint;
+  -webkit-user-select: none; user-select: none; }
+.sel-lp.on { visibility: visible; }
+.sel-lp-in { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
+.sel-lp .sel-lp-ink { transform-origin: 0 0; }
+.sel-lp-stem { position: absolute; left: 65px; width: 2px; border-radius: 1px; background: var(--acc); }
+.sel-lp::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; }
+.sel-lp[data-theme="dark"] { box-shadow: 0 14px 34px rgba(0,0,0,.55), 0 3px 10px rgba(0,0,0,.3); }
+.sel-lp[data-theme="dark"]::after { box-shadow: inset 0 0 0 .5px rgba(255,255,255,.18), inset 0 1px 0 rgba(255,255,255,.12); }
+.sel-lp[data-theme="light"] { box-shadow: 0 14px 34px rgba(0,0,0,.18), 0 3px 10px rgba(0,0,0,.08); }
+.sel-lp[data-theme="light"]::after { box-shadow: inset 0 0 0 .5px rgba(0,0,0,.12), inset 0 1px 0 rgba(255,255,255,.9); }

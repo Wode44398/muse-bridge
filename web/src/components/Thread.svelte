@@ -405,6 +405,15 @@
                       <span class="u-chat-sub">{t('在「{device}」上', { device: a.device.name || t('这台电脑') })}</span>
                     </span>
                   </div>
+                {:else if a.kind === 'folder'}
+                  <!-- 本地引用的文件夹（如侧栏工作空间拖入输入栏） -->
+                  <div class="u-att u-file" title={a.name}>
+                    <span class="u-file-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.2c0-1.5 1.2-2.7 2.7-2.7h3.4l2 2.3h6.2c1.5 0 2.7 1.2 2.7 2.7v8.3c0 1.5-1.2 2.7-2.7 2.7H6.2c-1.5 0-2.7-1.2-2.7-2.7z"/></svg></span>
+                    <span class="u-chat-col">
+                      <span class="u-file-name">{a.name}</span>
+                      <span class="u-chat-sub">{t('文件夹')}</span>
+                    </span>
+                  </div>
                 {:else}
                   <!-- 文件附件：点开 = 统一查看器（上传的走 uploads 原件；没留下来源的旧消息只剩名字，按钮置灰） -->
                   {@const desc = IS_CSNAP ? null : attDescriptor(a)}

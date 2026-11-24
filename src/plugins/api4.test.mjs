@@ -187,7 +187,8 @@ test('工具 agents 与卡片：只给 dimensio 的不进 Claude；ctx.tools.add
     ctx.tools.add({ name: 'both', description: '查天气', params: { city: { type: 'string', required: true } }, handler: ({ city }, turn) => ({ card: { title: city + ' 晴', fields: [{ label: '温度', value: '23°' }], image: 'javascript:alert(1)' } }) });
     ctx.claude.prompt('给 dimensio 的说明', { agents: ['dimensio'] });
   });
-  assert.throws(() => kernel.contextOf(id).tools.add({ name: 'x', agents: ['codex'], handler: () => 1 }), /不认识/);
+  // 六期起 Codex 也收插件工具；不认识的 agent 名照旧拒
+  assert.throws(() => kernel.contextOf(id).tools.add({ name: 'x', agents: ['gemini'], handler: () => 1 }), /不认识/);
   const plug = CT.pluginClaudeTurn(turnOf(HOST));
   const key = CT.serverKeyOf(id);
   assert.ok(plug.mcpServers[key]);

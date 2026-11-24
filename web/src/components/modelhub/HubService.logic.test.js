@@ -49,6 +49,7 @@ const SV = {
 const MAP = {
   ...SV,
   './HsKit.js': href(here, 'HsKit.js'),
+  './mediaAdv.js': href(here, 'mediaAdv.js'),
   '../../lib/modelHub.svelte.js': href(dir, 'hub.svelte.js'),
   '../../lib/claudeProviders.svelte.js': href(dir, 'cp.svelte.js'),
   '../../../../src/model-knowledge/brands.mjs': href(webRoot, '..', 'src', 'model-knowledge', 'brands.mjs'),
@@ -85,6 +86,7 @@ const Hub = await build('hub.svelte.js', `
   export const hubGet = (p) => globalThis.__hs.get(p);
   export const loadHub = (f) => globalThis.__hs.loadHub(f);
   export const lineNote = () => '';
+  export const mediaConfigList = () => Promise.resolve({});
 `);
 // Claude 服务的配置（只用到 canShare：多用户服务器的管理员才有「共享给成员」）
 const Cp = await build('cp.svelte.js', `

@@ -7,6 +7,7 @@
 //                   形状同 Claude 外接服务的 normalizeParams（claude-providers.mjs）；只存设了的键，'auto' / null / 空 = 不存
 //   服务 s.compat = { promptCaching?, stripBetas?, slimBody?, stripThinkingHistory?, replayReasoning?, maxTokensField? }
 //   服务 s.retries（0–5；不填 = 1）
+//   服务 s.responsesApi = 'native' | 'translate'（给 codex 的 Responses 接口：透传给上游 / 网关转成 Chat Completions 或 Messages；不填 = 自动）
 // 发布时（registry.desiredSpecs / modelSpec）覆盖压在自动值上；Claude 与 dimensio 两边各认自己用得上的那几项（界面上标着）。
 // 规则与 Claude 外接编辑器同源（档位 ID、写入字段、范围），这里不 import claude-providers（它反过来依赖注册表，会成环）。
 import { TIER_ID_RE, MAX_TIERS } from '../../model-knowledge/knowledge.mjs';
@@ -146,12 +147,46 @@ export function cleanCompat(v, { strict = false } = {}) {
   return Object.keys(out).length ? out : undefined;
 }
 
-/** 兼容项的自动值（不覆盖时两边实际按什么跑）：Claude 外接的默认 + 上游是官方 Anthropic 时那一套。 */
+/**
+ * 兼容项的自动值（不覆盖时实际按什么跑）：顶层是 Claude 外接的默认 + 上游是官方 Anthropic 时那一套；
+ * agents 里是某个 agent 自动值与顶层不同的项——dimensio 的提示缓存在 Anthropic 协议下不分上游默认开。
+ */
 export function autoCompat({ official = false } = {}) {
-  return official
+  const base = official
     ? { promptCaching: true, stripBetas: false, slimBody: false, stripThinkingHistory: false, replayReasoning: false, maxTokensField: 'max_tokens' }
     : { promptCaching: false, stripBetas: true, slimBody: true, stripThinkingHistory: false, replayReasoning: false, maxTokensField: 'max_tokens' };
+  return { ...base, agents: { dimensio: { promptCaching: true } } };
 }
+
+// 认得原生 Responses 接口的上游主机：自动时只有这几家透传，其余一律转换（中转站大多只有 Chat Completions，透过去就 404）
+const NATIVE_RESPONSES_HOSTS = new Set(['api.openai.com', 'openrouter.ai']);
+export const RESPONSES_MODES = Object.freeze(['native', 'translate']);
+
+/** Responses 走法的覆盖 → 'native' | 'translate' | undefined（自动）。'auto' 与空都当自动。 */
+export function cleanResponsesApi(v, { strict = false } = {}) {
+  if (RESPONSES_MODES.includes(v)) return v;
+  if (v == null || v === '' || v === 'auto') return undefined;
+  if (strict) throw bad('Responses 接口只能是 auto / native / translate');
+  return undefined;
+}
+
+/**
+ * 自动时的走法：OpenAI 协议的服务、所有启用线路都打到认得原生 Responses 的主机 → 'native'；其余 → 'translate'。
+ * s = 注册表里的服务记录（kind、baseUrl、lines）；Vertex 等别的形状一律转换。
+ */
+export function autoResponsesApi(s) {
+  if (s?.kind !== 'openai') return 'translate';
+  const on = (Array.isArray(s.lines) ? s.lines : []).filter((l) => l && l.enabled !== false);
+  const urls = on.length ? on.map((l) => l.baseUrl || s.baseUrl) : [s.baseUrl];
+  for (const u of urls) {
+    let host = '';
+    try { host = new URL(u).hostname.toLowerCase(); } catch { return 'translate'; }
+    if (!NATIVE_RESPONSES_HOSTS.has(host)) return 'translate';
+  }
+  return 'native';
+}
+/** 生效的走法（网关用）。 */
+export const responsesModeOf = (s) => (RESPONSES_MODES.includes(s?.responsesApi) ? s.responsesApi : autoResponsesApi(s));
 
 /** 这个模型有没有改过任何调用配置（列表里打标记用）：能力 / 思考写法 / 调用参数，缓存时长单独算。 */
 export const isCustomized = (m) => !!(m && (m.over || m.params));

@@ -15,7 +15,7 @@
   import DSwitch from '../../desktop/kit/DSwitch.svelte';
   import Toggle from '../ios27/Toggle.svelte';
   import Sym from '../ios27/Sym.svelte';
-  import { hub, loadHub, hubPost, openHubSheet, hubLegacy, kindTally, adoptReach, KINDS, coolingCount } from '../../lib/modelHub.svelte.js';
+  import { hub, loadHub, hubPost, openHubSheet, hubLegacy, kindTally, adoptReach, KINDS, coolingCount, setHubPrefs } from '../../lib/modelHub.svelte.js';
   import { cp, loadProviders, updateProvider, canUseCustomApi } from '../../lib/claudeProviders.svelte.js';
   import { ds, loadDimensio, dimReady, keyVendors, canSetKey, openInDimensio, customSummary } from '../../lib/dimensioSettings.svelte.js';
   import { adoptDimensioService } from '../../lib/modelHubAdopt.js';
@@ -297,8 +297,20 @@
   } : null);
   const atMax = $derived(mode === 'member' && cp.member && cp.maxProviders > 0 && cp.providers.length >= cp.maxProviders);
 
+  // 「AI 接入」一组：模型中心的开关（老服务端没有 prefs 就不出）。只和媒体有关，筛文本时收起
+  // 线稿：一对花括号（配置）夹一颗四角星（AI），同品牌标的方块底
+  const AI_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<path d="M8 5.5c-1.6 0-2 .9-2 2.2v1.9c0 1.2-.6 2-1.8 2.4 1.2.4 1.8 1.2 1.8 2.4v1.9c0 1.3.4 2.2 2 2.2M16 5.5c1.6 0 2 .9 2 2.2v1.9c0 1.2.6 2 1.8 2.4-1.2.4-1.8 1.2-1.8 2.4v1.9c0 1.3-.4 2.2-2 2.2"/>'
+    + '<path d="M12 8.6c.3 1.6 1 2.3 2.6 2.6-1.6.3-2.3 1-2.6 2.6-.3-1.6-1-2.3-2.6-2.6 1.6-.3 2.3-1 2.6-2.6z"/></svg>';
+  const prefRows = $derived(mode === 'admin' && hub.prefs && !legacy && fk !== 'text' ? [{
+    key: 'pref:agentMediaConfig', name: t('允许 AI 配置媒体接口'), icon: AI_ICON, wrap: true,
+    sub: t('AI 能给媒体模型补参数、写调用配方并试跑，自己接通不标准的中转站接口；写入和试跑花钱前都会先问你'),
+    agents: [], tags: [], open: null, aria: '', adopt: null, off: false,
+    toggle: { on: !!hub.prefs.agentMediaConfig, label: t('允许 AI 配置媒体接口'), fn: (v) => setHubPrefs({ agentMediaConfig: v }) },
+  }] : []);
+
   // 错峰的总数（总时长封顶，行再多也不拖）
-  const totalN = $derived(mode === 'admin' ? shown.length + acctRows.length + vendorRows.length : ownRows.length + sharedRows.length + (dimLink ? 1 : 0));
+  const totalN = $derived(mode === 'admin' ? shown.length + acctRows.length + vendorRows.length + prefRows.length : ownRows.length + sharedRows.length + (dimLink ? 1 : 0));
 
   // —— 操作 ——
   // 连着老服务端：它没有识别、目录、按模型分去向这些接口，服务浮层开了也是一屏报错——顶上常驻这一句，点到要进浮层的地方也弹这一句
@@ -539,14 +551,15 @@
   {@const rest = r.sub != null ? r.sub : [metaText(r), countsText(r.counts, fk)].filter(Boolean).join(' · ')}
   {@const host = r.sub == null ? r.host || '' : ''}
   {#if r.open}<button type="button" class="hh-hit" aria-label={r.aria} onclick={r.open}></button>{/if}
-  <span class="hh-lead" class:off={r.off}><BrandLogo logo={r.logo || ''} name={r.name} size={36} /></span>
+  {#if r.icon}<span class="hh-lead hh-ico" aria-hidden="true">{@html r.icon}</span>
+  {:else}<span class="hh-lead" class:off={r.off}><BrandLogo logo={r.logo || ''} name={r.name} size={36} /></span>{/if}
   <span class="hh-main">
     <span class="hh-name">{r.name}</span>
     {#if host || rest || r.tags.length}
       <span class="hh-sub">
         {#each r.tags as g (g.text)}<span class="hh-tag hh-tin {g.tone}">{g.text}</span>{/each}
         {#if host || rest}
-          <span class="hh-subt" class:warn={r.subWarn} class:num={r.num}>{#if host}<span class="hh-host" class:solo={!rest}>{host}{rest ? ' · ' : ''}</span>{/if}{rest}</span>
+          <span class="hh-subt" class:warn={r.subWarn} class:num={r.num} class:wrap={r.wrap}>{#if host}<span class="hh-host" class:solo={!rest}>{host}{rest ? ' · ' : ''}</span>{/if}{rest}</span>
         {/if}
       </span>
     {/if}
@@ -633,6 +646,17 @@
           <div class="hh-card">
             {#each vendorRows as r, i (r.key)}
               <div class="hh-row" class:ro={!r.open} use:enter={shown.length + acctRows.length + i} transition:fx>{@render inner(r)}</div>
+            {/each}
+          </div>
+        </section>
+      {/if}
+
+      {#if prefRows.length}
+        <section class="hh-grp" in:grpIn out:fx>
+          <h3 class="hh-glabel">{t('AI 接入')}</h3>
+          <div class="hh-card">
+            {#each prefRows as r, i (r.key)}
+              <div class="hh-row ro hh-pref" use:enter={shown.length + acctRows.length + vendorRows.length + i}>{@render inner(r)}</div>
             {/each}
           </div>
         </section>
@@ -784,6 +808,12 @@
   .ios .hh-sub { font-size: 13px; line-height: 18px; color: var(--hh-ink2); }
   .hh-subt { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
   .hh-subt.warn { color: var(--hh-warn); }
+  /* 说明句（开关行）：换行写全，不截断 */
+  .hh-subt.wrap { white-space: normal; text-wrap: pretty; }
+  .desk .hh-pref { padding-top: 12px; padding-bottom: 12px; }
+  .hh-ico { width: 36px; height: 36px; align-self: flex-start; display: grid; place-items: center; border-radius: 28%; background: var(--st-seg); box-shadow: inset 0 0 0 1px var(--st-hair); color: var(--hh-ink); }
+  .ios .hh-ico { margin-top: 12px; }
+  .hh-ico :global(svg) { width: 58%; height: 58%; }
   .hh-end { flex: none; display: flex; align-items: center; gap: 10px; }
   .hh-end > button, .hh-sw { pointer-events: auto; }
   .hh-sw { flex: none; display: flex; align-items: center; }

@@ -18,6 +18,20 @@ test("R9 中日韩文字约 1 个字 1 token，ASCII 约 4 个字符 1 token（�
   assert.equal(estimateTokens("", [user("修复 bug ok")]), 4, "混排：2 个汉字 + 7 个 ASCII 字符（含空格）= 3.75，向上取整");
 });
 
+test("加密的思考按数据长度折算（以前 redacted_thinking 算成 0）：Anthropic 的 redacted、OpenRouter reasoning_details 的 data / 摘要", () => {
+  const think = (b: Partial<Extract<Msg["content"][number], { t: "thinking" }>>): Msg => ({ role: "assistant", content: [{ t: "thinking", text: "", ...b }] });
+  assert.equal(estimateTokens("", [think({ redacted: "x".repeat(4_000) })]), 1_000);
+  assert.equal(estimateTokens("", [think({ details: [{ type: "reasoning.encrypted", data: "y".repeat(2_000) }, { type: "reasoning.summary", summary: "z".repeat(400) }] })]), 600);
+  // 明文 text 只算一次（details 里同一段 text 不重复计）
+  assert.equal(estimateTokens("", [think({ text: "abcd".repeat(100), details: [{ type: "reasoning.text", text: "abcd".repeat(100) }] })]), 100);
+  // 真实形状：OpenAI 型号经 OpenRouter，摘要就是思考的明文——流里拼进了 text，details 里带同一段 summary：只算一次，签名 / 密文照算
+  const summary = "abcd".repeat(100);
+  assert.equal(
+    estimateTokens("", [think({ text: summary, details: [{ type: "reasoning.summary", summary }, { type: "reasoning.encrypted", data: "y".repeat(400) }] })]),
+    200,
+  );
+});
+
 test("R9 实测锚点 + 之后追加的估算：实测之后新来的内容算进去", (t) => {
   const adapter = scripted(t);
   const { state } = loopState(t, adapter, { memoryAudit: false });

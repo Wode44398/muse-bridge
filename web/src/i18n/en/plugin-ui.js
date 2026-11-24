@@ -13,4 +13,6 @@ export default {
   '插件卡片': 'Plugin cards',
   '打开链接': 'Open link',
   '用 {name} 登录': 'Sign in with {name}',
+  // 工作区插槽（lib/pluginUi/workspace.svelte.js）：分页没注册对话框时的通用确认框
+  '确定要执行吗？': 'Go ahead?',
 };

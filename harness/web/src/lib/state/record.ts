@@ -6,6 +6,7 @@ import { insertAfter, permissionItemsFromMeta, planItemFromResult } from "../car
 import * as tl from "../timeline-reducer.ts";
 import { ciEventNotice } from "../pr-text.ts"; // 拉取请求自动修复那一轮首条的提示条
 import { TASK_NOTIFICATION_KIND, taskNoticeText } from "../task-notice.ts"; // 后台任务通知那一轮首条的提示条
+import { WAKEUP_KIND, wakeupNoticeText } from "../wakeup-notice.ts"; // 定时唤醒那一轮首条的提示条
 import { sessionRefsFrom } from "../session-refs.ts";
 import type { AskItem, AskOption, AskQuestion, Item, PermissionItem, PlanItem, ToolItem } from "../timeline-types.ts";
 import type { Chat } from "./chat.svelte.ts";
@@ -57,6 +58,8 @@ function harnessNotice(kind: string | undefined, text: string): string | null {
   }
   // 后台任务通知（server/job-notify.ts）：后台命令跑完 / 盯着的输出出现了——一行提示
   if (kind === TASK_NOTIFICATION_KIND) return taskNoticeText(text);
+  // 定时唤醒（server/wakeup/scheduler.ts）：模型自己约的「稍后再来」到点了——一行提示
+  if (kind === WAKEUP_KIND) return wakeupNoticeText(text);
   return text.split("\n")[0] || null;
 }
 function steerText(msg: any, text: string): string {

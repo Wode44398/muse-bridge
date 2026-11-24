@@ -3,7 +3,7 @@
 import { statSync } from 'node:fs';
 import path from 'node:path';
 import { normalizeAgyPath, foldAgyPath } from './paths.mjs';
-import { listProjects, authorizeProjectPath } from './projects.mjs';
+import { listProjects, listDismissedPaths, authorizeProjectPath } from './projects.mjs';
 
 function cleanParentSegments(fullPath) {
   const segs = String(fullPath || '').split(/[\\/]+/).filter(Boolean);
@@ -63,6 +63,7 @@ export function extractRecentSessionDirs(sessions = [], {
 } = {}) {
   const existingProjects = projectsFile ? listProjects(projectsFile) : [];
   const savedKeys = new Set(existingProjects.map((p) => foldAgyPath(p.path)).filter(Boolean));
+  const dismissedKeys = projectsFile ? listDismissedPaths(projectsFile) : new Set();
   const byFolded = new Map();
 
   for (const s of (Array.isArray(sessions) ? sessions : [])) {
@@ -72,7 +73,7 @@ export function extractRecentSessionDirs(sessions = [], {
     const norm = normalizeAgyPath(raw);
     if (!norm) continue;
     const key = foldAgyPath(norm);
-    if (!key || savedKeys.has(key)) continue;
+    if (!key || savedKeys.has(key) || dismissedKeys.has(key)) continue;
 
     const ms = Number(s.updatedMs) || Date.parse(s.updatedAt || '') || 0;
     const prev = byFolded.get(key);

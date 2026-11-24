@@ -76,7 +76,7 @@ export interface AgentStateInit {
   // false = playbook 网页章给 curl 版、桌面 / 安卓章不给。不给 = 有（测试与旧调用方照旧）。
   browser?: boolean;
   // 模型档案（agent/profile.ts）：按家族调的提示词 / 工具 / 请求 / loop 阈值。会话、子 agent 按实际型号解析好传进来；
-  // 不给 = 现状档案（测试与旧调用方照旧）。
+  // 不给 = 默认档案（lean，见 profile.ts defaultProfile）。
   profile?: ModelProfile;
 }
 
@@ -85,6 +85,8 @@ export interface AssistantParts {
   thinkingText: string;
   thinkingSig?: string;
   calls: { id: string; name: string; args: Record<string, unknown>; meta?: Record<string, unknown> }[];
+  // 按产出顺序排好的内容块（思考逐块、与正文和工具调用交错）。给了就照它落转录，text / thinkingText 只作摘要用
+  blocks?: Block[];
 }
 
 // A pure social acknowledgement cannot add durable project knowledge. Keep
@@ -161,7 +163,7 @@ export class AgentState {
   // 重建点），返回新 system 与它各节的值。子 agent / 测试不挂就什么都不做。
   systemWorld: WorldTokens = {};
   worldSource?: (runStart: boolean) => WorldValues;
-  worldDescribe?: (section: WorldSection, value: string, was: string | undefined) => string;
+  worldDescribe?: (section: WorldSection, value: string, was: string | undefined, wasToken?: string) => string;
   rebuildSystem?: () => { system: string; world: WorldValues };
   private readonly resolveImageAsset?: (assetId: string) => string;
   private readonly storeImageAsset?: (block: MediaBlock) => MediaBlock;
@@ -412,10 +414,16 @@ export class AgentState {
     this.ctx.skillLoaded ??= (name) => skillLoadedIn(this.messages, name);
     // K9（X55）：本会话读过外部内容没有（loop 在网页类工具 / 读过网页的子 agent 返回后置位；随会话落盘）
     this.ctx.externalContent ??= () => this.externalContentSeen;
+    // Bash 的当前目录：每个 AgentState（主会话、每个子 agent）一份，逐次调用的上下文经原型共用
+    this.ctx.shell ??= {};
   }
 
   // K9（X55）：本会话读过外部内容（网页、搜索结果、浏览器页面，或子 agent 读过）。只会从 false 变 true。
   externalContentSeen = false;
+
+  // 延迟加载的工具里，这个会话已经拿到过完整说明的（ToolSearch 取过、或调用时随结果附上过）。随会话落盘，压缩后不丢；
+  // 旧记录没有这一项时由 loop 退回到从转录里现推（deferred-tools.ts deferredLoaded）。
+  loadedTools = new Set<string>();
 
   // R5：出口配对修复的累计次数（诊断用；转录本身是坏的时，每轮都会修一次）。
   pairingRepairs = 0;
@@ -906,6 +914,10 @@ export class AgentState {
   }
 
   appendAssistant(parts: AssistantParts, internal = false): void {
+    if (parts.blocks) {
+      if (parts.blocks.length) this.messages.push({ role: "assistant", content: parts.blocks, ...(internal ? { internal: true } : {}) });
+      return;
+    }
     const content: Block[] = [];
     if (parts.thinkingText) {
       content.push({ t: "thinking", text: parts.thinkingText, signature: parts.thinkingSig });

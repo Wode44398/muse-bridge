@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  CLAUDE_MIN_CTX, claudeBlock, ordAgents, planAssign, pinFirst, cleanKey, pasteKey, connMoved, sameSet,
+  CLAUDE_MIN_CTX, claudeBlock, ordAgents, planAssign, pinFirst, cleanKey, pasteKey, connMoved, sameSet, filterVendors,
 } from './HsKit.js';
 
 const TEXT = ['claude', 'dimensio'];
@@ -28,6 +28,7 @@ test('claudeBlock：ID 规则与上下文窗口下限', () => {
 
 test('ordAgents：去重、固定顺序、丢掉不认识的', () => {
   assert.deepEqual(ordAgents(['studio', 'dimensio', 'claude', 'claude', 'x']), ['claude', 'dimensio', 'studio']);
+  assert.deepEqual(ordAgents(['studio', 'codex', 'claude']), ['claude', 'codex', 'studio']);
   assert.deepEqual(ordAgents(null), []);
 });
 
@@ -242,4 +243,31 @@ test('svcAdv：兼容项三态、超时留空 = 600、重试留空 = 自动；�
   assert.match(svcAdvProblem({ ...d, headers: [{ name: 'X-A', value: '' }, { name: 'x-a', value: '' }] }), /重复/);
   assert.match(svcAdvProblem({ ...d, retries: 9 }), /0–5/);
   assert.equal(svcAdvProblem({ ...d, headers: [{ name: ' ', value: '' }] }), '', '空行不算');
+});
+
+test('filterVendors：空白分词、中英原名与 key 均可匹配', () => {
+  const list = [
+    { key: 'openai', name: 'OpenAI', n: 86 },
+    { key: 'qwen', name: '通义千问', n: 43 },
+    { key: 'zhipu', name: '智谱 GLM', n: 22 },
+  ];
+  const en = { '通义千问': 'Qwen', '智谱 GLM': 'Zhipu GLM' };
+  const tr = (v) => en[v.name] || v.name;
+  assert.equal(filterVendors(list, '', tr).length, 3);
+  assert.deepEqual(filterVendors(list, 'qwen', tr).map((v) => v.key), ['qwen']);
+  assert.deepEqual(filterVendors(list, '通义', tr).map((v) => v.key), ['qwen']);
+  assert.deepEqual(filterVendors(list, 'glm 智谱', tr).map((v) => v.key), ['zhipu']);
+  assert.deepEqual(filterVendors(list, 'nope', tr), []);
+});
+
+test('svcAdv：Responses 接口的走法——老视图没有这个键就不发；自动 = null', () => {
+  const base = { compat: {}, timeoutSec: 600, retries: null, authStyle: 'bearer', headers: [] };
+  assert.ok(!('responsesApi' in svcAdvPayload(svcAdvDraft(base))), '老服务端：不发');
+  const d = svcAdvDraft({ ...base, responsesApi: null, responsesAuto: 'native' });
+  assert.equal(d.responses, 'auto');
+  assert.equal(svcAdvPayload(d).responsesApi, null);
+  d.responses = 'translate';
+  assert.equal(svcAdvPayload(d).responsesApi, 'translate');
+  assert.equal(svcAdvDraft({ ...base, responsesApi: 'native' }).responses, 'native');
+  assert.equal(svcAdvDraft({ ...base, responsesApi: 'weird' }).responses, 'auto');
 });

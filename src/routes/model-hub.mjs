@@ -1,7 +1,9 @@
 // 设置 › 模型中心 的后端（只给服务器主机管理员）。逻辑在 runtime/model-hub/*。写操作全走 POST（离线 apk 跨源，CORS 只放 GET/POST）。
 // v2（2026-11-10，契约 §5.4）：服务加一次，去向细到每个模型（文本 → Claude / dimensio，媒体 → Media Studio）。
-//   GET  /api/model-hub                         → { ok, v: 2, vertex, services, claude, dimensio|null, studio|null, studioErr?, plugins }   总览（不带任何 Key）
+//   GET  /api/model-hub                         → { ok, v: 2, codexHub, vertex, services, claude, dimensio|null, studio|null, studioErr?, plugins }   总览（不带任何 Key）
 //        studio：null = 没开 Media Studio；读不出来时 [] + studioErr（人话）
+//        codexHub：true = codex 扩展接得上模型中心（文本模型可以多一个去向 codex，经网关的 Responses 端点）
+//        服务视图里 responsesApi（'native' | 'translate' | null = 自动）与 responsesAuto（自动时的走法）；update 的 patch 收 responsesApi
 //   POST /api/model-hub/detect   {id} | {draft}  → { ok, conn, models, media|null, warnings }   识别协议、地址、模型目录
 //   GET  /api/model-hub/catalog?id=             → { ok, at, models }   一个服务的模型目录（已添加但目录里没有的补在后面）
 //   POST /api/model-hub/catalog/add {id, model:{id, kind, label?}} → { ok, model, probe?, probeError? }   手动加一个模型 ID 进目录
@@ -26,12 +28,15 @@
 //   POST /api/model-hub/builtin/import              → { ok, items }   加上 Vertex / 本机的媒体服务（Studio 一键导入）
 //   POST /api/model-hub/vertex/detect               → { ok, vertex, chatError?, media: [{ id, ok, error?, added, gone }], builtins }
 //        检测 Vertex：对话模型拉目录 + 在对话区零成本探活（countTokens），媒体模型让 Studio 立即巡检它的 Vertex 内置服务；都不动勾选
+//   POST /api/model-hub/prefs  { agentMediaConfig?: bool } → { ok, prefs }   模型中心的开关（总览里的 prefs 是生效值）
+//        agentMediaConfig：允许 AI 读写媒体模型的调用配置并预演 / 试跑（agent 操作 studio.model_*），默认关
 //   保留：POST /vertex、/line/reset、/models（从一条线路拉模型 id 列表）、/test。
 // 出错一律 { error: 人话 } + 状态码（400 输入不对、404 没有这个、413 太大、502 / 504 上游连不上 / 超时）。任何响应都不带 Key。
 import { readBody } from '../runtime/body.mjs';
 import {
-  createHubService, createHubFromDetect, assignHubModels, setHubModelCache, updateHubV2, deleteHubV2, updateVertex, resetHubLine, lineContext,
+  createHubService, createHubFromDetect, assignHubModels, setHubModelCache, setHubModelLabel, updateHubV2, deleteHubV2, updateVertex, resetHubLine, lineContext,
   detectHub, catalogView, catalogAddAndProbe, probeHubModel, catalogRemoveModel, setHubModelAdvanced, markMigrated, detectVertex, vertexView,
+  setHubPrefs,
 } from '../runtime/model-hub/registry.mjs';
 import { adoptClaudeProvider, adoptTextService, adoptStudioProvider, migrateLegacyConfigs } from '../runtime/model-hub/legacy-migrate.mjs';
 import { getModule } from '../modules/registry.mjs';
@@ -98,11 +103,13 @@ export function registerModelHubRoutes(router, { identify }) {
   }, 2048 * KB);
   post('/api/model-hub/assign', (b) => assignHubModels(id(b), b.changes));
   post('/api/model-hub/model', (b) => setHubModelCache(id(b), String(b.model || ''), b.cacheTtl));
+  post('/api/model-hub/model/label', (b) => setHubModelLabel(id(b), String(b.model || ''), b.label));
   post('/api/model-hub/model/advanced', (b) => setHubModelAdvanced(id(b), String(b.model || ''), { over: b.over, params: b.params, cacheTtl: b.cacheTtl }));
   post('/api/model-hub/catalog/remove', (b) => catalogRemoveModel(id(b), String(b.model || '')));
   post('/api/model-hub/update', (b) => updateHubV2(id(b), b.patch || {}));
   post('/api/model-hub/delete', (b) => deleteHubV2(id(b)));
   post('/api/model-hub/vertex', (b) => ({ vertex: updateVertex(b) }));
+  post('/api/model-hub/prefs', (b) => ({ prefs: setHubPrefs(b) }));
   post('/api/model-hub/vertex/detect', async () => {
     if (!vertexView().configured) throw fail('还没配 Vertex 项目：先填项目 ID 并保存凭据');
     const vx = (studioBuiltins() || []).filter((b) => b.dialect === 'vertex');

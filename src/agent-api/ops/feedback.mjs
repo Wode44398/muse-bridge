@@ -127,9 +127,9 @@ evidence 只放和这个 bug 相关的几行日志 / 报错原文。本机主机
     }
     const atts = (args.attachments || []).slice(0, 9).map((p) => ({ path: String(p || '') }));
     // 同机 dimensio 实例经 BridgeCall 调来的（http.mjs 按凭据标 env.instance），报告里写明是谁诊断的
-    const via = env.instance === 'dimensio' ? 'dimensio' : env.instance === 'agy' ? 'agy' : 'claude';
+    const via = ['dimensio', 'agy', 'codex'].includes(env.instance) ? env.instance : 'claude';
     const text = [
-      `【经 ${via === 'dimensio' ? 'dimensio' : via === 'agy' ? 'Antigravity' : 'Claude'} 诊断后上报】` + args.title.trim(),
+      `【经 ${{ dimensio: 'dimensio', agy: 'Antigravity', codex: 'Codex' }[via] || 'Claude'} 诊断后上报】` + args.title.trim(),
       '',
       args.details.trim(),
       ...(args.evidence && args.evidence.trim() ? ['', '相关日志 / 报错：', '```', args.evidence.trim(), '```'] : []),
@@ -220,7 +220,7 @@ details 写清现象与你判断是 harness 的锅（而不是任务本身 / 你
   },
   handler: async (ctx, args, env) => {
     if (!isAdmin(ctx)) throw new OpError('forbidden', '调试模式反馈只给主机管理员');
-    const agent = env.instance === 'dimensio' ? 'dimensio' : env.instance === 'agy' ? 'agy' : 'claude';
+    const agent = ['dimensio', 'agy', 'codex'].includes(env.instance) ? env.instance : 'claude';
     let file;
     try { file = saveHarnessFeedback({ agent, args, sessionId: env.sessionId || '' }); }
     catch (e) { throw new OpError('failed', '写反馈文件失败：' + ((e && e.message) || e)); }

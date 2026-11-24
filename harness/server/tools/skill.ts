@@ -5,19 +5,19 @@ import { skillHeader } from "../agent/injections.ts";
 import { findSkill, skillMessage } from "../extensions.ts";
 import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
 import { fail, ok } from "./types.ts";
+import { ARG_ALIASES } from "./arg-aliases.ts";
 
 const clip = (s: string, max: number) => (s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`);
 
 export const skillTool: Tool = {
   effect: "read",
   concurrencySafe: true,
+  aliases: ARG_ALIASES.Skill,
   def: {
     name: "Skill",
     description:
-      "Load a skill from the Managed skills section (installed by the user in the Bridge extension center). " +
-      "For a skill, its instructions arrive as the next message — follow them before doing the work your own way. " +
-      "For a package, you get the list of its skills and what each does; then load the one you need by its name. " +
-      "Load skills yourself — never ask a sub-agent to read or follow one.",
+      "Load a skill listed in the Managed skills section. A skill's instructions arrive as the next message; a package " +
+      "returns its member skills, which you then load by name. Sub-agents cannot load skills, so load them yourself.",
     parameters: {
       type: "object",
       properties: {
@@ -30,7 +30,7 @@ export const skillTool: Tool = {
   async run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolRunResult> {
     const name = String(args.name ?? "").trim();
     if (!name) return fail("skill", "Give the skill or package name exactly as listed in the Managed skills section.");
-    const hit = findSkill(name);
+    const hit = findSkill(name, ctx.sandbox?.root);
     if (hit.kind === "missing") {
       if (!hit.names.length) return fail(`no skill ${name}`, "No skills are installed for dimensio right now (Bridge extension center).");
       return fail(

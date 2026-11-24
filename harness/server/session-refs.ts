@@ -7,6 +7,7 @@
 import path from "node:path";
 import { visibleMessages } from "./agent/state.ts";
 import type { Msg } from "./agent/turn.ts";
+import { toolArgStr } from "./agent/tool-input.ts";
 import { loadSession } from "./store.ts";
 
 export const MAX_REFS = 3;
@@ -67,7 +68,7 @@ function turnsOf(messages: Msg[]): Turn[] {
     if (answer) cur.answer = answer; // 以这一轮最后一段答复为准
     for (const b of m.content) {
       if (b.t !== "tool_call" || (b.name !== "Edit" && b.name !== "Write")) continue;
-      const p = (b.args as Record<string, unknown>)?.path;
+      const p = toolArgStr(b.name, b.args as Record<string, unknown>, "path"); // 转录是模型原话：file_path 这类别名也认
       if (typeof p === "string" && p && !cur.files.includes(p)) cur.files.push(p);
     }
   }

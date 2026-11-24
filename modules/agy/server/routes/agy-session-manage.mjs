@@ -3,6 +3,7 @@
 
 import { setSessionFavorite } from '../sessions.mjs';
 import { deleteAgySession } from '../session-purge.mjs';
+import { quoteAgySession } from '../session-quote.mjs';
 import { searchAgySessions } from '../transcript-search.mjs';
 import { publishAgySessions } from '../presence.mjs';
 import { stopSubagentMonitor } from '../subagent-monitor.mjs';
@@ -31,6 +32,21 @@ export function registerAgySessionManageRoutes(router, { agyCtx, parseJsonBody, 
       sendJson(res, 200, { ok: true, deleted: true, stopped: r.stopped, pendingFiles: r.pending.length });
     } catch (err) {
       sendJson(res, err?.status || 500, { ok: false, error: err?.message || '删除失败' });
+    }
+  });
+
+  router.on('POST', '/api/agy/session/quote', async (req, res) => {
+    const ctx = agyCtx(req, res); if (!ctx) return;
+    const body = await parseJsonBody(req, res); if (!body) return;
+    try {
+      const r = await quoteAgySession(ctx, {
+        id: body.id || body.sessionId || '',
+        title: body.title || '',
+        cwd: body.cwd || '',
+      });
+      sendJson(res, 200, r);
+    } catch (err) {
+      sendJson(res, err?.status || 500, { ok: false, error: err?.message || '引用对话失败' });
     }
   });
 

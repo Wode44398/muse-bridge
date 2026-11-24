@@ -20,12 +20,19 @@ export function cleanAtts(atts) {
   const out = [];
   for (const a of Array.isArray(atts) ? atts : []) {
     if (!a || a.pending || typeof a.path !== 'string' || !a.path) continue;
+    const peaks = Array.isArray(a.peaks)
+      ? a.peaks.slice(0, 48).map((v) => Math.round(Math.max(0.05, Math.min(1, Number(v) || 0.12)) * 100) / 100)
+      : null;
     out.push({
       path: a.path,
       name: String(a.name || ''),
-      kind: a.kind === 'image' || a.kind === 'folder' ? a.kind : 'file',
+      kind: a.kind === 'image' || a.kind === 'folder' || a.kind === 'chat' || a.kind === 'voice' ? a.kind : 'file',
+      ...(a.quoteId ? { quoteId: String(a.quoteId) } : {}),
+      ...(Number.isFinite(a.count) && a.count >= 0 ? { count: a.count } : {}),
       ...(a.note ? { note: String(a.note) } : {}),
       ...(Number.isFinite(a.size) && a.size >= 0 ? { size: a.size } : {}),
+      ...(Number.isFinite(Number(a.duration)) && Number(a.duration) > 0 ? { duration: Math.round(Number(a.duration) * 100) / 100 } : {}),
+      ...(peaks && peaks.length ? { peaks } : {}),
     });
   }
   return out;

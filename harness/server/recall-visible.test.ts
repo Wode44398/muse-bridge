@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test, { after } from "node:test";
+import { defaultProfile } from "./agent/profile.ts";
 import type { Msg } from "./agent/turn.ts";
 import { dropSession, persistNow, startRun, watchSession, type Session } from "./session.ts";
 import { loadSession } from "./store.ts";
@@ -18,6 +19,8 @@ import { itemFp } from "../web/src/lib/timeline-merge.ts";
 import { recallRefsFrom, reduceTimeline, type TimelineEffects, type TimelineModel } from "../web/src/lib/timeline-reducer.ts";
 
 const roots: string[] = [];
+// 每轮自动召回是档案开关（lean 默认关、hardened 开）：这里量的是召回本身，夹具用打开了它的默认档案
+const RECALL_ON = { ...defaultProfile(), memory: { autoRecall: true } };
 after(() => {
   for (const root of roots) {
     try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* windows 句柄 */ }
@@ -63,7 +66,7 @@ const effects: TimelineEffects = {
 };
 
 test("N45 本轮用户消息挂上召回清单（标题、类别、理由，不含正文）并落盘；在看的设备收到 recall 事件；前端挂到这条气泡下，历史重建同一份", async (t) => {
-  const session = attachSession(scripted(t).next(say("看完了")), workspace());
+  const session = attachSession(scripted(t).next(say("看完了")), workspace(), { profile: RECALL_ON });
   const events = await runWith(session, "看一下 src/api.ts 里的 /health 路由");
   await persistNow(session);
 
@@ -94,7 +97,7 @@ test("N45 本轮用户消息挂上召回清单（标题、类别、理由，不�
 });
 
 test("N45 同一会话再问同样的事：已经召回过的不重复算，这一轮没有新召回就不挂；寒暄不召回", async (t) => {
-  const session = attachSession(scripted(t).next(say("看完了"), say("还是那个路由"), say("不客气")), workspace());
+  const session = attachSession(scripted(t).next(say("看完了"), say("还是那个路由"), say("不客气")), workspace(), { profile: RECALL_ON });
   await runWith(session, "看一下 src/api.ts 里的 /health 路由");
   const again = await runWith(session, "再看一下 src/api.ts 里的 /health 路由");
   const thanks = await runWith(session, "谢谢");

@@ -4,7 +4,7 @@
 import { existsSync, readdirSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnAgyProcess, killProcessTree, agyDataDir, agyCredentialsPresent } from './acp/binary.mjs';
+import { spawnAgyProcess, killProcessTree, agyDataDir, agyCredentialsPresent, listWorkerLogFiles } from './acp/binary.mjs';
 import { normalizeAgyPath } from './paths.mjs';
 
 const SAFE_NAME_RE = /^[A-Za-z0-9._@-]{1,80}$/;
@@ -169,7 +169,10 @@ export function readAgyAccountInfo(client) {
       authMethod = 'gemini-api-key';
     }
     const sources = [];
-    if (client?.logFile) sources.push(path.resolve(client.logFile));
+    if (client?.logFile) {
+      sources.push(path.resolve(client.logFile));
+      sources.push(...listWorkerLogFiles(client.logFile));
+    }
     const logDir = path.join(agyDataDir(), 'log');
     try {
       if (existsSync(logDir)) {

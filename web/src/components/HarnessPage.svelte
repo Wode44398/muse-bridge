@@ -11,6 +11,7 @@
   //      只开了 dimensio）这一页就是根——onExit 传 null（harness 据此不摆「主页」行、返回键到底交还宿主），
   //      侧栏底部挂账户行（sidebarFoot，与 Claude 页侧栏底部同一套 UserMenu），没登录不挂页面、给登录。
   import { ui, me, singleMode, prefs, savePrefs, pickTheme, applyFollowSys } from '../lib/state.svelte.js';
+  import { isPageWindow } from '../lib/windowPage.svelte.js';
   import { closePage, morphElapsed } from '../lib/pageMorph.js';
   import { apiUrl, mediaUrl, mediaFallbackUrl } from '../lib/server.js';
   import { api, authHeaders } from '../lib/api.js';
@@ -233,8 +234,8 @@
     if (armed && ready) untrack(() => { void hxReloadMeta(); });
   });
 
-  // —— 单 agent 模式：这一页就是根 ——
-  const single = $derived(singleMode());
+  // —— 单 agent 模式 / 独立分页窗口：这一页就是根 ——
+  const single = $derived(singleMode() || isPageWindow());
   // 没登录时登录框（App 的 LoginDialog）压在页上：别让 dimensio 在登录框底下就开始打 /api/harness（全是 401），
   // 先摆同色底板；登录框被关掉了，底板正中留一颗「登录」把它叫回来（这一页没登录什么也做不了）。
   const ready = $derived(!single || me.kind !== 'none');

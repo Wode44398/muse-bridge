@@ -9,6 +9,8 @@ import { messageKind } from "./agent/injections.ts";
 import { say, scripted, useTool } from "./test-harness/scripted-adapter.ts";
 import { drive, loopState } from "./test-harness/trajectory.ts";
 import { ok, type Tool } from "./tools/types.ts";
+import { hardenedProfile } from "./agent/profile.ts";
+// 这个文件钉的是加固姿态（hardened）的门禁 / 追问 / 提醒行为：各场景显式在加固档案下跑（lean 默认不设这些）
 
 const look: Tool = {
   effect: "read",
@@ -29,7 +31,7 @@ const lastText = (turn: Turn): string => {
 test("P0-2 待办提醒：按节奏挂在请求末尾一次，不进转录，断点报备为 ephemeral-tail", async (t) => {
   const steps = Array.from({ length: 7 }, (_, i) => useTool(`l${i}`, "Look"));
   const adapter = scripted(t).next(...steps, say("做完了"));
-  const { state } = loopState(t, adapter, { tools: [look], user: "分几步看一遍" });
+  const { state } = loopState(t, adapter, { profile: hardenedProfile(), tools: [look], user: "分几步看一遍" });
   state.todos = [
     { content: "第一步", status: "completed" },
     { content: "第二步", status: "in_progress" },

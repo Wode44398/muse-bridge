@@ -46,14 +46,24 @@ function bridgeAskText(tc = {}) {
   return '';
 }
 
+function formatPermPending(p) {
+  const tc = p.toolCall || {};
+  const sub = p.subagent?.role || p.subagent?.typeName || '';
+  const body = bridgeAskText(tc) || tc.title || tc.name || '';
+  return {
+    kind: 'permission',
+    id: String(p.requestId || ''),
+    text: clip(sub ? `[${sub}] ${body}` : body, 200),
+  };
+}
+
 // 这一轮眼下在等人什么：审批卡优先（它卡着工具），其次表单提问
 export function pendingOf(gen) {
   if (!gen || gen.done) return null;
-  const p = gen.pendingPermission;
-  if (p) {
-    const tc = p.toolCall || {};
-    return { kind: 'permission', id: String(p.requestId || ''), text: clip(bridgeAskText(tc) || tc.title || tc.name || '', 200) };
-  }
+  const list = Array.isArray(gen.pendingPermissions) && gen.pendingPermissions.length
+    ? gen.pendingPermissions
+    : (gen.pendingPermission ? [gen.pendingPermission] : []);
+  if (list.length > 0) return formatPermPending(list[0]);
   const q = gen.pendingQuestion;
   if (q) return { kind: 'question', id: String(q.requestId || ''), text: clip(q.message || '', 200) };
   return null;
@@ -80,9 +90,17 @@ export function agyLive(ctx) {
   for (const g of live) {
     const v = runView(g);
     runs.push({ sessionId: v.sessionId, userText: v.userText, startedAt: v.startedAt, pending: v.pending });
-    const pend = pendingOf(g);
-    if (pend && g.sessionId) {
-      asks.push({ sessionId: g.sessionId, id: `${g.sessionId}:${pend.id}`, kind: pend.kind, header: '', question: pend.text });
+    if (!g.sessionId) continue;
+    const perms = Array.isArray(g.pendingPermissions) && g.pendingPermissions.length
+      ? g.pendingPermissions
+      : (g.pendingPermission ? [g.pendingPermission] : []);
+    for (const p of perms) {
+      const fp = formatPermPending(p);
+      asks.push({ sessionId: g.sessionId, id: `${g.sessionId}:${fp.id}`, kind: fp.kind, header: '', question: fp.text });
+    }
+    if (g.pendingQuestion) {
+      const q = g.pendingQuestion;
+      asks.push({ sessionId: g.sessionId, id: `${g.sessionId}:${String(q.requestId || '')}`, kind: 'question', header: '', question: clip(q.message || '', 200) });
     }
   }
   return { agent: 'agy', label: AGY_LABEL, runs, asks };
@@ -102,6 +120,11 @@ export function publishAgyRun(ctx, gen, { live = !gen?.done } = {}) {
 export function publishAgySessions(ctx, { sessionId = '', why = '' } = {}) {
   if (!ctx?.key) return;
   busPublish(ctx.key, { type: 'agy.sessions', ...(sessionId ? { sessionId } : {}), ...(why ? { why } : {}) });
+}
+
+export function publishAgyProjects(ctx, { projectId = '', why = '' } = {}) {
+  if (!ctx?.key) return;
+  busPublish(ctx.key, { type: 'agy.projects', ...(projectId ? { projectId } : {}), ...(why ? { why } : {}) });
 }
 
 // 在等你：审批 / 提问（自动放行的不会走到这里）

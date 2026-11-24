@@ -14,7 +14,7 @@ import { AgentState } from "./agent/state.ts";
 import { LEGACY_AUDIT_CONTRACT, systemPrompt } from "./agent/prompt.ts";
 import { traceLines } from "./agent/run-trace.ts";
 import type { Msg } from "./agent/turn.ts";
-import { GLOBAL_MEMORY, listMemories } from "./memory.ts";
+import { GLOBAL_MEMORY, listMemories, memoryDir } from "./memory.ts";
 import { fileRunMemory, MEMORY_EXTRACT_SYSTEM, parseNotes, runDigest } from "./memory-extract.ts";
 import { Sandbox } from "./sandbox.ts";
 import { startRun } from "./session.ts";
@@ -68,6 +68,11 @@ test("P0-1 值不值得看：纯问答不看；偏好、干了活、失败后修
 
   const remembered = [user("记住：以后都用中文"), ...exchange("r1", "Remember", { title: "语言" }), answer("记下了")];
   assert.equal(runDigest(remembered, 0, opts), null, "模型自己存过：它已经挑过了");
+  const noteFile = path.join(memoryDir(opts.workspace), "language.md");
+  const wrote = [user("记住：以后都用中文"), ...exchange("w1", "Write", { file_path: noteFile, content: "用中文" }), answer("记下了")];
+  assert.equal(runDigest(wrote, 0, opts), null, "直接写了记忆目录里的笔记文件，也算自己存过");
+  const otherFile = [user("记住：以后都用中文"), ...exchange("w1", "Write", { path: "src/x.ts", content: "x" }), answer("好")];
+  assert.ok(runDigest(otherFile, 0, opts), "写的是普通文件：照常看");
 
   // 只看这一轮（from 之后）
   const earlier = [user("以后都用中文"), answer("好的")];
@@ -109,7 +114,7 @@ const NOTE_GOTCHA = {
   type: "project",
   description: "构建报 JDK 版本错时",
   content: "这个项目用 JDK 21 构建；JDK 17 会报 class file version 65。",
-  status: "active", // 缺 why / howToApply：Remember 会降为 proposed
+  status: "active", // 缺 why / howToApply：写入走宽松路径，不再降级
   confidence: "observed",
   evidence: ["Bash npm run build"],
 };
@@ -135,7 +140,7 @@ test("P0-1 沉淀：那一次旁路请求的形状；每条走 Remember 的治�
   assert.equal(pref.status, "active", "用户本人说的偏好：active + user_confirmed");
   assert.equal(pref.confidence, "user_confirmed");
   const gotcha = notes.find((m) => m.topic === "build.jdk")!;
-  assert.equal(gotcha.declaredStatus, "proposed", "项目类 active 缺 why / howToApply：照 Remember 的规矩降为 proposed");
+  assert.equal(gotcha.declaredStatus, "active", "记忆放宽（m 线）：缺 why / howToApply 不再降为 proposed");
 });
 
 test("P0-1 沉淀：快照对话的一次性桶只收全局事实；全局层永远待确认；取不出 JSON 重试一次", async (t) => {
@@ -148,7 +153,7 @@ test("P0-1 沉淀：快照对话的一次性桶只收全局事实；全局层永
   assert.equal(r.saved.length, 1);
   assert.equal(listMemories(ws).length, 0, "快照桶里不落工作区笔记");
   const g = listMemories(GLOBAL_MEMORY).find((m) => m.topic === "user.language")!;
-  assert.equal(g.declaredStatus, "proposed", "全局层等用户在记忆面板里确认");
+  assert.equal(g.declaredStatus, "active", "记忆放宽（m 线）：用户本人说的全局事实直接生效（以前全局层一律等确认）");
 });
 
 test("P0-1 会话：主会话收工不再要 MemoryAudit；纯问答不多调一次；有偏好的那轮收尾后在后台沉淀、不占 running", async (t) => {

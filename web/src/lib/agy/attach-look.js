@@ -3,6 +3,7 @@
 // 零副作用（不碰 store / DOM），组件与测试都直接用。
 
 import { iconKindOf, kindOf } from '../fileKinds.js';
+import { parseVoiceFileName } from './voice-peaks.js';
 
 // 类型卡的字形：Material Symbols 的图标名（页面的子集字体里要有，见 scripts/agy-symbols/fetch.py）。
 // 原来是手绘的 24 画板线稿；键名没变（attLook 返回的 glyph 就是这里的键）。
@@ -56,6 +57,26 @@ export function fmtBytes(n) {
 export function attLook(att) {
   const a = att && typeof att === 'object' ? att : {};
   const name = String(a.name || '') || baseName(a.path) || '';
+  const isChat = a.kind === 'chat';
+  if (isChat) {
+    return { name, stem: name, ext: '', isDir: false, isChat: true, isVoice: false, media: '', glyph: 'chat', tone: 'blue', size: '' };
+  }
+  const voiceInfo = a.kind === 'voice' ? (parseVoiceFileName(name) || { duration: Number(a.duration) || 0 }) : parseVoiceFileName(name);
+  if (voiceInfo) {
+    return {
+      name,
+      stem: name,
+      ext: /\.([^.\s\\/]{1,8})$/.exec(name)?.[1]?.toLowerCase() || 'wav',
+      isDir: false,
+      isChat: false,
+      isVoice: true,
+      duration: Number(a.duration) > 0 ? Number(a.duration) : voiceInfo.duration,
+      media: '',
+      glyph: 'audio',
+      tone: 'blue',
+      size: fmtBytes(a.size),
+    };
+  }
   const isDir = a.kind === 'folder' || a.isDir === true;
   const m = isDir ? null : /\.([^.\s\\/]{1,8})$/.exec(name);
   const ext = m ? m[1].toLowerCase() : '';
@@ -65,11 +86,12 @@ export function attLook(att) {
   // 服务端 / 上传时标成图片的（粘贴的截图常常没有扩展名）也按图片画
   const media = isDir ? '' : (k === 'image' || a.kind === 'image' || a.isImage === true) ? 'image' : k === 'video' ? 'video' : '';
   const [glyph, tone] = FAMILY[icon] || ['file', 'neutral'];
-  return { name, stem: stem || name, ext, isDir, media, glyph, tone, size: fmtBytes(a.size) };
+  return { name, stem: stem || name, ext, isDir, isChat: false, isVoice: false, media, glyph, tone, size: fmtBytes(a.size) };
 }
 
 // 类型卡副行：「PDF · 1.2 MB」；文件夹与没有扩展名的由调用方给词（要过 i18n）。
-export function attMeta(look, { folderWord = '', fileWord = '' } = {}) {
+export function attMeta(look, { folderWord = '', fileWord = '', chatWord = '' } = {}) {
+  if (look.isChat) return chatWord;
   const head = look.isDir ? folderWord : (look.ext ? look.ext.toUpperCase() : fileWord);
   return [head, look.size].filter(Boolean).join(' · ');
 }
@@ -81,10 +103,18 @@ export function clampRatio(w, h, { min = 0.62, max = 2.1, fallback = 1.5 } = {})
   return Math.min(max, Math.max(min, Math.round(r * 1000) / 1000));
 }
 
+// 「引用对话」存盘名格式：<时间戳>-chatref-<会话 id>--<标题>.md（与服务端 modules/agy/server/session-quote.mjs 保持一致）
+const AGY_QUOTE_FILE_RE = /^\d+-chatref-([A-Za-z0-9_-]{4,80})--(.*)\.md$/;
+export function parseAgyQuoteFile(file) {
+  const m = AGY_QUOTE_FILE_RE.exec(String(file || ''));
+  return m ? { id: m[1], title: m[2] || '' } : null;
+}
+
 // 服务端把非图片附件写成提示词前缀（modules/agy/server/agents/agy.mjs buildPromptBlocks）：
-//   本轮附加文件路径：\n- <路径>\n- <路径>\n\n<用户原文>
+//   本轮附加文件路径：\n- <路径>\n- <路径>  ← 文件夹\n\n<用户原文>
 // 历史回放拿到的就是这段原文——还原成 { text, atts }，气泡里照样画附件，不把一串路径糊在话前面。
 const ATTACHED_HEAD = '本轮附加文件路径：';   // i18n-ignore：服务端写进提示词的固定前缀，不是界面文案
+const FOLDER_NOTE_RE = /^文件夹/;             // i18n-ignore：服务端写进提示词的固定标注
 export function splitAttachedPaths(text) {
   const s = String(text ?? '');
   if (!s.startsWith(ATTACHED_HEAD)) return { text: s, atts: [] };
@@ -95,10 +125,27 @@ export function splitAttachedPaths(text) {
   for (; i < lines.length; i++) {
     const line = lines[i].replace(/\r$/, '');
     if (!line.startsWith('- ')) break;
-    const p = line.slice(2).trim();
+    const rawLine = line.slice(2);
+    const note = (/\s+←\s*(.*)$/.exec(rawLine) || [])[1] || '';
+    const p = rawLine.replace(/\s+←.*$/, '').trim();
     if (!p) break;
+    const base = baseName(p) || p;
+    const q = parseAgyQuoteFile(base);
+    if (q) {
+      atts.push({ path: p, name: q.title || base, kind: 'chat', quoteId: q.id });
+      continue;
+    }
+    if (FOLDER_NOTE_RE.test(note.trim())) {
+      atts.push({ path: p, name: base, kind: 'folder' });
+      continue;
+    }
     // 上传目录里的存盘名带时间戳前缀（1795102601189-报告.pdf）：给人看的名字去掉它
-    const name = (baseName(p) || p).replace(/^\d{10,}-(?=.)/, '');
+    const name = base.replace(/^\d{10,}-(?=.)/, '');
+    const voice = parseVoiceFileName(name);
+    if (voice) {
+      atts.push({ path: p, name, kind: 'voice', duration: voice.duration });
+      continue;
+    }
     // 路径本身看不出是不是文件夹：没有扩展名、也不是 Dockerfile 这类认得的文件名的，当文件夹（用户拖进来的目录），点开在工作区里定位
     const isDir = !/\.[^.\s\\/]{1,8}$/.test(name) && iconKindOf(name) === 'file';
     atts.push({ path: p, name, kind: isDir ? 'folder' : (kindOf(name) === 'image' ? 'image' : 'file') });

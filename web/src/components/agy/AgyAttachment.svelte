@@ -76,7 +76,11 @@
   }
 
   const meta = $derived(
-    att?.pending ? t('上传中…') : (att?.note || attMeta(look, { folderWord: t('文件夹'), fileWord: t('文件') }))
+    att?.pending
+      ? (look.isChat ? t('正在整理对话…') : t('上传中…'))
+      : look.isChat
+        ? (att?.count ? t('引用对话 · {n} 条消息', { n: att.count }) : t('引用对话'))
+        : (att?.note || attMeta(look, { folderWord: t('文件夹'), fileWord: t('文件') }))
   );
   const openLabel = $derived(t('打开 {name}', { name: look.name }));
   const getDrag = () => (typeof drag === 'function' ? drag() : null);
@@ -128,7 +132,11 @@
       <button type="button" class="aa-hit" aria-label={openLabel} onclick={(e) => onopen(att, e.currentTarget)}></button>
     {/if}
     <span class="aa-type tone-{look.tone}" aria-hidden="true">
-      <span class="msr4">{ATT_ICON[look.glyph] || ATT_ICON.file}</span>
+      {#if look.isChat}
+        <svg class="aa-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12.2c0 3.9-3.6 7-8 7-1.1 0-2.2-.2-3.1-.6L4.5 20l1.2-3.5C4.6 15.3 4 13.8 4 12.2c0-3.9 3.6-7 8-7s8 3.1 8 7z"/><path d="M8.6 11h6.8M8.6 14h4.2"/></svg>
+      {:else}
+        <span class="msr4">{ATT_ICON[look.glyph] || ATT_ICON.file}</span>
+      {/if}
     </span>
     <span class="aa-texts">
       <span class="aa-name">{look.stem}</span>

@@ -1,14 +1,19 @@
-<!-- Claude 页·弹窗：重命名 / 存为工作空间、归档父会话的二选一、临时对话回收站。 -->
+<!-- Claude 页·弹窗：重命名 / 存为工作空间、归档父会话的二选一、临时对话回收站；插件文件夹动作的确认框与撤销条。 -->
 <script>
   import { titleFor } from '../../../lib/library.svelte.js';
   import { t, tc, tr } from '../../../lib/i18n.js';
   import { relTime } from '../../../lib/format.js';
   import { daysLeft } from '../../../lib/quickChat.js';
   import { usePage } from '../../../lib/claudePage/context.js';
+  import ClaudeWorkspaceDialog from '../workspace/ClaudeWorkspaceDialog.svelte';
+  import ClaudeWorkspaceSnack from '../workspace/ClaudeWorkspaceSnack.svelte';
 
   const pc = usePage();
   const { renameKey, renameFocus, commitRename, runArchive, focusBtn, restoreBin } = pc;
 </script>
+<!-- 插件文件夹菜单项（ctx.ui.workspaceAction）的确认框与带撤销的结果提示：注册给数据层，由它按需弹 -->
+<ClaudeWorkspaceDialog />
+<ClaudeWorkspaceSnack />
 <!-- 重命名对话（替代 window.prompt——Electron 不实现 prompt，桌面壳里原来点了没反应） -->
 {#if pc.renameFor}
   <button class="pm-bd" aria-label={t('关闭')} onclick={() => (pc.renameFor = null)}></button>

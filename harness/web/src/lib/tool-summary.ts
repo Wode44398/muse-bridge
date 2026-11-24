@@ -6,12 +6,13 @@
 //   搜索 / 网页这类不数次数；有失败的片段标红。
 import type { ToolItem } from "./timeline-types.ts";
 import { isEn, t, tc } from "./i18n.ts";
+import { anyPath, canonicalArgs } from "./tool-args.ts"; // 模型按别家习惯写的参数名（file_path / filePath / output_mode……）
 
 export function argPreview(a: any): string {
   if (!a || typeof a !== "object") return "";
   if (a.command) return String(a.command);
-  if (a.path) return String(a.path);
-  if (a.file_path) return String(a.file_path);
+  const p = anyPath(a);
+  if (p) return p;
   if (a.pattern) return String(a.pattern);
   if (a.url) return String(a.url);
   if (a.query) return String(a.query);
@@ -52,7 +53,7 @@ const CATEGORY: Record<string, Cat> = {
   Browser: "browser", ReadPage: "browser", Eval: "browser", Network: "browser", Preview: "browser",
   Agent: "agent", Workflow: "workflow", TodoWrite: "todo",
   Recall: "recall", ProjectKnowledge: "recall", Remember: "remember", MemoryAudit: "remember",
-  Skill: "skill", McpDescribe: "mcp", McpCall: "mcp",
+  Skill: "skill", McpDescribe: "mcp", McpCall: "mcp", McpResources: "mcp",
   AskUserQuestion: "ask", ExitPlanMode: "plan", UpdateGoal: "goal",
   ProjectMemoryRead: "recall", ProjectMemoryWrite: "remember", ProjectMemoryDelete: "remember",
 };
@@ -106,7 +107,7 @@ export function groupSummary(tools: ToolItem[]): SummaryPiece[] {
   const cats = new Map<Cat, { keys: Set<string>; bad: boolean }>();
   tools.forEach((tool, i) => {
     const cat = catOf(tool.name);
-    const path = tool.args && typeof tool.args === "object" ? tool.args.file_path || tool.args.path : "";
+    const path = anyPath(canonicalArgs(tool.name, tool.args));
     const key = FILE_CATS.has(cat) && path ? String(path) : tool.id || `#${i}`;
     let c = cats.get(cat);
     if (!c) {
@@ -182,6 +183,8 @@ const VERBS: Record<string, Verbs> = {
   UpdateGoal: () => [t("正在汇报目标"), t("汇报了目标"), t("未能汇报目标")],
   McpDescribe: () => [t("正在查看连接器"), t("查看了连接器"), t("未能查看连接器")],
   McpCall: () => [t("正在调用连接器"), t("调用了连接器"), t("未能调用连接器")],
+  McpResources: () => [t("正在读取连接器资源"), t("读取了连接器资源"), t("未能读取连接器资源")],
+  ScheduleWakeup: () => [t("正在安排稍后再来"), t("安排了稍后再来"), t("未能安排稍后再来")],
   StartSession: () => [t("正在开新会话"), t("开了新会话"), t("未能开新会话")],
   SendMessage: () => [t("正在给会话发消息"), t("给会话发了消息"), t("未能给会话发消息")],
   ListSessions: () => [t("正在查看相关会话"), t("查看了相关会话"), t("未能查看相关会话")],
@@ -208,13 +211,15 @@ const filePath = (a: any): string => (a && typeof a === "object" ? String(a.file
 const cap = (s: string) => (s && isEn() ? s[0].toUpperCase() + s.slice(1) : s);
 
 export function toolLine(name: string, args: any, fallbackVerb: string): ToolLine {
-  const a = args && typeof args === "object" ? args : {};
+  const a = canonicalArgs(name, args && typeof args === "object" ? args : {});
   let verbs = VERBS[name];
   let meta = argPreview(a);
   if (name === "Bash" && !a.command && (a.poll || a.kill)) {
     verbs = a.poll ? BASH_POLL : BASH_KILL;
     meta = String(a.poll || a.kill);
   }
+  // 定时唤醒摆它在等什么（reason）；list / cancel 摆动作
+  if (name === "ScheduleWakeup") meta = String(a.action && a.action !== "schedule" ? [a.action, a.id ?? ""].filter(Boolean).join(" ") : a.reason || a.prompt || "");
   // 搜索说搜的是什么（argPreview 先取路径，那是搜索范围）
   if ((name === "Grep" || name === "Glob") && a.pattern) meta = String(a.pattern);
   const [running, done, failed] = verbs ? verbs() : [fallbackVerb, fallbackVerb, fallbackVerb];
@@ -241,8 +246,9 @@ export function readRanges(tools: { args: any }[]): string {
 }
 
 // 展开后的参数表（对齐官方 /code 页工具行的展开体）：常用键在前；路径摆成小片、命令 / 搜索式摆成等宽块（命令带「$ 」）
-const PARAM_ORDER = ["file_path", "path", "command", "pattern", "glob", "url", "query", "description", "prompt", "offset", "limit"];
-const PARAM_CHIP = new Set(["file_path", "path"]);
+const PATH_KEYS = ["file_path", "path", "filePath", "absolute_path", "absolutePath", "filename", "target_file"];
+const PARAM_ORDER = [...PATH_KEYS, "command", "pattern", "glob", "url", "query", "description", "prompt", "offset", "limit"];
+const PARAM_CHIP = new Set(PATH_KEYS);
 const PARAM_CODE = new Set(["command", "pattern", "regex", "glob", "script", "code", "expression"]);
 export interface ToolParam {
   key: string;

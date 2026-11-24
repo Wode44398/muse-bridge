@@ -6,9 +6,10 @@
 //   这里加的   ctx.route(method, path, handler)        挂一个接口（精确路径）
 //              ctx.router                             整个路由器的「记账版」：on / use / prefix，停用时自动摘掉
 //              ctx.http.{ json, text, body, user, admin }   回 JSON、读请求体、要求登录 / 主机管理员
-//              ctx.claude.{ tool, prompt, mcp }        给 Claude 加工具、加一段系统提示、挂一个现成 MCP server
+//              ctx.claude.{ tool, prompt, mcp }        给 Claude 加工具、加一段系统提示、挂一个现成 MCP server；memoryDir / memoryInfo 查记忆目录
 //              ctx.agentOp(spec) / ctx.agentGroup()    加 agent 接口操作（/agent/v1、手册、bridge_call 同一张表）
 //              ctx.manual(dir)                        加手册章节（目录里的 .md）
+//              ctx.ops.call(name, args, { who })      以某个身份调只读的 agent 操作（sessions.list 之类，plugins/ops-call.mjs）
 //              ctx.bus.{ publish, publishAll }         往前端实时总线推事件
 //              ctx.dataDir                            插件自己的数据目录（<数据根>/plugin-data/<id>/，用到时才建）
 //              ctx.runtime                            { production, noAuth, port, dataRoot, programRoot }
@@ -44,8 +45,8 @@ import { PLUGIN_API_VERSION, PLUGIN_FEATURES } from './engines.mjs';
 import { notePush } from '../runtime/push-notices.mjs';
 import { randomUUID } from 'node:crypto';
 import { setInternalRouter, identityOfCtx } from '../agent-api/internal.mjs';
-import { startMarketWatcher, setUpdatesPublisher } from './market.mjs';
-import { provideModelService, addModelMiddleware, MODEL_AGENTS } from '../runtime/model-services.mjs';
+import { startMarketWatcher, setUpdatesPublisher, setRevokeNotifier } from './market.mjs';
+import { provideModelService, addModelMiddleware, DEFAULT_MODEL_AGENTS } from '../runtime/model-services.mjs';
 import { checkTool, checkHook, checkWho, TOOL_AGENTS } from './claude-tools.mjs';
 import { subscribe, EVENT_NAMES, emitBridgeEvent } from './events.mjs';
 import { makeNet } from './net.mjs';
@@ -53,7 +54,11 @@ import { makeOAuth } from './oauth.mjs';
 import { registerAgentMcpRoute } from './agent-mcp.mjs';
 import { addChannel } from './channels.mjs';
 import { addAuthProvider } from './auth-providers.mjs';
+import { registerSocket, dropPluginSockets, attachPluginSockets } from './sockets.mjs';
 import { makeUi, watchUi } from './ui.mjs';
+import { claudeMemoryDir, claudeMemoryInfo } from './claude-memory.mjs';
+import { makeOps } from './ops-call.mjs';
+import { ensureClaudeProject } from './claude-project.mjs';
 
 export { kernel };
 export const PLUGIN_DATA_ROOT = path.join(DATA_ROOT, 'plugin-data');
@@ -166,7 +171,7 @@ function installMixins() {
     //   params 写法同 agent 接口操作：{ 参数名: { type, required?, desc?, enum?, min?, max?, default? } }
     //   access 'read'（只读：免审批）| 'write'（缺省：按会话的权限模式审批）| 'danger'
     //   who    'host'（缺省：只给服务器主机本人的会话）| 'members'（成员的会话也给）| 'all'（再加插件沙箱）
-    //   agents ['claude']（缺省）| ['claude', 'dimensio', 'agy'] 的任意组合（dimensio / Antigravity 也给）
+    //   agents ['claude']（缺省）| ['claude', 'dimensio', 'agy', 'codex'] 的任意组合（dimensio / Antigravity / Codex 也给）
     tool: (spec) => addTool(ctx, spec, ['claude']),
     // 加一段系统提示（字符串或 (turn) => 字符串；返回空串就不加）。opts.agents 同上（dimensio 那边是插件工具服务的说明）
     prompt: (text, opts = {}) => { checkWho(opts.who); return ctx.contribute(CLAUDE_SLOT, { kind: 'prompt', text, who: opts.who || 'host', agents: agentsOf(opts.agents, ['claude']), order: opts.order ?? 0 }); },
@@ -176,13 +181,26 @@ function installMixins() {
     // 钩子：event = PreToolUse / PostToolUse / UserPromptSubmit / Stop / SubagentStart …；fn(input, turn) 回 { decision, reason, input, context, block }
     hook: (event, fn, opts = {}) => { checkHook(event, fn, opts); return ctx.contribute(CLAUDE_SLOT, { kind: 'hook', event, fn, matcher: opts.matcher || '', who: opts.who || 'host', timeout: opts.timeout }); },
     // 审批策略：fn({ tool, input, mode, agentID, sessionId }, turn) 回 'allow' / 'deny' / { allow, input } / { deny, message } / 不表态
-    permission: (fn, opts = {}) => { if (typeof fn !== 'function') throw new Error('ctx.claude.permission 要一个函数'); checkWho(opts.who); return ctx.contribute(CLAUDE_SLOT, { kind: 'permission', fn, who: opts.who || 'host', timeout: opts.timeout }); },
+    permission: (fn, opts = {}) => {
+      if (typeof fn !== 'function') throw new Error('ctx.claude.permission 要一个函数');
+      checkWho(opts.who);
+      // agents：['claude']（缺省）/ 含 'agy' = Antigravity 的审批也先问它（八期）；别的 agent 没有审批钩子
+      const agents = opts.agents == null ? ['claude'] : (Array.isArray(opts.agents) ? opts.agents : [opts.agents]);
+      const bad = agents.filter((a) => !['claude', 'agy'].includes(a));
+      if (bad.length || !agents.length) throw new Error(`ctx.claude.permission 的 agents 只认 claude / agy（给了「${bad.join('、')}」）`);
+      return ctx.contribute(CLAUDE_SLOT, { kind: 'permission', fn, who: opts.who || 'host', timeout: opts.timeout, agents: [...new Set(agents)] });
+    },
     // 消息改写：fn({ message, attachments }, turn) 回 { message?, prepend?, append?, attachments? }
     input: (fn, opts = {}) => { if (typeof fn !== 'function') throw new Error('ctx.claude.input 要一个函数'); checkWho(opts.who); return ctx.contribute(CLAUDE_SLOT, { kind: 'input', fn, who: opts.who || 'host', timeout: opts.timeout }); },
     // 每轮参数：fn(turn) 回 { model?, effort?, env?, settings?, agents?, additionalDirectories?, append? }
     options: (fn, opts = {}) => { if (typeof fn !== 'function') throw new Error('ctx.claude.options 要一个函数'); checkWho(opts.who); return ctx.contribute(CLAUDE_SLOT, { kind: 'options', fn, who: opts.who || 'host', timeout: opts.timeout }); },
+    // 记忆目录（plugins/claude-memory.mjs）：memoryDir(path) → 绝对路径 | null；memoryInfo(path) → { dir, exists, index, files } | null
+    memoryDir: (p, opts) => claudeMemoryDir(p, opts),
+    memoryInfo: (p, opts) => claudeMemoryInfo(p, opts),
+    // 确保某个文件夹是 Claude 项目（plugins/claude-project.mjs）：已是就返回，不是就建 → { id, name, path, created }
+    ensureProject: (p, opts) => ensureClaudeProject(p, opts),
   }));
-  // 各 agent 都给的工具（写法同 ctx.claude.tool，agents 缺省 ['claude', 'dimensio', 'agy']）
+  // 各 agent 都给的工具（写法同 ctx.claude.tool，agents 缺省 TOOL_AGENTS 全部）
   kernel.mixin('tools', (ctx) => ({ add: (spec) => addTool(ctx, spec, [...TOOL_AGENTS]) }));
 
   // 订阅 bridge 事件（plugins/events.mjs）
@@ -199,7 +217,8 @@ function installMixins() {
       ctx.onDispose(() => h.dispose());
       return h;
     },
-    agents: () => MODEL_AGENTS.map((id) => ({
+    // 插件只能直接给这两家；codex 只收带 Responses 端点的服务（模型中心的网关给），插件这边先不开放
+    agents: () => DEFAULT_MODEL_AGENTS.map((id) => ({
       id, label: id === 'claude' ? 'Claude' : 'dimensio',
       available: id === 'claude' || kernel.isActive(id),
     })),
@@ -223,6 +242,8 @@ function installMixins() {
     ctx.onDispose(() => removeOp(op));
     return op;
   });
+  // 以某个身份调只读的 agent 操作（plugins/ops-call.mjs）：sessions.list / sessions.read / projects.list …
+  kernel.mixin('ops', (ctx) => makeOps(ctx));
   kernel.mixin('manual', (ctx) => (dir) => ctx.effect(() => addManualDir(path.resolve(ctx.meta.dir || PROGRAM_ROOT, dir), ctx.id)));
 
 
@@ -257,6 +278,11 @@ function installMixins() {
   kernel.mixin('action', (ctx) => ctx._panel.action);
   kernel.mixin('configOptions', (ctx) => ctx._panel.configOptions);
   kernel.mixin('bus', (ctx) => ({ publish: busPublish, publishAll: busPublishAll, toPage: ctx._panel.toPage }));
+  // 实时通道（六期）：插件页面经 SDK 的 bridge.socket(name) 连上来，收发文本 / 二进制（见 plugins/sockets.mjs）
+  kernel.mixin('socket', (ctx) => (name, handler, opts) => {
+    ctx.onDispose(() => dropPluginSockets(ctx.id));
+    return ctx.effect(() => registerSocket(ctx.id, name, handler, opts));
+  });
   kernel.mixin('store', (ctx) => makeStore(ctx));   // 第一次读写才碰磁盘
 }
 
@@ -293,6 +319,8 @@ export async function bootPlugins({ register }) {
   if (kernel.hasService('router')) setInternalRouter(kernel.service('router'));
   // 插件工具给 dimensio 的 MCP 端点（plugins/agent-mcp.mjs）：核心路由，插件开关不影响它在不在
   if (kernel.hasService('router')) registerAgentMcpRoute(kernel.service('router'));
+  // 插件实时通道的升级入口（/api/plugin/<id>/_ws/<name>）：核心挂一次，端点由各插件的 ctx.socket 登记
+  if (kernel.hasService('httpServer')) attachPluginSockets(kernel.service('httpServer'), { isActive: (id) => kernel.isActive(id) });
   await register(kernel);
   watchKernelTickets(kernel);   // 插件停用 / 卸载就作废它的页面票（registerPluginRoutes 也会挂，WeakSet 去重）
   const list = await kernel.start();
@@ -314,6 +342,13 @@ export async function bootPlugins({ register }) {
   for (const p of bad) console.error('[plugins] ' + p.id + ' 出错：' + p.error);
   // 插件市场：「有更新」名单一变就推给主机（设置里的角标据此刷新）；正式实例定时查更新（只提示，不自动装）
   setUpdatesPublisher((ids) => busPublish(HOST_OWNER, { type: 'plugins.market', updates: ids }));
+  // 社区市场下架了已装的插件：已经停用，告诉主机为什么（界面提示 + 手机通知栏），功能扩展页跟着刷新
+  setRevokeNotifier((hit) => {
+    const text = hit.map((h) => `社区插件「${h.name}」v${h.version} 已被下架并停用${h.reason ? '：' + h.reason : ''}`).join('；');
+    try { notePush(HOST_OWNER, { sessionId: null, message: text, title: '社区插件被下架', level: 'warn' }); } catch {}
+    try { busPublish(HOST_OWNER, { type: 'ui.cmd', id: randomUUID(), at: Date.now(), op: 'toast', text }); } catch {}
+    try { busPublishAll({ type: 'plugins.changed' }); } catch {}
+  });
   if (kernel.hasService('runtime') && kernel.service('runtime').production) startMarketWatcher(kernel);
   return list;
 }

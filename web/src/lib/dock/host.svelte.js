@@ -13,6 +13,8 @@
 import { api } from '../api.js';
 import { normCols, normWeights } from './cards.js';
 import { openPatch, closeAllPatch, closeViewPatch, multiPatch, prunePatch } from './views.js';
+import { isPluginView, workbenchByKey, openWorkbenchStandalone } from '../pluginUi.svelte.js';
+import { inAndroidApp } from '../pluginPanels.svelte.js';
 
 const hosts = new WeakMap();   // state 代理 → host（面板只拿到 state，要回头找自己的宿主）
 export const hostOf = (state) => hosts.get(state) || null;
@@ -51,7 +53,15 @@ export function createDockHost({ id, initialView = 'review', keys, sortable = nu
     if (!state.open) { state.max = ''; state.filesTarget = null; }
   }
 
+  // 插件卡片（ctx.ui.workbench）拿到的当前上下文：SDK 的 bridge.context()
+  const context = () => ({ sessionId: (session ? session() : state.sessionId) || null, cwd: state.ws || null, agent: id === 'agy' ? 'antigravity' : id });
   function open(view) {
+    // 插件卡片：插件没了就不开；手机 App 里不内嵌第三方页面，改成原生干净页面打开（各分页同一条路）
+    if (isPluginView(view)) {
+      const w = workbenchByKey(view);
+      if (!w) return;
+      if (inAndroidApp()) { openWorkbenchStandalone(w, context()); return; }
+    }
     if (intercept && intercept(view)) return;
     const patch = openPatch(state, view, { known, fallback: initialView });
     commit(patch);
@@ -156,7 +166,7 @@ export function createDockHost({ id, initialView = 'review', keys, sortable = nu
     filesRoot: 'ws', previewHost: 'dock', memoryAgent: '', ...caps,
     id, initialView, state, cols, weights,
     known, open, close, closeView, toggleView, toggleMax, noteFocus, setMulti, prune,
-    setWs, openFiles, noteBrowser, noteTerm, ensureMeta, setCols, setWeights,
+    setWs, openFiles, noteBrowser, noteTerm, ensureMeta, setCols, setWeights, context,
     browserSession: () => (session ? session() : state.sessionId) || '',
   };
   hosts.set(state, host);

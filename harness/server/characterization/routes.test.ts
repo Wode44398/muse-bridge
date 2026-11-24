@@ -94,7 +94,8 @@ function shapeOf(v: unknown): unknown {
 }
 
 test("CR01 路由：状态码、内容类型、响应与全局事件", { timeout: 170_000 }, async () => {
-  const norm = new Normalizer();
+  // 快照里 World State 的记忆节只露一个哈希；记忆索引里写着记忆目录的绝对路径（测试数据根每次都是新的临时目录），哈希逐次不同
+  const norm = new Normalizer([[/sha1:[0-9a-f]{16}/g, "<world-sha>"]]);
   const ws = temp("dimensio-char-routes-ws-");
   fs.writeFileSync(path.join(ws, "a.txt"), "alpha\n");
   fs.mkdirSync(path.join(ws, "sub"));

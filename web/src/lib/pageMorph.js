@@ -19,6 +19,7 @@
 // 任何一次转场 1.8s 内没落幕就强制跳到终态。
 import { tick } from 'svelte';
 import { ui, prefs, rootScreen } from './state.svelte.js';
+import { isPageWindow } from './windowPage.svelte.js';
 import { springCurve, NAV_SPRING, EASE, reduced, bezier } from './motion.js';
 
 export const PAGE_NAME = 'bridge-page';
@@ -243,6 +244,8 @@ export function openPage(key, { from = null, radius = null, hero = null, heroTo 
 // fromRect：手势返回时页面此刻的视觉矩形（已经缩小 / 位移），转场从这里接着走；可传函数（等键盘收完再量）；
 // fromRadius：那一刻的圆角。onSwitch：切回主页的同一拍里要复位的本地状态（位移、sliding…）。
 export async function closePage(key = ui.screen, { fromRect = null, fromRadius = 0, onSwitch = null } = {}) {
+  // 独立分页窗口没有主页可回：留在当前分页即可
+  if (isPageWindow()) { onSwitch?.(); return; }
   // 单 agent 模式没有主页可回：根页本身关不掉（返回键到底由 nav 交给原生退后台），
   // 别的页（工作空间等）关掉 = 纵深淡换回根页。
   const base = rootScreen();
@@ -430,7 +433,7 @@ export function goto(key, opts = {}) {
   return switchPage(key, opts);
 }
 
-// —— 入口图标「浮现」：从虚到实、微微放大落定（主题换场 / 开机揭幕共用）——
+// —— 入口图标「浮现」：从虚到实、微微放大落定（主题换场用）——
 // items: [{ el, at }]，at = 该图标开始浮现的时刻（ms，相对动画起点）
 function bloom(items) {
   const sp = springCurve(NAV_SPRING.settle);
@@ -502,19 +505,9 @@ export function morphPageTheme(originEl, apply, { toLight = true, style = 'defau
 const homeIcons = () => [...document.querySelectorAll('.grid .entry .ico, .ditem .dico')]
   .map((el) => ({ el, r: rectOf(el) })).filter((o) => o.r && onScreen(o.r));
 
-// —— 开机揭幕：封面方块打开成一扇窗，主页在窗里 ——
-// 旧版窗口是「透明洞 + 9999px 黑环」在主线程上逐帧改宽高，且只等了另一张 Image 的解码——主页里那张
-// 壁纸元素本身常常还没画出来，窗子打开看见的是一片黑，半秒后主页才「啪」地出现；标题飞往左上
-// 靠逐帧改 top/left/字号，字形一路抖。现在：
-//   · 旧快照 = 封面（底色 + 方块 + 居中标题），新快照 = 已经解码画好的主页（更新回调里等 img.decode）；
-//   · 主页快照裁成方块、随弹簧张开到整屏（clip-path），窗里的景同时从 1.06 落定——推近对焦的感觉；
-//   · 白方块到风景之间 140ms 交叉淡化，不再一帧硬换；
-//   · 标题是共享元素：UA 按两端几何插值、贴图缩放，零重排，字不抖；
-//   · 入口图标在窗口张到它时逐个浮现。
-// square：封面方块 {x,y,w,h,r}；apply()：切到主页的状态改动（booted 等）。
-// —— 切换服务器：整个画面收进中央方块（开机揭幕倒着放）——
+// —— 切换服务器：整个画面收进中央方块 ——
 // 新画面是转场封面（lib/serverSwitch.js：预载同款方块 + 光晕 + 名字），旧画面边缩小边被裁成方块窗、最后在方块里化开，
-// 像这台服务器的界面被收回成一块砖；重载后预载方块再张开成新服务器的主页，前后正好是一对。
+// 像这台服务器的界面被收回成一块砖；重载后封面化开，露出开机入场的标记，接着照常入场（components/BootGate.svelte）。
 // 主页上的「THE BRIDGE」标题作为共享元素从左上飞回方块中央（封面里那一份），接着在封面里化开换成新品牌。
 const SERVER_SPRING = { stiffness: 190, damping: 25 };
 export function serverCollapse({ apply }) {
@@ -547,38 +540,6 @@ export function serverCollapse({ apply }) {
       anim('old(root)', [{ opacity: 1 }, { opacity: 1, offset: 0.5 }, { opacity: 0 }], { duration: d * 0.92, easing: EASE.fade });
       // 封面本身（新画面）从微微后退处落定，光晕与名字跟着浮上来
       anim('new(root)', [{ transform: 'scale(1.05)' }, { transform: 'scale(1)' }], { duration: d, easing: EASE.decel });
-    },
-  });
-}
-
-export function bootReveal({ square, apply }) {
-  const { W, H } = vp();
-  const q = square || { x: W / 2 - 74, y: H / 2 - 74, w: 148, h: 148, r: 34 };
-  const cx = q.x + q.w / 2, cy = q.y + q.h / 2;
-  return run('boot', {
-    spring: NAV_SPRING.settle,
-    vars: { '--vt-ox': cx + 'px', '--vt-oy': cy + 'px' },
-    before: () => {
-      const brand = document.querySelector('.brand.show');
-      if (brand) brand.style.viewTransitionName = 'bridge-brand';
-    },
-    update: async () => { await apply(); await tick(); await homeWallpaperReady(450); },
-    afterUpdate: (ctx) => { ctx.icons = homeIcons(); },
-    play: ({ spring, icons }) => {
-      const d = spring.duration;
-      anim('new(root)', [
-        { clipPath: `inset(${q.y}px ${W - q.x - q.w}px ${H - q.y - q.h}px ${q.x}px round ${q.r}px)` },
-        { clipPath: 'inset(0px 0px 0px 0px round 0px)' },
-      ], { duration: d, easing: spring.easing });
-      anim('new(root)', [{ transform: 'scale(1.06)' }, { transform: 'scale(1)' }], { duration: d + 380, easing: EASE.decel });
-      anim('new(root)', [{ opacity: 0 }, { opacity: 1 }], { duration: 140, easing: EASE.fade });
-      // 窗口（方块）半边长从 q.w/2 张到覆盖整屏：图标所在的「切比雪夫半径」被扫到的那一刻浮现
-      const full = Math.max(cx, W - cx, cy, H - cy);
-      bloom((icons || []).map(({ el, r }) => {
-        const dd = Math.max(Math.abs(r.x + r.w / 2 - cx), Math.abs(r.y + r.h / 2 - cy)) + Math.max(r.w, r.h) * 0.3;
-        const p = Math.min(1, Math.max(0, (dd - q.w / 2) / Math.max(1, full - q.w / 2)));
-        return { el, at: spring.reach(p) };
-      }));
     },
   });
 }

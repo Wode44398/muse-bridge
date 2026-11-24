@@ -49,6 +49,16 @@ export function pluginOriginFor(req, parsed, { sessionId, isSnap } = {}) {
   return { plugin, app, label: String(o.label || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 60) };
 }
 
+// 内部字段 viaAgent（别的 agent 经 bridge 操作 chat.send 发来的这一轮，agent-api/ops/chat.mjs 按调用方 env.instance 带上）：
+// 同 pluginOrigin 只认进程内请求，网络上来的 body 写了也不认。值只认几个 agent id；插件事件 turn.start / turn.end 的 via、
+// 插件消息改写与提示的 turn.via 据此知道「这条不是用户本人发的」。排队消息重放不经内部请求，不带 via。
+const VIA_AGENTS = ['agy', 'dimensio', 'codex'];
+export function viaAgentFor(req, parsed, { isSnap } = {}) {
+  if (isSnap || !req || !req[INTERNAL_IDENTITY]) return '';
+  const v = parsed && parsed.viaAgent;
+  return VIA_AGENTS.includes(v) ? v : '';
+}
+
 // 这条请求的发起客户端（请求头 + JSON 体；排队消息重放时是当初那条的）。
 export function clientOf(headers, parsed, url = '/api/chat') {
   const ua = String((headers && headers['user-agent']) || '');
@@ -257,10 +267,11 @@ export function registerChatRoutes(router, { authOk, identify }) {
     if (extAgent && extAgent !== 'claude') {
       const handler = moduleChat(parsed.agent);
       if (!handler || !ctx.agents.includes(extAgent)) return denied(AGENT_BY_ID[extAgent].label);
-      // 附件守卫（attachment-guard.mjs）同 Claude 分支；扩展可追加自己的根（Codex 的项目目录）。
-      const attachments = (extraRoots = []) => filterAttachmentPaths(parsed.attachments, {
+      // 附件守卫（attachment-guard.mjs）同 Claude 分支；扩展可追加自己的根（Codex / agy 的项目目录）。
+      const attachments = (extraRoots = [], extraExact = []) => filterAttachmentPaths(parsed.attachments, {
         allowAnywhere: ctx.kind === 'admin',
         roots: [ctx.uploads, ctx.cwd, ...extraRoots],
+        exactRoots: [ctx.cwd, ...extraExact],
       });
       // 额度（开源路线 S2-6，runtime/quota.mjs）：扩展 agent（Gemini）的对话轮和 Claude 同一道闸、同一个账本，开跑即记。
       const billTo = (message || (Array.isArray(parsed.attachments) && parsed.attachments.length)) ? billingUser(ctx) : null;
@@ -386,9 +397,15 @@ export function registerChatRoutes(router, { authOk, identify }) {
     // 已授权项目内的路径；admin（桌面壳/主机本人）放行任意存在的绝对路径——
     // 桌面拖拽零拷贝引用（拖 20GB 目录进聊天不复制字节，agent 拿原路径按需读）。
     // 设备文件夹引用（device://，runtime/device-refs.mjs）只收这个身份自己、没吊销的设备。
+    let claudeProjectRoots = [];
+    if (ctx.kind !== 'admin' && ctx.claudeProjects) {
+      try { claudeProjectRoots = claudeProjects.listProjects(ctx.claudeProjects, ctx).map((p) => p?.path).filter(Boolean); } catch {}
+    }
+    const claudeExact = [ctx.cwd, claudeProject?.path, ...claudeProjectRoots].filter(Boolean);
     const attachments = filterAttachmentPaths(parsed.attachments, {
       allowAnywhere: ctx.kind === 'admin',
-      roots: [ctx.uploads, ctx.cwd, claudeProject?.path],
+      roots: [ctx.uploads, ...claudeExact],
+      exactRoots: claudeExact,
       deviceRefOk: (id) => { const d = deviceById(id); return !!d && !d.revoked && d.owner === ctx.key; },
     });
     if (!message && !attachments.length && !prewarm) {
@@ -467,6 +484,7 @@ export function registerChatRoutes(router, { authOk, identify }) {
     // 网络上来的请求在 body 里写 pluginOrigin 一律忽略，冒充不了「某插件应用替你开的会话」（那会让插件页面能续聊它）。
     // 只对新会话生效：续聊沿用开会话时打的标。快照轮不给。
     const pluginOrigin = pluginOriginFor(req, parsed, { sessionId, isSnap });
+    const viaAgent = viaAgentFor(req, parsed, { isSnap });
     return runClaudeChat(req, res, {
       message: fromNote ? fromNote + '\n\n' + message : message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, research, suggest, compactFrac, source, fromPhone, narrow, originDevice, fromComputer, autoRetry,
       origin: isSnap ? null : chatOrigin(ctx, { headers: req.headers, body: parsed, url: req.url, family }),
@@ -476,6 +494,7 @@ export function registerChatRoutes(router, { authOk, identify }) {
       family: isSnap ? null : family,
       permissionMode, shape,
       ...(pluginOrigin ? { pluginOrigin } : {}),
+      ...(viaAgent ? { viaAgent } : {}),
     });
   }
 

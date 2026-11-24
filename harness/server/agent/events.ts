@@ -12,7 +12,11 @@ export type StopReason = "end" | "tool_use" | "length" | "refusal";
 // arguments stream in character by character. Only text/thinking stream.
 export type StreamEvent =
   | { e: "text_delta"; text: string }
-  | { e: "thinking_delta"; text: string; signature?: string }
+  // 思考按块收：index = provider 那边的内容块下标（换了下标就是新的一块；Anthropic 一轮里可以有好几块，各带各的签名，
+  // 回传时要逐块、按原顺序）。signature 封住当前这一块；redacted = Anthropic 的 redacted_thinking（加密原文，整块原样回传）。
+  // wire = 这段思考在 OpenAI 兼容流里出自哪个字段（只标 reasoning_content：认不出的型号据此决定回不回传）。
+  // details = 这一块里 OpenRouter 的 reasoning_details 分片（原样；text 可以为空，加密条目只有 data）。
+  | { e: "thinking_delta"; text: string; signature?: string; redacted?: string; index?: number; wire?: "reasoning_content"; details?: Record<string, unknown>[] }
   // U3（X38、#52）：模型开始写一个工具调用（适配器一知道工具名就发）；之后按时间节流报「参数已经写了多少字」。
   // 模型花两三分钟生成一个大文件的 Write 参数时，活动行以前一直停在上一个工具的动词上。Gemini 整块返回，不发。
   | { e: "tool_call_begin"; id: string; name: string; chars: number }
@@ -227,7 +231,7 @@ export type AgentEvent =
   | { e: "steer_queued"; text: string; id?: string }
   | { e: "steer_applied"; text: string; id?: string }
   // M3（#27、#45）：run 结束时还没送进模型的插话——退回客户端放回输入框，不留到下一轮。
-  | { e: "steer_returned"; texts: string[]; ids?: string[] }
+  | { e: "steer_returned"; texts: string[]; ids?: string[]; reason?: string } // reason：被 UserPromptSubmit hook 拦下时的原因
   // U2（X36 第二步）：还没送达的插话被撤回了（任一设备在待送达托盘上撤的）——各设备把它从托盘里拿掉
   | { e: "steer_withdrawn"; id: string }
   // E3：用户用 /技能名（或 /包名）点了技能，正文已经跟在这条消息 / 插话后面进了对话（界面上是一行提示）
@@ -263,6 +267,8 @@ export type AgentEvent =
       // Server clock at launch — a reconnecting client replays this event late,
       // so the task panel's timers must not use the receive time.
       startedAt?: number;
+      // 后台跑的：发起它的那次 Agent 调用早已返回，卡片的「在跑」不看工具行
+      background?: boolean;
     }
   // One of the sub-agent's OWN loop events (text_delta / tool_start / tool_end /
   // usage / done / error …), wrapped so it can never be mistaken for the main

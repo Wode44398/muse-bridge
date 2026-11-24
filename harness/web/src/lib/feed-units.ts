@@ -18,6 +18,7 @@
 import type { Item, RunTiming, ToolItem } from "./timeline-types.ts";
 import { t, tc } from "./i18n.ts";
 import { isHiddenToolItem, isWidgetItem } from "./widget-tools.ts";
+import { anyPath, canonicalArgs } from "./tool-args.ts"; // 参数名的别家写法（file_path / filePath……）
 
 // 只读探索：只看不改的工具（LocalPCInspect 是 DeviceInspect 的旧名，留着给老会话的历史）
 export const EXPLORE_TOOLS = new Set([
@@ -177,8 +178,7 @@ export type GroupEntry = { run: false; key: string; item: Item } | { run: true; 
 const RUN_TOOLS = new Set(["Read", "Write", "Edit"]);
 function runKey(it: Item): string | null {
   if (it.kind !== "tool" || !RUN_TOOLS.has(it.name)) return null;
-  const a = it.args && typeof it.args === "object" ? it.args : {};
-  const p = a.file_path || a.path;
+  const p = anyPath(canonicalArgs(it.name, it.args));
   return p ? `${it.name} ${p}` : null;
 }
 

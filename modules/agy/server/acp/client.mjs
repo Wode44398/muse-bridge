@@ -9,8 +9,10 @@ import { DATA_ROOT } from '@bridge/core/runtime/paths.mjs';
 import {
   spawnAgyProcess, killProcessTree, locateAgy, agyInstalled,
   prepareReadOnlyDaemonDir, unlockDaemonDir, repairShadowedConversations,
+  defaultDaemonCwd, cleanupWorkerLogFiles,
 } from './binary.mjs';
 import { normalizeAgyPath } from '../paths.mjs';
+import { noteAgyProcessStart } from '../proc-epoch.mjs';
 import { purgePendingDeletions } from '../purge-files.mjs';
 import { bridgeToolAutoAllow } from '../mcp/approval.mjs';
 import {
@@ -22,6 +24,12 @@ import {
 import {
   BYPASS_MODE, BYPASS_BASE_MODE, toAcpMode, decorateModeOptions, decorateModes, pickAllowOption,
 } from './bypass.mjs';
+import {
+  resolveEffectiveContextUsage,
+  getAgyContextLimits,
+  peekAgyContextLimits,
+  warmAgyContextLimits,
+} from '../context-limits.mjs';
 
 function withLoopbackNoProxy(baseEnv) {
   const env = { ...(baseEnv || process.env) };
@@ -41,11 +49,14 @@ function withLoopbackNoProxy(baseEnv) {
   return env;
 }
 
-const DEFAULT_DAEMON_DIR = path.join(DATA_ROOT, 'agy', 'daemon-cwd');
+const DEFAULT_DAEMON_DIR = defaultDaemonCwd('main', DATA_ROOT);
 const DEFAULT_LOG_FILE = path.join(DATA_ROOT, 'agy', 'acp.log');
 const DEFAULT_STABLE_WINDOW_MS = 60_000;
 const DEFAULT_MAX_CRASHES = 3;
 const HISTORY_KEEP = 24;
+// --process-per-session 模式下每个已挂载会话对应一个独立 worker 进程（约 150MB 内存），
+// 保留最近活跃的若干空闲会话以保持切回速度，超出上限后自动 session/close 释放多余 worker。
+const DEFAULT_MAX_IDLE_MOUNTED_SESSIONS = 6;
 // session/load 的回放不全在响应之前：会话在常驻进程里热加载过一次后，再 load 时 agy 先回响应、
 // 剩下上百条历史（tool_call / agent_message 等）随后才推过来。session_info_update / available_commands_update
 // 只在冷进程首次 load 时落在结尾；热加载时它们夹在回放中间（实测第 377/487 条），不能当结束信号。
@@ -103,6 +114,12 @@ export class AcpClient {
   constructor(options = {}) {
     this.command = options.command || null;
     this.args = options.args || null;
+    // 默认开启 --process-per-session：单进程模式下 language server 维护全局 Active Workspaces，
+    // 会把先打开过的项目目录与 AGENTS.md 泄露到后续其它目录的会话；按会话隔离 worker 后彻底隔离。
+    this.processPerSession = options.processPerSession ?? (process.env.AGY_PROCESS_PER_SESSION !== '0');
+    this.maxIdleMountedSessions = Number.isInteger(options.maxIdleMountedSessions)
+      ? Math.max(0, options.maxIdleMountedSessions)
+      : (!this.command && this.processPerSession ? DEFAULT_MAX_IDLE_MOUNTED_SESSIONS : 0);
     // 追加在 `acp` 之后的参数（桌面版存储的第二个常驻进程用 --app-data-dir antigravity）
     this.extraArgs = Array.isArray(options.extraArgs) ? options.extraArgs : [];
     this.label = options.label || 'cli';
@@ -147,8 +164,13 @@ export class AcpClient {
     this.historyUpdates = new Map();
     this.sessionListeners = new Set();   // global observers for title/config updates
 
-    this.pendingPermissions = new Map(); // String(rpcId) -> { rpcId, sessionId, payload, timer, onResolved }
-    this.pendingQuestions = new Map();   // String(rpcId) -> { rpcId, sessionId, payload, timer, onResolved }
+    this.pendingPermissions = new Map(); // String(rpcId) -> { rpcId, sessionId, rootSessionId, sourceSessionId, payload, timer, onResolved, createdAt }
+    this.pendingQuestions = new Map();   // String(rpcId) -> { rpcId, sessionId, rootSessionId, sourceSessionId, payload, timer, onResolved }
+    // 子代理 / Swarm 成员到主会话的映射：agy acp 只给显式挂载过的会话开事件流，
+    // 子代理卡在权限等待（steps.status=9）时须对其调 session/resume 接通权限通道，再按主会话的放行策略处理或透传给用户。
+    this.subagentRoots = new Map();      // subId -> { rootSessionId, role, typeName, depth, kind }
+    this.subagentResumed = new Set();    // 当前 agy 进程里已 session/resume 接通过的子代理 id
+    this.subagentResuming = new Map();   // subId -> Promise（防并发重复 resume）
     // 多代理后台保护与后台唤醒反向请求桥接（由 subagent-monitor.mjs 挂载）
     this.bgHandlers = null;
 
@@ -235,6 +257,12 @@ export class AcpClient {
     return this.mountedSessions.get(String(sessionId || '')) || null;
   }
 
+  // agy initialize 时报的 prompt 能收哪些内容块（{ image, audio, embeddedContext }）；还没起过进程或没报时为 null
+  promptCapabilities() {
+    const caps = this.initInfo?.agentCapabilities?.promptCapabilities;
+    return caps && typeof caps === 'object' ? caps : null;
+  }
+
   status() {
     const bin = this.command ? { file: this.command } : locateAgy();
     const running = !!(this.ready && this.proc && !this.proc.killed);
@@ -314,11 +342,90 @@ export class AcpClient {
     }
     if (on) {
       for (const entry of [...this.pendingPermissions.values()]) {
-        if (entry.sessionId !== id) continue;
+        if (entry.sessionId !== id && entry.rootSessionId !== id) continue;
         const allow = pickAllowOption(entry.payload?.options);
         if (allow) this.answerPermission(entry.requestId, { optionId: allow.optionId, auto: true });
       }
     }
+  }
+
+  registerSubagent(subId, rootSessionId, meta = {}) {
+    const sid = String(subId || '').trim();
+    const root = String(rootSessionId || '').trim();
+    if (!sid || !root || sid === root) return;
+    const prev = this.subagentRoots.get(sid) || {};
+    this.subagentRoots.set(sid, {
+      rootSessionId: root,
+      role: meta.role || prev.role || '',
+      typeName: meta.typeName || prev.typeName || '',
+      depth: Number.isFinite(Number(meta.depth)) ? Number(meta.depth) : (prev.depth || 1),
+      kind: meta.kind || prev.kind || 'subagent',
+    });
+  }
+
+  resolveRootSessionId(sessionId) {
+    const id = String(sessionId || '').trim();
+    if (!id) return '';
+    return this.subagentRoots.get(id)?.rootSessionId || id;
+  }
+
+  getSubagentInfo(sessionId) {
+    const id = String(sessionId || '').trim();
+    return id ? (this.subagentRoots.get(id) || null) : null;
+  }
+
+  /**
+   * 仅向 agy 挂载子代理的对话更新流以接通其 session/request_permission 通道：
+   * 不写入 mountedSessions / knownSessions / lastCatalog，也不影响主会话的回放历史与崩溃重挂载。
+   */
+  async ensureSubagentAttached(subId, rootSessionId, { cwd = '', role = '', typeName = '', depth = 1, kind = 'subagent' } = {}) {
+    const sid = String(subId || '').trim();
+    const root = String(rootSessionId || '').trim();
+    if (!sid || !root || sid === root) return false;
+    this.registerSubagent(sid, root, { role, typeName, depth, kind });
+    if (!this.ready || !this.proc || this.shuttingDown) return false;
+    if (this.mountedSessions.has(sid) || this.subagentResumed.has(sid)) return true;
+    const inflight = this.subagentResuming.get(sid);
+    if (inflight) return inflight;
+
+    const rawDir = cwd || this.knownSessions.get(root)?.cwd || this.mountedSessions.get(root)?.cwd || os.homedir();
+    const workDir = normalizeAgyPath(rawDir) || rawDir;
+    const task = this._requestRaw('session/resume', {
+      sessionId: sid,
+      cwd: workDir,
+      mcpServers: [],
+    }, 15_000).then(() => {
+      this.subagentResumed.add(sid);
+      return true;
+    }).catch(() => false).finally(() => {
+      if (this.subagentResuming.get(sid) === task) this.subagentResuming.delete(sid);
+    });
+    this.subagentResuming.set(sid, task);
+    return task;
+  }
+
+  /** 子代理在 agy 侧自身超时（60s）或被外部处理后，收掉本地已过期的挂起审批卡。 */
+  retireExternalPermission(requestId) {
+    const key = String(requestId || '');
+    const entry = this.pendingPermissions.get(key);
+    if (!entry) return false;
+    this.pendingPermissions.delete(key);
+    clearTimeout(entry.timer);
+    const turn = this.turns.get(entry.sessionId);
+    const resolvedEvt = {
+      requestId: key,
+      sessionId: entry.sessionId,
+      sourceSessionId: entry.sourceSessionId || entry.sessionId,
+      toolCallId: entry.payload?.toolCall?.toolCallId || '',
+      outcome: 'cancelled',
+      optionId: null,
+      expired: true,
+    };
+    try {
+      if (entry.onResolved) entry.onResolved(resolvedEvt);
+      else turn?.onPermissionResolved?.(resolvedEvt);
+    } catch {}
+    return true;
   }
 
   _decorCatalog(configOptions) {
@@ -370,6 +477,9 @@ export class AcpClient {
     prepareReadOnlyDaemonDir(this.daemonCwd);
     if (this.logFile) {
       try { mkdirSync(path.dirname(this.logFile), { recursive: true }); } catch {}
+      if (!this.command) {
+        try { cleanupWorkerLogFiles(this.logFile); } catch {}
+      }
     }
 
     if (this.dataDir && !this.command) {
@@ -387,7 +497,11 @@ export class AcpClient {
       }
     }
 
-    const acpArgs = ['acp', ...this.extraArgs];
+    const acpArgs = ['acp'];
+    if (!this.command && this.processPerSession) {
+      acpArgs.push('--process-per-session');
+    }
+    acpArgs.push(...this.extraArgs);
     if (this.logFile && !this.command) {
       acpArgs.push('--log-file', this.logFile);
     }
@@ -464,6 +578,8 @@ export class AcpClient {
       this.initInfo = initResult;
       this.ready = true;
       this.startedAt = Date.now();
+      // 换了进程：之前转入后台的命令都随旧进程没了（见 proc-epoch.mjs）
+      noteAgyProcessStart(this.dataDir, this.startedAt);
 
       // 只有连续稳定运行满窗口期才清零崩溃计数，避免启动即崩时因单条请求成功导致无限拉起
       clearTimeout(this.stableTimer);
@@ -504,6 +620,8 @@ export class AcpClient {
     this.ready = false;
     this.startedAt = 0;
     this.mountedSessions.clear();
+    this.subagentResumed.clear();
+    this.subagentResuming.clear();
     try { this.reader?.close(); } catch {}
     this.reader = null;
 
@@ -670,21 +788,99 @@ export class AcpClient {
   _handleServerRequest(rpcId, method, params) {
     if (method === 'session/request_permission') {
       const payload = normalizePermissionRequest(rpcId, params);
-      const turn = payload.sessionId ? this.turns.get(payload.sessionId) : null;
+      const rawSid = payload.sessionId;
+      const subInfo = rawSid ? this.subagentRoots.get(rawSid) : null;
+      const rootSid = subInfo?.rootSessionId || rawSid;
+      if (subInfo && rootSid && rootSid !== rawSid) {
+        payload.sessionId = rootSid;
+        payload.sourceSessionId = rawSid;
+        payload.subagent = {
+          id: rawSid,
+          role: subInfo.role || '',
+          typeName: subInfo.typeName || '',
+          depth: subInfo.depth || 1,
+          kind: subInfo.kind || 'subagent',
+        };
+      }
+      const turn = rootSid ? this.turns.get(rootSid) : null;
       const inTurn = Boolean(turn && !turn.done && !turn.aborted);
       const key = String(rpcId);
 
       // 完全放行：不弹卡片，直接替用户点允许（挑不出允许项才退回正常审批）。
-      // bridge 自家没有对外副作用的工具（浏览器 / 工作区 / 图表 / 查手册……，见 mcp/approval.mjs）任何模式下都直接放行。
+      // 子代理继承主会话的放行状态；bridge 自家没有对外副作用的工具任何模式下都直接放行。
       const canHandle = inTurn || Boolean(
-        payload.sessionId && (this.mountedSessions.has(payload.sessionId) || this.knownSessions.has(payload.sessionId))
+        rootSid && (
+          this.mountedSessions.has(rootSid)
+          || this.knownSessions.has(rootSid)
+          || this.bgHandlers?.hasSessionOwner?.(rootSid)
+        )
       );
       if (!canHandle) {
         try { this._send({ id: rpcId, result: { outcome: { outcome: 'cancelled' } } }); } catch {}
         return;
       }
 
-      const autoAllow = (this.isBypass(payload.sessionId) || bridgeToolAutoAllow(payload.toolCall)) ? pickAllowOption(payload.options) : null;
+      // 插件的审批策略（ctx.claude.permission 带 agents:['agy']，八期）：这一轮登记了策略就先问它，再走下面的自动放行 / 审批卡。
+      // 只管有人在的这一轮（inTurn）；后台唤醒 / 子代理收尾后的审批照旧。策略自己有时限（agy 单次调用 180 秒上限，见 plugin-permission.mjs）。
+      if (inTurn && typeof turn.permissionPolicy === 'function') {
+        Promise.resolve().then(() => turn.permissionPolicy(payload)).catch(() => null)
+          .then((verdict) => this._routePermission(rpcId, payload, { rawSid, rootSid, key, verdict }));
+        return;
+      }
+      this._routePermission(rpcId, payload, { rawSid, rootSid, key, verdict: null });
+      return;
+    }
+
+    if (method === 'elicitation/create') {
+      this._handleElicitation(rpcId, params);
+      return;
+    }
+
+    try {
+      this._send({
+        id: rpcId,
+        error: { code: -32601, message: `Method not found: ${method}` },
+      });
+    } catch {}
+  }
+
+  // 审批请求的落点：插件说拒 / 放就照办；说 'ask' 就跳过自动放行（完全放行也不越过）直接弹卡；没表态照原来的口径。
+  _routePermission(rpcId, payload, { rawSid, rootSid, key, verdict }) {
+    {
+      const turn = rootSid ? this.turns.get(rootSid) : null;
+      const inTurn = Boolean(turn && !turn.done && !turn.aborted);
+      const resolved = (outcome, optionId = null) => {
+        try {
+          turn?.onPermissionResolved?.({
+            requestId: key, sessionId: rootSid, sourceSessionId: rawSid, toolCallId: payload.toolCall?.toolCallId || '',
+            outcome, optionId, auto: true,
+          });
+        } catch {}
+      };
+      if (verdict && verdict.behavior === 'deny') {
+        const opts = payload.options || [];
+        const no = opts.find((o) => String(o.kind).startsWith('reject')) || opts.find((o) => /^(deny|reject)/i.test(String(o.optionId)));
+        try { this._send({ id: rpcId, result: { outcome: no ? { outcome: 'selected', optionId: String(no.optionId) } : { outcome: 'cancelled' } } }); } catch {}
+        resolved(no ? 'selected' : 'cancelled', no ? String(no.optionId) : null);
+        return;
+      }
+      if (verdict && verdict.behavior === 'allow') {
+        const allow = pickAllowOption(payload.options);
+        if (allow) {
+          try { this._send({ id: rpcId, result: { outcome: { outcome: 'selected', optionId: String(allow.optionId) } } }); } catch {}
+          resolved('selected', String(allow.optionId));
+          return;
+        }
+      }
+      const forceAsk = !!(verdict && verdict.behavior === 'ask');
+      if (forceAsk && !inTurn) {
+        // 插件要用户批、可这一轮已经收了：没人能批，拒
+        try { this._send({ id: rpcId, result: { outcome: { outcome: 'cancelled' } } }); } catch {}
+        return;
+      }
+
+      const bypassOn = Boolean(rootSid && (this.isBypass(rootSid) || this.bgHandlers?.isBypass?.(rootSid)));
+      const autoAllow = !forceAsk && (bypassOn || bridgeToolAutoAllow(payload.toolCall)) ? pickAllowOption(payload.options) : null;
       if (autoAllow) {
         try {
           this._send({ id: rpcId, result: { outcome: { outcome: 'selected', optionId: String(autoAllow.optionId) } } });
@@ -692,7 +888,8 @@ export class AcpClient {
         try {
           turn?.onPermissionResolved?.({
             requestId: key,
-            sessionId: payload.sessionId,
+            sessionId: rootSid,
+            sourceSessionId: rawSid,
             toolCallId: payload.toolCall?.toolCallId || '',
             outcome: 'selected',
             optionId: String(autoAllow.optionId),
@@ -705,7 +902,7 @@ export class AcpClient {
       let timeoutMs = inTurn ? turn.permissionTimeoutMs : 0;
       let onResolved = inTurn ? (evt) => turn.onPermissionResolved?.(evt) : null;
       if (!inTurn) {
-        // agy 后台自动唤醒期间发来的权限审批：不能再因无活跃 turn 直接 cancel，交给后台监视器弹出审批卡
+        // agy 后台自动唤醒或子代理发来的权限审批：不能因无活跃 turn 直接 cancel，交给后台监视器弹出审批卡
         let bg = null;
         try { bg = this.bgHandlers?.onPermission?.(payload) || null; } catch {}
         if (!bg || !bg.handled) {
@@ -719,7 +916,10 @@ export class AcpClient {
       const entry = {
         rpcId,
         requestId: key,
-        sessionId: payload.sessionId,
+        sessionId: rootSid,
+        rootSessionId: rootSid,
+        sourceSessionId: rawSid,
+        createdAt: Date.now(),
         payload,
         onResolved,
         // 超时 = 替用户取消。timeoutMs 为 0 时不设（一直等，同 Claude 的逐次审批）
@@ -729,7 +929,8 @@ export class AcpClient {
           try {
             onResolved?.({
               requestId: key,
-              sessionId: payload.sessionId,
+              sessionId: rootSid,
+              sourceSessionId: rawSid,
               toolCallId: payload.toolCall?.toolCallId || '',
               outcome: 'cancelled',
               optionId: null,
@@ -744,21 +945,41 @@ export class AcpClient {
       }
       return;
     }
+  }
 
-    if (method === 'elicitation/create') {
+  _handleElicitation(rpcId, params) {
+    {
       // elicitation 若未带 sessionId：优先归属唯一活跃轮，其次归属后台唤醒中的活跃会话
       const fallbackSid = this.turns.size === 1
         ? [...this.turns.keys()][0]
         : (this.bgHandlers?.resolveSessionId?.() || null);
       const payload = normalizeElicitationRequest(rpcId, params, fallbackSid);
-      const turn = payload.sessionId ? this.turns.get(payload.sessionId) : null;
+      const rawSid = payload.sessionId || '';
+      const subInfo = rawSid ? this.subagentRoots.get(rawSid) : null;
+      const rootSid = subInfo?.rootSessionId || rawSid;
+      if (subInfo && rootSid && rootSid !== rawSid) {
+        payload.sessionId = rootSid;
+        payload.sourceSessionId = rawSid;
+        payload.subagent = {
+          id: rawSid,
+          role: subInfo.role || '',
+          typeName: subInfo.typeName || '',
+          depth: subInfo.depth || 1,
+          kind: subInfo.kind || 'subagent',
+        };
+      }
+      const turn = rootSid ? this.turns.get(rootSid) : null;
       const inTurn = Boolean(turn && !turn.done && !turn.aborted);
 
       let timeoutMs = inTurn ? turn.questionTimeoutMs : 0;
       let onResolved = inTurn ? (evt) => turn.onQuestionResolved?.(evt) : null;
       if (!inTurn) {
         const knownBg = Boolean(
-          payload.sessionId && (this.mountedSessions.has(payload.sessionId) || this.knownSessions.has(payload.sessionId))
+          rootSid && (
+            this.mountedSessions.has(rootSid)
+            || this.knownSessions.has(rootSid)
+            || this.bgHandlers?.hasSessionOwner?.(rootSid)
+          )
         );
         let bg = null;
         if (knownBg) {
@@ -776,13 +997,15 @@ export class AcpClient {
       const entry = {
         rpcId,
         requestId: key,
-        sessionId: payload.sessionId,
+        sessionId: rootSid,
+        rootSessionId: rootSid,
+        sourceSessionId: rawSid,
         payload,
         onResolved,
         timer: timeoutMs > 0 ? setTimeout(() => {
           this.pendingQuestions.delete(key);
           try { this._send({ id: rpcId, result: { action: 'cancel' } }); } catch {}
-          try { onResolved?.({ requestId: key, sessionId: payload.sessionId, action: 'cancel', content: null }); } catch {}
+          try { onResolved?.({ requestId: key, sessionId: rootSid, action: 'cancel', content: null }); } catch {}
         }, timeoutMs) : null,
       };
       entry.timer?.unref?.();
@@ -792,13 +1015,6 @@ export class AcpClient {
       }
       return;
     }
-
-    try {
-      this._send({
-        id: rpcId,
-        error: { code: -32601, message: `Method not found: ${method}` },
-      });
-    } catch {}
   }
 
   answerPermission(requestId, { optionId, outcome = 'selected', auto = false } = {}) {
@@ -818,6 +1034,7 @@ export class AcpClient {
     const resolvedEvt = {
       requestId: key,
       sessionId: entry.sessionId,
+      sourceSessionId: entry.sourceSessionId || entry.sessionId,
       toolCallId: entry.payload?.toolCall?.toolCallId || '',
       outcome: isCancelled ? 'cancelled' : 'selected',
       optionId: isCancelled ? null : String(optionId),
@@ -857,6 +1074,23 @@ export class AcpClient {
     return { ok: true, ...resolvedEvt };
   }
 
+  _sessionModelInfo(sessionId) {
+    const id = String(sessionId || '');
+    const mounted = id ? this.mountedSessions.get(id) : null;
+    const summary = mounted ? extractConfigSummary(mounted.configOptions, mounted.modes, mounted.models) : {};
+    const desired = id ? this.knownSessions.get(id)?.desiredConfig : null;
+    return {
+      model: summary.model || desired?.model || '',
+      thoughtLevel: summary.thoughtLevel || desired?.thought_level || '',
+    };
+  }
+
+  _resolveSessionUsage(sessionId, rawUsage, liveLimits = peekAgyContextLimits(this)) {
+    if (!rawUsage) return null;
+    const { model, thoughtLevel } = this._sessionModelInfo(sessionId);
+    return resolveEffectiveContextUsage(rawUsage, { model, thoughtLevel, liveLimits });
+  }
+
   _recordSessionResult(sessionId, result = {}, params = {}) {
     const id = String(sessionId || result.sessionId || '');
     if (!id) return null;
@@ -881,10 +1115,16 @@ export class AcpClient {
       configOptions: decorateModeOptions(result.configOptions || prevMounted.configOptions || [], bypassOn),
       commands: prevMounted.commands || [],
       title: prevMounted.title || '',
+      rawUsage: prevMounted.rawUsage || null,
       usage: prevMounted.usage || null,
       tier: tier || prevMounted.tier || this.lastTier || null,
+      lastActiveAt: Date.now(),
     };
     this.mountedSessions.set(id, snapshot);
+    warmAgyContextLimits(this);
+    if (snapshot.rawUsage) {
+      snapshot.usage = this._resolveSessionUsage(id, snapshot.rawUsage) || snapshot.usage;
+    }
     return snapshot;
   }
 
@@ -893,6 +1133,8 @@ export class AcpClient {
     const sessionId = String(params.sessionId || '');
     const update = params.update;
     if (!sessionId || !update) return;
+    // 子代理仅为接通权限审批流而临时 resume：忽略其 session/update，免得冲掉主会话的目录/配置缓存或塞进历史
+    if (this.subagentRoots.has(sessionId) && !this.mountedSessions.has(sessionId)) return;
 
     // 放行中的会话被 agy 自己切到了 auto 以外的模式（比如模型调用切模式工具进计划）→ 视为退出放行；
     // 补发配置（model -> thought_level -> mode）途中 agy 推回的旧 mode 是中间态，不在此判定
@@ -908,9 +1150,13 @@ export class AcpClient {
 
     const mounted = this.mountedSessions.get(sessionId);
     if (mounted) {
+      mounted.lastActiveAt = Date.now();
       if (update.sessionUpdate === 'config_option_update' && Array.isArray(update.configOptions)) {
         mounted.configOptions = decorateModeOptions(update.configOptions, bypassOn);
         if (this.lastCatalog) this.lastCatalog.configOptions = this._decorCatalog(update.configOptions);
+        if (mounted.rawUsage) {
+          mounted.usage = this._resolveSessionUsage(sessionId, mounted.rawUsage) || mounted.usage;
+        }
       } else if (update.sessionUpdate === 'current_mode_update' && mounted.modes) {
         mounted.modes = decorateModes({ ...mounted.modes, currentModeId: update.currentModeId }, bypassOn);
       } else if (update.sessionUpdate === 'available_commands_update' && Array.isArray(update.availableCommands)) {
@@ -918,7 +1164,10 @@ export class AcpClient {
       } else if (update.sessionUpdate === 'session_info_update' && typeof update.title === 'string') {
         mounted.title = update.title;
       } else if (update.sessionUpdate === 'usage_update') {
-        mounted.usage = { used: Number(update.used) || 0, size: Number(update.size) || 0 };
+        warmAgyContextLimits(this);
+        const rawUsage = { used: Math.max(0, Number(update.used) || 0), size: Math.max(0, Number(update.size) || 0) };
+        mounted.rawUsage = rawUsage;
+        mounted.usage = this._resolveSessionUsage(sessionId, rawUsage) || rawUsage;
       }
     }
 
@@ -931,9 +1180,19 @@ export class AcpClient {
     const converted = convertSessionUpdate(sessionId, update).map((evt) => {
       if (evt.type === 'config') {
         const configOptions = decorateModeOptions(evt.configOptions, bypassOn);
-        return { ...evt, configOptions, mode: extractConfigSummary(configOptions).mode };
+        return {
+          ...evt,
+          configOptions,
+          mode: extractConfigSummary(configOptions).mode,
+          ...(mounted?.usage ? { usage: mounted.usage } : {}),
+        };
       }
       if (evt.type === 'mode') return { ...evt, modeId: decorateModes({ currentModeId: evt.modeId }, bypassOn).currentModeId };
+      if (evt.type === 'usage') {
+        warmAgyContextLimits(this);
+        const resolved = this._resolveSessionUsage(sessionId, { used: evt.used, size: evt.size });
+        return resolved ? { ...evt, ...resolved } : evt;
+      }
       return evt;
     });
     for (const evt of converted) {
@@ -949,12 +1208,49 @@ export class AcpClient {
       for (const evt of converted) {
         if (evt.type === 'text') { turn.finalText += evt.text; turn.segText += evt.text; }
         else if (evt.type === 'thinking') turn.thinkingText += evt.text;
+        if (evt.type === 'text' || evt.type === 'thinking' || String(evt.type).startsWith('tool')) turn.progress += 1;
         try { turn.onEvent?.(evt); } catch {}
       }
     } else if (!collector && mounted) {
       // 无活跃用户轮但会话仍挂载时收到 agy 主动推送的更新，记进历史以免丢失
       const hist = this.historyUpdates.get(sessionId);
       if (hist) hist.push({ params: { sessionId, update } });
+    }
+  }
+
+  _isMountedSessionProtected(sessionId) {
+    const id = String(sessionId || '');
+    if (!id) return true;
+    if (this.turns.has(id) || this.inflightLoads.has(id) || this.sessionLocks.has(id)) return true;
+    for (const entry of this.pendingPermissions.values()) {
+      if (entry.sessionId === id || entry.rootSessionId === id || entry.sourceSessionId === id) return true;
+    }
+    for (const entry of this.pendingQuestions.values()) {
+      if (entry.sessionId === id || entry.rootSessionId === id || entry.sourceSessionId === id) return true;
+    }
+    try {
+      if (this.bgHandlers?.hasAliveBackground?.(id)) return true;
+    } catch {}
+    return false;
+  }
+
+  // --process-per-session 下空闲挂载会话仍各占一个 worker 进程：超过上限后按最久未活跃顺序
+  // 关闭空闲会话（仅释放 worker，保留 historyUpdates 与 knownSessions，下次续聊无缝重挂）。
+  _evictIdleMountedSessions(keepSessionId = '') {
+    const limit = this.maxIdleMountedSessions;
+    if (!limit || !this.ready || !this.proc || this.shuttingDown) return;
+    const keep = String(keepSessionId || '');
+    const evictable = [];
+    for (const [sid, snap] of this.mountedSessions.entries()) {
+      if (sid === keep) continue;
+      if (this._isMountedSessionProtected(sid)) continue;
+      evictable.push({ sid, lastActiveAt: Number(snap?.lastActiveAt) || 0 });
+    }
+    const overflow = evictable.length - limit;
+    if (overflow <= 0) return;
+    evictable.sort((a, b) => a.lastActiveAt - b.lastActiveAt);
+    for (const { sid } of evictable.slice(0, overflow)) {
+      this.closeSession(sid).catch(() => {});
     }
   }
 
@@ -985,6 +1281,7 @@ export class AcpClient {
     if (desiredConfig && Object.keys(desiredConfig).length > 0) {
       snapshot = await this.applyDesiredConfig(sessionId, desiredConfig);
     }
+    this._evictIdleMountedSessions(sessionId);
     return snapshot;
   }
 
@@ -1074,6 +1371,7 @@ export class AcpClient {
     if (known.desiredConfig && Object.keys(known.desiredConfig).length > 0) {
       await this.applyDesiredConfig(id, known.desiredConfig);
     }
+    this._evictIdleMountedSessions(id);
     return this.mountedSessions.get(id);
   }
 
@@ -1157,6 +1455,7 @@ export class AcpClient {
           return {
             snapshot: this.mountedSessions.get(id),
             updates: [...(updates || [])],
+            preservedAlive: true,
           };
         }
         try {
@@ -1197,8 +1496,23 @@ export class AcpClient {
       if (known.desiredConfig && Object.keys(known.desiredConfig).length > 0) {
         await this.applyDesiredConfig(id, known.desiredConfig);
       }
+      const mountedNow = this.mountedSessions.get(id);
+      if (mountedNow) {
+        for (let i = collected.length - 1; i >= 0; i--) {
+          const u = collected[i]?.params?.update;
+          if (u?.sessionUpdate === 'usage_update') {
+            mountedNow.rawUsage = { used: Math.max(0, Number(u.used) || 0), size: Math.max(0, Number(u.size) || 0) };
+            break;
+          }
+        }
+        if (mountedNow.rawUsage) {
+          const liveLimits = await getAgyContextLimits(this, { timeoutMs: 400 }).catch(() => null);
+          mountedNow.usage = this._resolveSessionUsage(id, mountedNow.rawUsage, liveLimits) || mountedNow.rawUsage;
+        }
+      }
+      this._evictIdleMountedSessions(id);
       return {
-        snapshot: this.mountedSessions.get(id),
+        snapshot: mountedNow,
         updates: [...collected],
       };
     }
@@ -1260,9 +1574,14 @@ export class AcpClient {
       }
       this._syncBypass(id);
       const cfgOut = mounted?.configOptions || decorateModeOptions(res?.configOptions || [], this.isBypass(id));
+      if (mounted?.rawUsage) {
+        const liveLimits = await getAgyContextLimits(this, { timeoutMs: 400 }).catch(() => null);
+        mounted.usage = this._resolveSessionUsage(id, mounted.rawUsage, liveLimits) || mounted.usage;
+      }
       return {
         configOptions: cfgOut,
         ...extractConfigSummary(cfgOut, mounted?.modes, mounted?.models),
+        ...(mounted?.usage ? { usage: mounted.usage } : {}),
       };
     });
   }
@@ -1305,9 +1624,14 @@ export class AcpClient {
           ...(summary.thoughtLevel ? { thought_level: summary.thoughtLevel } : {}),
         },
       });
+      if (mounted?.rawUsage) {
+        const liveLimits = await getAgyContextLimits(this, { timeoutMs: 400 }).catch(() => null);
+        mounted.usage = this._resolveSessionUsage(id, mounted.rawUsage, liveLimits) || mounted.usage;
+      }
       return {
         ...summary,
         configOptions: mounted?.configOptions || [],
+        ...(mounted?.usage ? { usage: mounted.usage } : {}),
       };
     });
   }
@@ -1382,6 +1706,8 @@ export class AcpClient {
     onEvent,
     onPermission,
     onPermissionResolved,
+    // 插件的审批策略（plugin-permission.mjs 造）：async (payload) → null | { behavior: 'allow' | 'deny' | 'ask', message? }
+    permissionPolicy = null,
     onQuestion,
     onQuestionResolved,
     // 这一轮正常收尾时问一句「后台还有没有要等的」：返回一组提示块就接着发（同一轮继续），返回空就真的结束。
@@ -1412,6 +1738,8 @@ export class AcpClient {
         aborted: false,
         // 一轮里可以先后发好几条 session/prompt（中途插话、后台回报续接），只有最新那条的返回才算这一轮的结局
         promptSeq: 0,
+        // 这一轮收到过多少条模型输出（正文 / 思考 / 工具）：判断被拒的 prompt 是不是还没开始干活、能不能换个写法重发
+        progress: 0,
         wakes: 0,
         usageParts: [],
         idleAbort: null,
@@ -1423,6 +1751,7 @@ export class AcpClient {
         onEvent,
         onPermission,
         onPermissionResolved,
+        permissionPolicy: typeof permissionPolicy === 'function' ? permissionPolicy : null,
         onQuestion,
         onQuestionResolved,
         finish: (status, errorMsg = '', promptResult = null) => {
@@ -1432,13 +1761,20 @@ export class AcpClient {
           clearTimeout(turn.cancelGraceTimer);
           if (signal) signal.removeEventListener?.('abort', turn.abort);
           if (this.turns.get(activeId) === turn) this.turns.delete(activeId);
+          const mountedDone = this.mountedSessions.get(activeId);
+          if (mountedDone) mountedDone.lastActiveAt = Date.now();
+          this._evictIdleMountedSessions(activeId);
           this._scheduleIdleRestartCheck();
 
           for (const [k, entry] of this.pendingPermissions.entries()) {
-            if (entry.sessionId === activeId) {
-              clearTimeout(entry.timer);
-              this.pendingPermissions.delete(k);
+            if (entry.sessionId !== activeId) continue;
+            // 主轮正常收尾时，挂着的子代理审批不能随之丢弃：交由后台监视器接管继续展示给用户
+            if (status === 'completed' && entry.sourceSessionId && entry.sourceSessionId !== activeId) {
+              entry.onResolved = null;
+              continue;
             }
+            clearTimeout(entry.timer);
+            this.pendingPermissions.delete(k);
           }
           for (const [k, entry] of this.pendingQuestions.entries()) {
             if (entry.sessionId === activeId) {
@@ -1480,12 +1816,19 @@ export class AcpClient {
     let snapshot;
     let activeId;
     let turn;
+    let fallbackBlocks = null;
 
     try {
       while (this._idleRestartPromise) {
         try { await this._idleRestartPromise; } catch {}
       }
       await this.ensureStarted();
+      // 内容块要按 agy 刚报的能力组装（附件能不能作为音频 / 文件内容送入），调用方给的是组装函数
+      if (typeof promptBlocks === 'function') {
+        const plan = promptBlocks(this.promptCapabilities());
+        promptBlocks = Array.isArray(plan) ? plan : (plan?.blocks || []);
+        fallbackBlocks = Array.isArray(plan?.fallback) ? plan.fallback : null;
+      }
 
       if (sessionId) {
         const targetSid = String(sessionId);
@@ -1565,9 +1908,12 @@ export class AcpClient {
     const rpcTimeout = timeoutMs > 0 ? timeoutMs + 5000 : 24 * 3600_000;
     // 同一轮里可以再发：agy 在一条 prompt 还没答完时收到下一条，会让前一条立刻以 end_turn 返回、
     // 把新消息在下一步之前送给模型（实测）。所以前一条的返回不代表这一轮结束，只认序号最新的那条。
-    turn.sendPrompt = (blocks) => {
+    // fallback：这条带了 agy 可能不认的内容块（audio / resource）时的保守写法。agy 直接拒收、且还没产出任何东西时改发它一次，
+    // 免得一个附件让整轮失败。
+    turn.sendPrompt = (blocks, fallback = null) => {
       const mySeq = ++turn.promptSeq;
       const superseded = () => mySeq !== turn.promptSeq;
+      const progressAtSend = turn.progress;
       this._requestRaw('session/prompt', {
         sessionId: activeId,
         prompt: Array.isArray(blocks) ? blocks : [],
@@ -1601,6 +1947,8 @@ export class AcpClient {
         if (turn.done || superseded()) return;
         if (turn.aborted) {
           turn.finish('interrupted', '');
+        } else if (Array.isArray(fallback) && fallback.length && Number.isInteger(err?.code) && turn.progress === progressAtSend) {
+          turn.sendPrompt(fallback);
         } else {
           // 出错的是后来补发的那条（插话 / 续接）时，前一条可能还在 agy 那边跑着：先让它停，
           // 不然这边报了失败、那边还在悄悄动文件，下一条消息又会和它撞在一起
@@ -1609,7 +1957,7 @@ export class AcpClient {
         }
       });
     };
-    turn.sendPrompt(promptBlocks);
+    turn.sendPrompt(promptBlocks, fallbackBlocks);
 
     return resultPromise;
   }
@@ -1618,7 +1966,7 @@ export class AcpClient {
    * 中途插话：这个会话有一轮正在跑时，把一条用户消息送进去（做完手头这一步就读到，不打断）。
    * 返回 { ok }；没有在跑的轮（或正在被停下）时 ok 为 false，调用方改走别的路（排队 / 新开一轮）。
    */
-  steerPrompt(sessionId, promptBlocks = []) {
+  steerPrompt(sessionId, promptBlocks = [], fallback = null) {
     const id = String(sessionId || '');
     const turn = id ? this.turns.get(id) : null;
     if (!turn || turn.done || turn.aborted || typeof turn.sendPrompt !== 'function') return { ok: false, reason: 'not_running' };
@@ -1635,7 +1983,7 @@ export class AcpClient {
     if (turn.finalText && !/\n\s*$/.test(turn.finalText)) turn.finalText += '\n\n';
     // 正等着后台回报：这条消息本身就会把回报带给模型，不用再等
     try { turn.idleAbort?.abort(); } catch {}
-    turn.sendPrompt(blocks);
+    turn.sendPrompt(blocks, fallback);
     return { ok: true };
   }
 

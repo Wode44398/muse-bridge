@@ -10,13 +10,17 @@
 //
 // 上游处理器的形状：async handle({ service, proto, rest, search, method, headers, body, signal }) → Response | { status, json }。
 // 网关只管收请求体、把上游的应答原样（状态码 + content-type + 流）转回去。
+//
+// 第四种协议段 responses 给 Codex：不按服务类型找处理器直接打，而是交给 responses.mjs——上游自己有 Responses 接口的原样透传
+//（还是走这个服务的处理器），没有的翻译成 Chat Completions / Anthropic Messages 再翻回来。
 import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { handleResponses } from './responses.mjs';
 
 const MAX_BODY = 96 * 1024 * 1024;   // 内联图片 / 长上下文
-const PROTOS = new Set(['openai', 'anthropic', 'gemini']);
+const PROTOS = new Set(['openai', 'anthropic', 'gemini', 'responses']);
 
 let server = null, starting = null, base = '', secret = '';
 let resolveService = () => null;     // (id) → 服务记录（registry 注入）
@@ -65,7 +69,8 @@ async function handle(req, res) {
   res.on('close', () => { if (!res.writableEnded) ac.abort(); });
   let up;
   try {
-    up = await h({ service, proto, rest, search: u.search, method: req.method, headers: req.headers, body, signal: ac.signal });
+    const args = { service, proto, rest, search: u.search, method: req.method, headers: req.headers, body, signal: ac.signal };
+    up = proto === 'responses' ? await handleResponses({ ...args, upstream: h }) : await h(args);
   } catch (e) {
     if (ac.signal.aborted) return;
     return fail(res, e?.status && e.status >= 400 && e.status < 600 ? e.status : 502, String(e?.message || e));

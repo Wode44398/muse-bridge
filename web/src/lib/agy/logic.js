@@ -21,6 +21,8 @@ export {
   timeBucketOf,
   timeBucketLabel,
   isDaemonPseudoPath,
+  normCmpDir,
+  moveOrderPath,
   stripWorkspaceCdPrefix,
   disambiguateProjectGroups,
   groupSessionsByProjectAndTime,
@@ -606,8 +608,9 @@ export function applyAgyStreamEvent(turn, ev) {
     if (!reqId) return turn;
     const toolCall = (ev.toolCall && typeof ev.toolCall === 'object') ? ev.toolCall : ev;
     const tid = String(toolCall.toolCallId || ev.toolCallId || '');
-    // 确保待审批的工具调用在 blocks 中已有对应工具卡，以便审批完成后结论就地合并到该工具卡上
-    if (tid && !turn.toolsById[tid]) {
+    // 确保待审批的主会话工具调用在 blocks 中已有对应工具卡，以便审批完成后结论就地合并到该工具卡上；
+    // 子代理发起的权限申请不往主会话步骤流里插假工具行，只渲染审批卡。
+    if (tid && !ev.subagent && !turn.toolsById[tid]) {
       turn.toolsById[tid] = normalizeToolRecord({
         toolCallId: tid,
         name: toolCall.name || ev.toolName || '',
@@ -625,6 +628,8 @@ export function applyAgyStreamEvent(turn, ev) {
       turn.permissions.push({
         requestId: reqId,
         sessionId: ev.sessionId || '',
+        sourceSessionId: ev.sourceSessionId || '',
+        subagent: ev.subagent || null,
         toolCallId: tid,
         toolName: toolCall.name || ev.toolName || '',
         kind: toolCall.kind || ev.kind || 'execute',
@@ -730,27 +735,47 @@ export function applyAgyStreamEvent(turn, ev) {
   return turn;
 }
 
+function foldAttPath(p = '') {
+  const s = String(p || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  return /^[A-Za-z]:(\/|$)/.test(s) ? s.toLowerCase() : s;
+}
+
 export function normalizeHistoryMessages(rawMessages = [], sessionId = '') {
   const out = [];
   for (let i = 0; i < rawMessages.length; i++) {
     const m = rawMessages[i];
     if (!m || typeof m !== 'object') continue;
     if (m.role === 'user') {
-      // 非图片附件在服务端是拼进原文的一段路径前缀：拆出来还原成附件，气泡里只留用户写的话
+      // 附件（含图片原路径与非图片文件）在服务端是拼进原文的一段路径前缀：拆出来还原成附件，气泡里只留用户写的话
       const split = splitAttachedPaths(String(m.text || ''));
+      const imgAtts = [];
+      const seenPaths = new Set();
+      for (const [idx, img] of (Array.isArray(m.images) ? m.images : []).entries()) {
+        if (!img || typeof img !== 'object') continue;
+        const p = typeof img.path === 'string' ? img.path.trim() : '';
+        const origP = typeof img.origPath === 'string' ? img.origPath.trim() : '';
+        const dataUrl = img.data ? `data:${img.mimeType || 'image/png'};base64,${img.data}` : '';
+        if (!p && !dataUrl) continue;
+        if (p) seenPaths.add(foldAttPath(p));
+        if (origP) seenPaths.add(foldAttPath(origP));
+        const base = p ? (p.split(/[\\/]/).filter(Boolean).pop() || '') : '';
+        const cleanName = String(img.name || '').trim() || base.replace(/^\d{10,}-(?=.)/, '') || `image-${idx + 1}.png`;
+        imgAtts.push({
+          ...(p ? { path: p } : {}),
+          name: cleanName,
+          kind: 'image',
+          ...(img.mimeType ? { mime: img.mimeType } : {}),
+          ...(Number.isFinite(Number(img.size)) && Number(img.size) >= 0 ? { size: Number(img.size) } : {}),
+          url: dataUrl,
+        });
+      }
+      const extraAtts = split.atts.filter((a) => !a.path || !seenPaths.has(foldAttPath(a.path)));
       out.push({
         id: `hist-u-${i}`,
         role: 'user',
         text: split.text,
         images: Array.isArray(m.images) ? m.images : [],
-        atts: [
-          ...(Array.isArray(m.images) ? m.images : []).map((img, idx) => ({
-            name: `image-${idx + 1}.png`,
-            kind: 'image',
-            url: img.data ? `data:${img.mimeType || 'image/png'};base64,${img.data}` : '',
-          })),
-          ...split.atts,
-        ],
+        atts: [...imgAtts, ...extraAtts],
       });
     } else {
       const turnStatus = m.status === 'interrupted'

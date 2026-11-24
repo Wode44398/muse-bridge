@@ -14,9 +14,13 @@ import { parseDeviceRef, formatDeviceRef } from './device-refs.mjs';
 
 const MAX_DEVICE_REFS = 20;
 
-const inDir = (p, dir) => path.resolve(p).startsWith(path.resolve(dir) + path.sep);
+const fold = (p) => (process.platform === 'win32' ? p.toLowerCase() : p);
+const samePath = (a, b) => fold(path.resolve(a)) === fold(path.resolve(b));
+const inDir = (p, dir) => fold(path.resolve(p)).startsWith(fold(path.resolve(dir)) + path.sep);
 
-export function filterAttachmentPaths(list, { allowAnywhere = false, roots = [], deviceRefOk = null } = {}) {
+// exactRoots：允许直接引用已授权工作空间 / 项目根目录本身（如侧栏拖入输入框引用文件夹）；
+// ctx.uploads 不放进 exactRoots，防止沙箱用户把整个上传池当目录引用。
+export function filterAttachmentPaths(list, { allowAnywhere = false, roots = [], exactRoots = [], deviceRefOk = null } = {}) {
   let refs = 0;
   return (Array.isArray(list) ? list : []).map((p) => {
     const ref = parseDeviceRef(p);
@@ -29,7 +33,7 @@ export function filterAttachmentPaths(list, { allowAnywhere = false, roots = [],
     if (p.startsWith('device://')) return true;
     // 绝对路径才有资格谈引用；相对路径一律拒（防 cwd 歧义）。
     if (!path.isAbsolute(p)) return false;
-    if (!allowAnywhere && !roots.some((dir) => dir && inDir(p, dir))) return false;
+    if (!allowAnywhere && !roots.some((dir) => dir && inDir(p, dir)) && !exactRoots.some((dir) => dir && samePath(p, dir))) return false;
     return existsSync(p);
   });
 }

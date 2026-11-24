@@ -68,7 +68,7 @@ export default {
   '授予无障碍权限': 'Allow accessibility access',
   '无障碍权限': 'Accessibility access',
   '已开启 · Claude 可读屏并代你点按输入': 'On · Claude can read the screen, tap, and type for you',
-  '未开启 · 点此到系统设置打开「Claude Bridge」': 'Off · Tap to turn on “Claude Bridge” in Settings',
+  '未开启 · 点此到系统设置打开「Bridge」': 'Off · Tap to turn on “Bridge” in Settings',
   '保持后台运行': 'Keep running in background',
   '已豁免省电': 'Battery usage: Unrestricted',
   '未豁免 · 点此关闭省电限制，否则会被系统杀掉': 'Optimized · Tap to turn off battery optimization so the system doesn’t stop the app',

@@ -15,6 +15,7 @@
   import { t } from '../lib/i18n.js';
   import { pluginUi, uiIcon } from '../lib/pluginUi.svelte.js';
   import { openApp, appIconUrl, appKey } from '../lib/pluginApps.svelte.js';
+  import { isPageWindow, canOpenPageInWindow, openPageInWindow } from '../lib/windowPage.svelte.js';
 
   // anchor：账户卡按钮的 DOMRect；onclose：点空白 / Esc / 返回键；onpick：选了某一项（侧栏抽屉跟着收起）；
   // onhome：常规模式回主页（单 agent 模式不传——没有主页）
@@ -66,7 +67,7 @@
     </button>
   {/if}
   <div class="um-sep" role="separator"></div>
-  <button class="um-i" role="menuitem" onclick={() => pick(() => { ui.screen = 'files'; })}><span class="ic" aria-hidden="true">&#xe072;</span><span class="um-l">{t('工作空间')}</span></button>
+  <button class="um-i" role="menuitem" onclick={() => pick(() => { if (isPageWindow() && canOpenPageInWindow()) openPageInWindow('files', { title: t('工作空间') }); else ui.screen = 'files'; })}><span class="ic" aria-hidden="true">&#xe072;</span><span class="um-l">{t('工作空间')}</span></button>
   {#if canScan && me.kind !== 'none'}
     <button class="um-i" role="menuitem" onclick={() => pick(() => { ui.pairScan = { mode: 'scan' }; })}><span class="ic svg" aria-hidden="true">{@html SCAN}</span><span class="um-l">{t('扫一扫登录网页版')}</span></button>
   {/if}
@@ -75,7 +76,7 @@
     <div class="um-apps">
       {#each apps as a (a.key || appKey(a))}
         {@const url = appIconUrl(a, ui.theme === 'light')}
-        <button class="um-i" role="menuitem" onclick={() => pick(() => openApp(a))}>
+        <button class="um-i" role="menuitem" onclick={() => pick(() => { if (isPageWindow() && canOpenPageInWindow()) openPageInWindow(a.key || appKey(a), { title: a.title || a.id }); else openApp(a); })}>
           {#if url}<span class="ic img" aria-hidden="true"><img src={url} alt="" draggable="false" /></span>
           {:else}<span class="ic svg" aria-hidden="true">{@html uiIcon(a.icon?.name)}</span>{/if}
           <span class="um-l">{a.title || a.id}</span>

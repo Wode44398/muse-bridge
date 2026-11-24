@@ -12,7 +12,7 @@ const inside = (base, p) => { const b = path.resolve(base); return p === b || p.
 
 /**
  * id = 登录身份（kind / user / tier），ctx = contextFor(id)；attachments = [{ path, name? }]。
- * via：'form'（默认，设置页提交）| 'claude' / 'dimensio'（agent 跟用户确认过后代为上报），写进 frontmatter。
+ * via：'form'（默认，设置页提交）| 'claude' / 'dimensio' / 'agy' / 'codex'（agent 跟用户确认过后代为上报），写进 frontmatter。
  * 回 { file, srcs }：srcs 是通过校验的附件源路径（推给中继时用）。写不进去就抛错。
  */
 export function saveLocalFeedback({ id, ctx, text = '', screen = '', attachments = [], via = 'form', title = '', feedbackDir = FEEDBACK_DIR, allowDirs = [] }) {
@@ -41,7 +41,7 @@ export function saveLocalFeedback({ id, ctx, text = '', screen = '', attachments
   const fm = [
     '---', 'type: feedback', `date: ${date}`, `user: ${yamlStr(user)}`, `kind: ${id.kind}`, `tier: ${tier}`,
     `app: v${APP_VERSION_NAME} (code ${APP_VERSION_CODE})`, `screen: ${yamlStr(screen || '-')}`,
-    ...(via === 'claude' || via === 'dimensio' || via === 'agy' ? [`via: ${via}`, `title: ${yamlStr(title || '-')}`] : []),
+    ...(['claude', 'dimensio', 'agy', 'codex'].includes(via) ? [`via: ${via}`, `title: ${yamlStr(title || '-')}`] : []),
     'status: new', '---', '', '',
   ].join('\n');
   let md = fm + (text || '');

@@ -1,6 +1,6 @@
 <script module>
-  // 供外部（ParticleReveal 终帧对齐等）读取的空间壁纸 cover 常量：本层静止时画面 = 原图
-  // cover × overscan 微放大，粒子转场的终帧须用同倍率才能与本层硬接不跳。
+  // 供外部（开机入场 BootGate 的终帧对齐）读取的空间壁纸 cover 常量：本层静止时画面 = 原图
+  // cover × overscan 微放大，入场终帧须用同倍率才能与本层硬接不跳。
   export const SPATIAL_MAXAMP = 0.04;
   export const spatialOverscan = (a) => 1 / Math.max(0.55, 1 - 2.2 * a);   // a = MAXAMP×幅度
 </script>

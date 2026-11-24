@@ -276,3 +276,46 @@ test('AcpClient：连续崩溃达到上限后停止自动重启并清理孙进�
   assert.equal(recoveredStatus.stoppedAfterCrashes, false);
   assert.equal(recoveredStatus.crashCount, 0);
 });
+
+test('AcpClient：空闲挂载会话超上限后按 LRU 自动关闭释放 worker，同时保护有后台任务的会话', async () => {
+  const evictStateFile = path.join(tmp, 'evict-state.json');
+  const evictClient = new AcpClient({
+    daemonCwd: path.join(tmp, 'evict-daemon'),
+    logFile: null,
+    maxIdleMountedSessions: 2,
+    env: { ...process.env, FAKE_ACP_STATE_FILE: evictStateFile },
+  });
+  extraClients.push(evictClient);
+
+  const aliveBg = new Set();
+  evictClient.setBackgroundHandlers({
+    hasAliveBackground: (sid) => aliveBg.has(sid),
+  });
+
+  const s1 = await evictClient.createSession({ cwd: projectDir });
+  await new Promise((r) => setTimeout(r, 15));
+  const s2 = await evictClient.createSession({ cwd: projectDir });
+  await new Promise((r) => setTimeout(r, 15));
+  const s3 = await evictClient.createSession({ cwd: projectDir });
+  await new Promise((r) => setTimeout(r, 15));
+  // 标记 s1 有活着的子代理/后台任务，即使它最老也不能被淘汰
+  aliveBg.add(s1.sessionId);
+
+  const s4 = await evictClient.createSession({ cwd: projectDir });
+  await waitFor(() => {
+    const mounted = evictClient.status().mountedSessions;
+    // keep=s4，受保护=s1，空闲列表 [s2, s3] 超过 limit=2？再建一个 s5 触发淘汰 s2
+    return mounted.includes(s4.sessionId);
+  });
+  await new Promise((r) => setTimeout(r, 15));
+  const s5 = await evictClient.createSession({ cwd: projectDir });
+
+  // 现在 mounted 候选空闲（不含 keep=s5 和受保护 s1）为 [s2, s3, s4]，limit=2 → 最老的 s2 被关闭，s1 完好
+  await waitFor(() => !evictClient.status().mountedSessions.includes(s2.sessionId));
+  const mounted = evictClient.status().mountedSessions;
+  assert.equal(mounted.includes(s1.sessionId), true, '有活着后台任务的会话绝不能被淘汰关闭');
+  assert.equal(mounted.includes(s2.sessionId), false, '最久未活跃的空闲会话应被自动关闭释放 worker');
+  assert.equal(mounted.includes(s3.sessionId), true);
+  assert.equal(mounted.includes(s4.sessionId), true);
+  assert.equal(mounted.includes(s5.sessionId), true);
+});

@@ -10,30 +10,56 @@
 // - 另一个接口 GetUserStatus 的 per-model quotaInfo 只反映 5 小时桶，判不了最吃紧，别用。
 
 import { readFileSync, statSync } from 'node:fs';
+import { listWorkerLogFiles } from './acp/binary.mjs';
 
 const PORT_RE = /Language server listening on random port at (\d+) for HTTP\b(?! *S)/g;
 const RPC = 'exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary';
 const FORCE_GAP_MS = 30_000;
 
-let portCache = { pid: null, port: null, logSize: -1 };
+let portCaches = new WeakMap();
 let last = null;          // 最近一次规整后的结果
 let lastForceAt = 0;
 let inflight = null;
 
-function findPort(client) {
-  const st = client.status();
-  const file = st.logFile;
-  if (!st.running || !st.pid || !file) return null;
-  let size = -1;
-  try { size = statSync(file).size; } catch { return null; }
-  if (portCache.pid === st.pid && portCache.port && portCache.logSize <= size) return portCache.port;
+function extractLastHttpPort(file) {
   let port = null;
   try {
     const txt = readFileSync(file, 'utf8');
     for (const m of txt.matchAll(PORT_RE)) port = Number(m[1]);
   } catch {}
-  portCache = { pid: st.pid, port, logSize: size };
   return port;
+}
+
+export function clearLanguageServerPortCache(client) {
+  if (client && typeof client === 'object') portCaches.delete(client);
+}
+
+export function findLanguageServerPort(client) {
+  if (!client || typeof client.status !== 'function') return null;
+  const st = client.status();
+  const file = st?.logFile;
+  if (!st?.running || !st?.pid || !file) return null;
+
+  const cached = portCaches.get(client);
+  if (cached && cached.pid === st.pid && cached.port && cached.sourceFile) {
+    let curSize = -1;
+    try { curSize = statSync(cached.sourceFile).size; } catch {}
+    if (curSize >= 0 && cached.logSize <= curSize) return cached.port;
+  }
+
+  // 先查主日志（兼容单进程模式），未命中时顺着 front 日志查派生 worker 日志（--process-per-session 下
+  // language server 跑在 worker 进程里，worker 1 负责 session/list 且随 front 常驻）。
+  const candidates = [file, ...listWorkerLogFiles(file)];
+  for (const src of candidates) {
+    let size = -1;
+    try { size = statSync(src).size; } catch { continue; }
+    const port = extractLastHttpPort(src);
+    if (port) {
+      portCaches.set(client, { pid: st.pid, port, sourceFile: src, logSize: size });
+      return port;
+    }
+  }
+  return null;
 }
 
 function groupShort(name = '') {
@@ -64,7 +90,7 @@ export function normalizeQuota(resp) {
 }
 
 async function fetchOnce(client, force) {
-  const port = findPort(client);
+  const port = findLanguageServerPort(client);
   if (!port) return { buckets: [], at: Date.now(), error: 'unavailable' };
   try {
     const r = await fetch(`http://127.0.0.1:${port}/${RPC}`, {
@@ -76,7 +102,7 @@ async function fetchOnce(client, force) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return { buckets: normalizeQuota(await r.json()), at: Date.now(), error: null };
   } catch (err) {
-    portCache = { pid: null, port: null, logSize: -1 };   // 端口可能换了，下次重读日志
+    clearLanguageServerPortCache(client);   // 端口可能换了，下次重读日志
     return { buckets: last?.buckets || [], at: last?.at || Date.now(), error: err?.message || String(err), stale: !!last };
   }
 }
@@ -94,6 +120,6 @@ export async function getAgyQuota(client, { force = false } = {}) {
 }
 
 export function _resetAgyQuotaForTest() {
-  portCache = { pid: null, port: null, logSize: -1 };
+  portCaches = new WeakMap();
   last = null; lastForceAt = 0; inflight = null;
 }

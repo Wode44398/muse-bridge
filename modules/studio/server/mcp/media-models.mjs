@@ -22,6 +22,10 @@ function inputsLine(inp = {}) {
   return out.join('，');
 }
 
+// extra：卡上没有的上游参数原样透传（各适配器的合并顺序一致：映射字段 → 服务级 provider.params → extra，后者覆盖前者）
+const hasExtra = (m) => (m.params || []).some((s) => s.key === 'extra' && s.type === 'json');
+const EXTRA_LINE = '卡上没有的上游参数写进 params.extra（JSON 对象，原样并入请求体；合并顺序：卡上映射出的字段 < 服务级额外参数 < extra，后者覆盖前者）。';
+
 const cond = (when) => Object.entries(when || {}).map(([k, v]) => k + '=' + (Array.isArray(v) ? v.join('/') : String(v))).join(' 且 ');
 const val = (v) => (v === '' ? '""' : typeof v === 'string' ? v : JSON.stringify(v));
 
@@ -45,7 +49,7 @@ function paramLine(s, same) {
     body = s.options.map((o) => {
       const lab = optLabel(o);
       const only = o.only && !Array.isArray(o.only) && typeof o.only === 'object' ? '[仅 ' + cond(o.only) + ']' : '';
-      return val(o.value) + lab + only + (o.rejected ? '[被上游拒过]' : '');
+      return val(o.value) + lab + only + (o.custom ? '[补]' : '') + (o.rejected ? '[被上游拒过]' : '');
     }).join(' | ');
   } else if (s.type === 'bool') body = 'true / false';
   else if (s.type === 'json') body = 'JSON 对象，原样合并进请求体';
@@ -70,7 +74,8 @@ function summaryLine(m, groupName, isDefault) {
     + (inp ? ' · 素材 ' + inp : ' · 只收文字')
     + (m.inputs?.negative ? ' · 收 negative' : '')
     + (keys.length ? ' · 参数 ' + keys.join(' ') : '')
-    + (m.priceHint ? ' · ' + m.priceHint : '');
+    + (m.priceHint ? ' · ' + m.priceHint : '')
+    + (m.custom?.recipe ? ' · 按调用配方调' : m.custom?.over ? ' · 补过参数' : '');
 }
 
 async function voicesOf(hit) {
@@ -100,7 +105,10 @@ export async function mediaModelsText(owner, { kind, key, q } = {}, { kinds = KI
     lines.push('素材（inputs 的 role）：' + (inp || '不收，只收文字') + (m.inputs?.multiTurn === false ? '；没有多轮上下文，continueFrom 续改时拿上一张当参考图' : ''));
     lines.push('负面提示词（negative）：' + (m.inputs?.negative ? '收' : '不收'));
     if (m.priceHint) lines.push('价格：' + m.priceHint);
-    if (m.generic) lines.push('（这是通用参数卡：服务没报参数，常用参数不一定生效，可用 extra 原样传上游参数）');
+    if (m.generic) lines.push('（这是通用参数卡：服务没报参数，常用参数不一定生效，拿不准的上游参数走 extra）');
+    if (m.custom?.recipe) lines.push('（这个模型按用户配的调用配方调用：参数以下面列的为准）');
+    else if (m.custom?.over) lines.push('（用户给这个模型补过参数：标「补」的取值是补上的）');
+    lines.push(hasExtra(m) ? EXTRA_LINE : '这个模型不收原样透传的上游参数（卡上没有 extra），只认下面列的键。');
     lines.push('参数（放进 params，键名照写；不传 = 用默认；「仅当」= 只在那个条件下生效，$edit/$first/$last/$ref = 有改图/首帧/尾帧/参考图素材）：');
     const same = new Map();
     for (const s of m.params || []) lines.push(paramLine(s, same));
@@ -135,6 +143,7 @@ export async function mediaModelsText(owner, { kind, key, q } = {}, { kinds = KI
     if (shelfLeft) out.push('  另有 ' + shelfLeft + ' 个备选模型没列出，按名字搜传 q。');
   }
   if (!out.length) return needle ? '没有名字或键里含「' + q + '」的模型。' : '没有可用的媒体模型。';
-  out.push('', '生成工具的 model 传上面的键（服务 id/模型 id）。要看某个模型的参数取值、默认值和音色，带 key 再调一次。');
+  out.push('', '生成工具的 model 传上面的键（服务 id/模型 id）。要看某个模型的参数取值、默认值和音色，带 key 再调一次。',
+    '参数键里有 extra 的模型：卡上没有的上游参数写进 params.extra（原样并入请求体，合并顺序：卡上映射出的字段 < 服务级额外参数 < extra）。');
   return out.join('\n');
 }

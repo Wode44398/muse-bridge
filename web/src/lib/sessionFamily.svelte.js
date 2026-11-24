@@ -30,7 +30,8 @@ function attrs(s) {
 }
 
 export function hasSessionEnvelope(text) {
-  return typeof text === 'string' && /<(session-message|side-sessions-event|cross-session-message)\b/.test(text);
+  // session-hint 单独出现也算：插件消息改写的旁注（ctx.claude.input 的 hint）只给模型看，气泡里藏掉
+  return typeof text === 'string' && /<(session-message|side-sessions-event|cross-session-message|session-hint)\b/.test(text);
 }
 
 // → { parts: [{ kind:'message', from, name, title, relation, brief, body } | { kind:'event', notes:[...] }

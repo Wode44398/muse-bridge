@@ -7,3 +7,15 @@ export const MARKET_KEYS = Object.freeze([
 
 // 官方市场的索引地址：Wode44398/bridge-plugins 仓库滚动 Release「index」上的资产。
 export const OFFICIAL_INDEX_URL = 'https://github.com/Wode44398/bridge-plugins/releases/download/index/index.json';
+
+// 社区市场：另一把钥匙。私钥在市场仓库的 GitHub Actions（environment community-signing），只签社区索引；
+// 官方私钥仍只在发布机上，社区这把泄露也碰不到官方插件和内置功能（社区条目永远不能盖内置功能）。
+export const COMMUNITY_KEYS = Object.freeze([
+  { id: 'community-2026-11', spki: 'MCowBQYDK2VwAyEAONT+n/tFjGICw1EsviILLew2slQP3KJY9hOOHYDaxyM=' },
+]);
+export const COMMUNITY_REPO = 'Wode44398/bridge-plugins';
+export const COMMUNITY_INDEX_URL = 'https://github.com/Wode44398/bridge-plugins/releases/download/community-index/community.json';
+// 「发布到社区」的 GitHub 设备码登录用的 OAuth App（Wode44398 名下的「bridge 社区发布」，开了 Device Flow、令牌不过期——
+// bridge 不做令牌续期；client id 是公开的，不是机密）。空 = 不提供这种登录，
+// 作者用这台电脑上 gh 登录的账号或粘贴令牌。
+export const COMMUNITY_GITHUB_CLIENT_ID = 'Ov23liTfmzrRWupz20Kp';

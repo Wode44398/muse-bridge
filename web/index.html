@@ -21,10 +21,18 @@
 <!-- Early theme binding: set data-theme before first paint so there's no flash.
      Default dark; light is a complete second theme (per design spec 2.1). -->
 <script>(function(){var t='dark';try{var L=localStorage,p=JSON.parse(L.getItem('bridge-prefs')||'null'),g=L.getItem('bridge-glass');if(p&&p.followSys&&window.matchMedia)t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';else t=g==='B'?'light':g==='A'?'dark':(L.getItem('bridge-theme')==='light'?'light':'dark');L.setItem('bridge-theme',t);L.setItem('bridge-glass',t==='light'?'B':'A');}catch(e){}document.documentElement.setAttribute('data-theme',t);})();</script>
-<!-- 开机底色：脚本还没跑起来、预载封面还没挂上之前，整页先是封面的底色（明=黑底白方块、暗=白底黑方块），
-     不再先闪一帧分页的灰底。App 开机结束（ui.booted）时撤掉。 -->
-<style>html[data-booting]{background:#0a0a0a}html[data-booting="A"]{background:#fff}html[data-booting] body{background:transparent}</style>
-<script>(function(){try{var g=localStorage.getItem('bridge-glass')||'B';document.documentElement.setAttribute('data-booting',g==='A'?'A':'B');}catch(e){document.documentElement.setAttribute('data-booting','B');}})();</script>
+<!-- 开机首帧（入场演出「穿月」的第一帧，components/BootGate.svelte 接手）：暖墨底 + 月桥标记，脚本还没到就画出来。
+     标记的几何与安卓启动画面同一套（108 网格，见 scripts/brand/mark.cjs）；大小 u（每格多少 css px）在安卓 App 里
+     问原生要系统启动画面上那枚标记的实际大小，两边逐像素对齐，交接时什么都不会变。
+     只在落到主页时有（独立分页窗口 / 单页深链不演）。html[data-boot] 期间主页上的入口、标题、Dock 先藏着。 -->
+<style>
+html[data-boot]{background:#0f0e0c}html[data-boot] body{background:transparent}
+#boot-cover{position:fixed;inset:0;z-index:197;background:#0f0e0c;pointer-events:none}
+#boot-cover svg{position:absolute;left:50%;top:50%;overflow:visible}
+</style>
+<script>(function(){var d=document.documentElement;try{if(window.BridgeDesktop&&window.BridgeDesktop.window&&window.BridgeDesktop.window.pageKey)return;if(/[?&]page=[^&]/.test(location.search))return;}catch(e){}
+d.setAttribute('data-boot','gate');var u=0;try{var A=window.AndroidStore;if(A&&A.splashMarkUnit)u=Number(A.splashMarkUnit())||0;}catch(e){}
+if(!(u>0))u=Math.min(innerWidth,innerHeight)<600?1.9:1.7;window.__bootMark={u:u};})();</script>
 <!-- 切换服务器的转场封面（lib/serverSwitch.js）：和开机预载同一个「方块封面」，外加目标服务器的光晕与名字。
      切走时由 App 画出来，整页重载后由下面 body 里的脚本在第一帧就原样重建，接着交给预载方块张开成新主页——
      重载那一下不露底。样式写在这里而不是 app.css：重载后 app.css 还没到，封面就得是对的。 -->
@@ -54,6 +62,16 @@
 </style>
 </head>
 <body>
+<script>(function(){
+// 安卓：首帧画出来了，原生可以撤掉系统启动画面（落到主页时两边是同一个画面；别的启动也得撤）
+requestAnimationFrame(function(){requestAnimationFrame(function(){try{window.AndroidStore&&window.AndroidStore.bootPainted&&window.AndroidStore.bootPainted();}catch(e){}});});
+var d=document.documentElement;if(!d.hasAttribute('data-boot'))return;var u=window.__bootMark.u,S=108*u,h=-54*u+'px',
+n='http://www.w3.org/2000/svg',c=document.createElement('div');c.id='boot-cover';c.setAttribute('aria-hidden','true');
+c.innerHTML='<svg xmlns="'+n+'" viewBox="0 0 108 108" width="'+S+'" height="'+S+'" style="margin:'+h+' 0 0 '+h+'"><defs><linearGradient id="bcr" x1="0" y1="55" x2="0" y2="75.4" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F3EEE4" stop-opacity=".58"/><stop offset="1" stop-color="#F3EEE4" stop-opacity=".12"/></linearGradient></defs>'
++'<g fill="none" stroke="#F3EEE4"><path d="M35 55A19 19 0 0 1 73 55" stroke-width="7.4"/><path d="M23 55H85" stroke-width="2.2" stroke-linecap="round"/><path d="M72.651 58.625A19 19 0 0 1 35.349 58.625" stroke="url(#bcr)" stroke-width="2.8" stroke-linecap="round"/></g></svg>';
+document.body.appendChild(c);
+// 安卓：启动画面交过来后量出的标记大小和先前估的不一样（改过启动画面排版的系统），原生调这个改过来；入场组件挂载时读 __bootMark
+window.__bootMarkFix=function(v){if(!(v>0))return;window.__bootMark.u=v;var g=c.querySelector('svg'),m=-54*v+'px';if(g){g.setAttribute('width',108*v);g.setAttribute('height',108*v);g.style.margin=m+' 0 0 '+m;}};})();</script>
 <div id="app"></div>
 <!-- 转场封面的唯一画法（切走时 lib/serverSwitch.js 调 build，重载后这里按 sessionStorage 的交接条重建）。名字是用户起的，只走 textContent。 -->
 <script>window.__bridgeSwitchCover=(function(){var el=null;

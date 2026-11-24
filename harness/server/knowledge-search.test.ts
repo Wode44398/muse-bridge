@@ -6,6 +6,7 @@ import test, { afterEach } from "node:test";
 import { getSearchMetrics, searchUnifiedKnowledge, worthAutoRecall, type KnowledgeSearchResult } from "./knowledge-search.ts";
 import { memoryDir, saveMemory } from "./memory.ts";
 import { recallIds } from "./agent/injections.ts";
+import { defaultProfile } from "./agent/profile.ts";
 import { visibleMessages } from "./agent/state.ts";
 import { dropSession, sessionRecord } from "./session.ts";
 import { say, scripted } from "./test-harness/scripted-adapter.ts";
@@ -171,7 +172,8 @@ test("automatic recall is persisted as a hidden internal message, keeps the next
     else process.env.KNOWLEDGE_AUTO_SEMANTIC = saved;
   });
   const adapter = scripted(t).next(say("one"), say("two"));
-  const session = attachSession(adapter, root);
+  // 每轮自动召回是档案开关（lean 默认关、hardened 开）：这里量的是召回本身，夹具用打开了它的默认档案
+  const session = attachSession(adapter, root, { profile: { ...defaultProfile(), memory: { autoRecall: true } } });
   await send(session, "fix the /health route in src/api.ts");
   const state = session.state!;
   const recalls = () => state.messages.filter((m) => m.content.some((b) => b.t === "text" && b.text.startsWith("[Automatically recalled")));

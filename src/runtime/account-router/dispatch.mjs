@@ -34,9 +34,13 @@ export function createDispatch(deps) {
   function snapshot(fam) {
     const model = fam;   // relevantBucket / accountBlock 都认家族名
     return deps.listAccounts().map((a, idx) => {
-      const blocked = {};
-      for (const f of ['fable', 'opus', 'sonnet', 'haiku']) blocked[f] = !!deps.blocked(a.id, f, { soft: false });
-      return { id: a.id, idx, plan: deps.planOf(a.id), limits: deps.accountLimits(a.id) || {}, blocked, soft: !!deps.blocked(a.id, model, { soft: true }) };
+      const blocked = {}, until = {};
+      for (const f of ['fable', 'opus', 'sonnet', 'haiku']) {
+        const b = deps.blocked(a.id, f, { soft: false });
+        blocked[f] = !!b;
+        if (b) until[f] = typeof b.until === 'number' ? b.until : Infinity;
+      }
+      return { id: a.id, idx, plan: deps.planOf(a.id), limits: deps.accountLimits(a.id) || {}, blocked, until, soft: !!deps.blocked(a.id, model, { soft: true }) };
     });
   }
 

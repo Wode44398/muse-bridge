@@ -13,8 +13,35 @@ import { dropToast } from './dragdrop.svelte.js';
 import { t, tr } from './i18n.js';
 
 export const CHAT_REF = 'claude-session';
+export const PROJ_REF = 'claude-project';
 
 export const isChatRef = (p) => p?.type === CHAT_REF && !!p.id;
+export const isProjRef = (p) => p?.type === PROJ_REF && !!p.path;
+
+function normFolderKey(p = '') {
+  const s = String(p || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!s) return '';
+  return /^[A-Za-z]:/.test(s) ? s.toLowerCase() : s;
+}
+
+export function canRefFolder(dirPath) {
+  const key = normFolderKey(dirPath);
+  if (!key) return false;
+  return !compose.attachments.some((a) => a.path && normFolderKey(a.path) === key);
+}
+
+export function refClaudeFolder({ path: dirPath, name = '' } = {}) {
+  const key = normFolderKey(dirPath);
+  if (!key) return false;
+  if (compose.attachments.some((a) => a.path && normFolderKey(a.path) === key)) {
+    dropToast(t('这个文件夹已经引用过了'));
+    return false;
+  }
+  const label = name || String(dirPath).split(/[\\/]/).filter(Boolean).pop() || 'folder';
+  compose.attachments.push({ path: dirPath, name: label, kind: 'folder', local: true, url: null, pending: false });
+  dropToast(t('已引用文件夹「{name}」', { name: label }));
+  return true;
+}
 
 // 能不能把会话 id 引进「当前开着 curId 的这个对话」：不引自己，不重复引。
 export function canQuote(id, curId) {

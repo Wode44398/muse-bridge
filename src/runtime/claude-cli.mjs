@@ -36,6 +36,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { createGunzip } from 'node:zlib';
 import { DATA_ROOT } from './paths.mjs';
+import { extractTarEntry } from './tar-stream.mjs';
 import { whichSync } from './which.mjs';
 
 const SDK_PKG = '@anthropic-ai/claude-agent-sdk';
@@ -174,95 +175,8 @@ function probeVersion(p) {
   });
 }
 
-// ── tar（npm 包是 gzip 过的 ustar / pax）：流式找出一个条目，数据交给 onData ───────────────────────────
-function cstr(b, off, len) {
-  const s = b.subarray(off, off + len);
-  const z = s.indexOf(0);
-  return (z >= 0 ? s.subarray(0, z) : s).toString('utf8');
-}
-function tarSize(b, off, len) {
-  if (b[off] & 0x80) {   // base-256（超过 8GB 的条目才会用到）
-    let n = 0;
-    for (let i = off + 1; i < off + len; i++) n = n * 256 + b[i];
-    return n;
-  }
-  return parseInt(cstr(b, off, len).trim() || '0', 8) || 0;
-}
-function paxPath(buf) {
-  for (let i = 0; i < buf.length;) {
-    const sp = buf.indexOf(0x20, i);
-    if (sp < 0) break;
-    const len = parseInt(buf.subarray(i, sp).toString('latin1'), 10);
-    if (!(len > 0)) break;
-    const rec = buf.subarray(sp + 1, i + len - 1).toString('utf8');
-    const eq = rec.indexOf('=');
-    if (eq > 0 && rec.slice(0, eq) === 'path') return rec.slice(eq + 1);
-    i += len;
-  }
-  return null;
-}
-
-// 读完（或找到）为止。match(name) 选中第一个普通文件条目，其数据分块交给 onData（可返回 Promise 做背压）。返回是否找到。
-export async function extractTarEntry(stream, match, onData) {
-  let buf = Buffer.alloc(0);
-  let mode = 'head', left = 0, pad = 0, take = false, found = false;
-  let meta = null, metaType = '', nextName = null;
-  for await (const chunk of stream) {
-    buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
-    for (;;) {
-      if (mode === 'head') {
-        if (buf.length < 512) break;
-        const h = buf.subarray(0, 512);
-        buf = buf.subarray(512);
-        if (h.every((x) => x === 0)) { mode = 'end'; break; }
-        const type = h[156] === 0 ? '0' : String.fromCharCode(h[156]);
-        let name = cstr(h, 0, 100);
-        if (h.subarray(257, 262).toString('latin1') === 'ustar') { const pre = cstr(h, 345, 155); if (pre) name = pre + '/' + name; }
-        if (nextName) { name = nextName; nextName = null; }
-        left = tarSize(h, 124, 12);
-        pad = (512 - (left % 512)) % 512;
-        take = false;
-        if (type === 'x' || type === 'L') { mode = 'meta'; metaType = type; meta = []; }
-        else { mode = 'body'; take = !found && (type === '0' || type === '7') && match(name); }
-        if (left === 0) {
-          if (mode === 'meta') nextName = null;
-          else if (take) found = true;
-          mode = 'pad';
-        }
-        continue;
-      }
-      if (mode === 'body' || mode === 'meta') {
-        if (!buf.length) break;
-        const n = Math.min(left, buf.length);
-        const part = buf.subarray(0, n);
-        buf = buf.subarray(n);
-        left -= n;
-        if (mode === 'meta') meta.push(Buffer.from(part));
-        else if (take) await onData(part);
-        if (left === 0) {
-          if (mode === 'meta') {
-            const m = Buffer.concat(meta);
-            nextName = metaType === 'L' ? cstr(m, 0, m.length) : (paxPath(m) || null);
-          } else if (take) { found = true; take = false; }
-          mode = 'pad';
-        }
-        continue;
-      }
-      if (mode === 'pad') {
-        if (pad === 0) { mode = 'head'; continue; }
-        if (!buf.length) break;
-        const n = Math.min(pad, buf.length);
-        buf = buf.subarray(n);
-        pad -= n;
-        if (pad === 0) mode = 'head';
-        continue;
-      }
-      break;   // end
-    }
-    if (mode === 'end' || (found && mode === 'head')) break;
-  }
-  return found;
-}
+// tar 解析在 tar-stream.mjs（Codex 下载器也用）；extractTarEntry 照旧从这里导出，老的引用方不用改。
+export { extractTarEntry };
 
 function sha256File(p) {
   return new Promise((resolve, reject) => {

@@ -2,16 +2,17 @@
 // fetch 之前的 wire 形状上、不放在中立 Turn 上：adapter 自己也会动前缀（拆 tool 消息、回放思维链、合并文本、挪缓存
 // 标记），只有编码后的样子才是 provider 真正看到的。只存哈希与字符数，不存正文。
 import { createHash } from "node:crypto";
-import type { Turn, WireShape } from "../agent/turn.ts";
+import type { Turn, WireRewrite, WireShape } from "../agent/turn.ts";
 
 export type { WireShape };
 
 // adapter 在 fetch 前调它：把编码好的请求体交给这次请求的观察者。观察者出错只记一行，绝不影响请求本身。
-export function observeWire(turn: Turn, shape: WireShape, body: Record<string, unknown>): void {
+// rewrite：adapter 改写了历史的编码再发时带上原因（前缀判定器据此归因，不记成未报备）。
+export function observeWire(turn: Turn, shape: WireShape, body: Record<string, unknown>, rewrite?: WireRewrite): void {
   const observe = turn.hints?.onWire;
   if (!observe) return;
   try {
-    observe(shape, body);
+    observe(shape, body, rewrite);
   } catch (err) {
     console.warn(`[prefix] request observer failed: ${(err as Error).message}`);
   }

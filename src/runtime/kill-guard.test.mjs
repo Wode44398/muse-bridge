@@ -36,6 +36,9 @@ test('按端口停的工具、按映像名停：直接拒', () => {
   for (const c of ['taskkill /IM node.exe /F', 'taskkill //F //IM python.exe', 'pkill -f "node server.mjs"', 'killall node', 'tskill node']) no(sh(c), 'image', c);
   for (const c of ['Stop-Process -Name python -Force', 'kill -Name node', 'Get-Process node | Stop-Process -Force', 'Stop-Process -Name $n', 'Stop-Process -Name msedge, chrome', 'taskkill /IM py* /F', 'Get-Process | Stop-Process']) no(ps(c), 'image', c);
   no(sh('killall -9 python3'), 'image', 'killall python3');
+  // 安卓模拟器：各会话 / Android Studio 开的同名，按名字停会连别人的一起关
+  for (const c of ['taskkill /IM emulator.exe /F', 'taskkill /IM qemu-system-x86_64-headless.exe /F', 'pkill qemu-system-aarch64']) no(sh(c), 'image', c);
+  no(ps('Get-Process qemu-system-x86_64 | Stop-Process -Force'), 'image', 'qemu');
   no(sh('taskkill /F /FI "WINDOWTITLE eq dev*"'), 'image', '按窗口标题筛');
 });
 

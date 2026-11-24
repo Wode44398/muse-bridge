@@ -73,3 +73,13 @@ test('退回的排队消息并回输入框：文字用空行相接，附件按�
   assert.deepEqual(out.atts.map((a) => a.path), ['p1', 'p2']);
   assert.deepEqual(mergeReturned('', [], []), { text: '', atts: [] });
 });
+
+test('cleanAtts 保留引用对话的 kind / quoteId / count', () => {
+  const cleaned = cleanAtts([
+    { path: 'C:/up/1795-chatref-s1--hello.md', name: 'hello', kind: 'chat', quoteId: 's1', count: 6, pending: false },
+    { path: '', name: 'loading', kind: 'chat', quoteId: 's2', pending: true },
+  ]);
+  assert.deepEqual(cleaned, [
+    { path: 'C:/up/1795-chatref-s1--hello.md', name: 'hello', kind: 'chat', quoteId: 's1', count: 6 },
+  ]);
+});

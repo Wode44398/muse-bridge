@@ -27,9 +27,11 @@ export function createGeneral() {
   function toggleNoAnim() { prefs.noEnterAnim = !prefs.noEnterAnim; savePrefs(); }
   // 「原图加载」：画廊查看器主图直接拉原图（预载也按原图跑）；关=1280 轻量档+缩放时升原图。
   function toggleFullRes() { prefs.fullResMedia = !prefs.fullResMedia; savePrefs(); }
+  // 「使用系统的文字选择」：触屏长按改回系统的选择柄和菜单（读屏用户的退路；安卓读屏开着时自动改用系统的）
+  function toggleSysSelect() { prefs.sysSelect = !prefs.sysSelect; savePrefs(); }
   const langLabel = $derived((LANGS.find((l) => l.value === lang()) || LANGS[0]).label);
   return {
     get notifyOn() { return notifyOn; }, toggleNotify, VIBE_HAS, NOTICE_KINDS, vibeLabel, hasNotifySys, openNotifySystem,
-    toggleFollowSys, pickTheme, toggleNoAnim, toggleFullRes, get langLabel() { return langLabel; },
+    toggleFollowSys, pickTheme, toggleNoAnim, toggleFullRes, toggleSysSelect, get langLabel() { return langLabel; },
   };
 }

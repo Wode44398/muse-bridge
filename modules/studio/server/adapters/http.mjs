@@ -3,6 +3,15 @@
 // 进程内 fetch 走 net-proxy 设的全局 dispatcher（出站代理）；成员自己的服务由调用方传 publicDispatcher（连接时再查一遍
 // 不是内网，防 DNS rebinding，见 src/runtime/public-net.mjs）。
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { traceEntry, traceResponse } from './trace.mjs';
+
+// 试跑（model-config/trial.mjs）要拿到每一步的原始请求与响应：在 withTrace 里跑的调用，http() 顺手记一笔。
+// 用 AsyncLocalStorage 而不是给每个适配器加参数：各方言的适配器一行不用改，也不会在平常的生成里多做事。
+const traceStore = new AsyncLocalStorage();
+/** 在 fn 里发出的 http() 都记进 sink：{ entries: [], secrets: [不能出现在记录里的串] }。 */
+export const withTrace = (sink, fn) => traceStore.run(sink, fn);
+
 export class AdapterError extends Error {
   constructor(message, { status = 0, code = '', detail = '' } = {}) { super(message); this.status = status; this.code = code; this.detail = detail; }
 }
@@ -60,25 +69,30 @@ export async function http(url, { method = 'GET', headers = {}, body, timeoutMs 
   if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
   const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
   const isBuf = Buffer.isBuffer(body) || body instanceof Uint8Array;
+  const sendHeaders = { ...(body !== undefined && !isForm && !isBuf ? { 'Content-Type': 'application/json' } : {}), ...headers };
+  const sink = traceStore.getStore();
+  const rec = sink ? traceEntry(sink, { label, method, url, headers: sendHeaders, body }) : null;
   try {
     let res;
     try {
       res = await fetch(url, {
-        method, signal: ac.signal,
-        headers: { ...(body !== undefined && !isForm && !isBuf ? { 'Content-Type': 'application/json' } : {}), ...headers },
+        method, signal: ac.signal, headers: sendHeaders,
         ...(body !== undefined ? { body: isForm || isBuf || typeof body === 'string' ? body : JSON.stringify(body) } : {}),
         ...(dispatcher ? { dispatcher } : {}),
       });
     } catch (e) {
-      if (ac.signal.aborted) throw ac.signal.reason instanceof Error ? ac.signal.reason : new AdapterError('已取消', { code: 'aborted' });
+      if (ac.signal.aborted) { if (rec) rec.error = '已取消 / 超时'; throw ac.signal.reason instanceof Error ? ac.signal.reason : new AdapterError('已取消', { code: 'aborted' }); }
       const why = String(e?.cause?.code || e?.cause?.message || e?.message || e);
+      if (rec) rec.error = `连不上：${why}`;
       throw new AdapterError(`连不上服务（${why}）`, { code: 'network', detail: why });
     }
     if (raw) {
-      if (!res.ok) { const t = await res.text().catch(() => ''); throw httpError(res.status, t, label); }
+      if (!res.ok) { const t = await res.text().catch(() => ''); if (rec) traceResponse(sink, rec, res, t); throw httpError(res.status, t, label); }
+      if (rec) traceResponse(sink, rec, res, null);
       return res;
     }
     const text = await res.text();
+    if (rec) traceResponse(sink, rec, res, text);
     let j = null; try { j = text ? JSON.parse(text) : null; } catch {}
     if (!res.ok) throw httpError(res.status, text, label, j);
     return j ?? text;

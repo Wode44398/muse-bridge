@@ -141,8 +141,8 @@ export function fmtReadiness(s) {
   if (!s) return '  （这台手机的 app 版本较旧，不会自报就绪状态——更新 app 后可见）';
   const parts = [
     s.a11y === false && s.a11ySetting === true
-      ? '✗ 无障碍开关开着，但服务没在运行（更新 app 后常见 / 被系统停了）：在 设置 › 无障碍 › Claude Bridge 里关掉再打开一次'
-      : yes(s.a11y, '无障碍（读屏/点按）', '无障碍没开：读不了屏也点不了——手机 设置 › 无障碍 › 已安装的应用 › Claude Bridge 打开'),
+      ? '✗ 无障碍开关开着，但服务没在运行（更新 app 后常见 / 被系统停了）：在 设置 › 无障碍 › Bridge 里关掉再打开一次'
+      : yes(s.a11y, '无障碍（读屏/点按）', '无障碍没开：读不了屏也点不了——手机 设置 › 无障碍 › 已安装的应用 › Bridge 打开'),
     yes(s.screenshot, '截图', '截不了图（需安卓 11+ 且无障碍已开）'),
     s.imeEnabled === false ? '✗ Bridge 输入法没在系统里启用：微信等 app 只能靠剪贴板粘贴打字——在 bridge 设置 › 手机操控 › Bridge 输入法 里启用'
       : s.imeEnabled ? '✓ Bridge 输入法已启用' + (s.imeAutoSwitch === false ? '（本机不能自动切换，需手动设为默认）' : '') : '',

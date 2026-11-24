@@ -28,13 +28,29 @@ export function isDaemonPseudoPath(p = '') {
   return /(?:^|[\\/])daemon-cwd(?:[\\/]|$)/i.test(norm);
 }
 
-function normCmpDir(p = '') {
+export function normCmpDir(p = '') {
   let s = String(p || '').trim().replace(/^file:\/\/\/?/i, '/');
   try { if (s.includes('%')) s = decodeURIComponent(s); } catch {}
   s = s.replace(/\\/g, '/');
   if (/^\/[A-Za-z]:(\/|$)/.test(s)) s = s.slice(1);
   if (!/^[A-Za-z]:\/$/.test(s) && s !== '/') s = s.replace(/\/+$/, '');
   return /^[A-Za-z]:/.test(s) ? s.toLowerCase() : s;
+}
+
+// 侧栏工作空间拖动排序：把 targetPath 挪到插入位 toIndex（0..paths.length）。位置未变返回 null。
+export function moveOrderPath(paths, targetPath, toIndex) {
+  const list = Array.isArray(paths) ? paths.filter(Boolean) : [];
+  const key = normCmpDir(targetPath);
+  if (!key) return null;
+  const from = list.findIndex((p) => normCmpDir(p) === key);
+  if (from < 0) return null;
+  const clamped = Math.max(0, Math.min(list.length, Number(toIndex) || 0));
+  const dest = clamped > from ? clamped - 1 : clamped;
+  if (dest === from) return null;
+  const next = list.slice();
+  const [item] = next.splice(from, 1);
+  next.splice(dest, 0, item);
+  return next;
 }
 
 // 剥离 agy 在执行命令前拼上的 Set-Location "<会话目录>"; 或 cd "<会话目录>" && 前缀，
@@ -106,10 +122,16 @@ export function groupSessionsByProjectAndTime(
   projects = [],
   query = '',
   nowMs = Date.now(),
-  { primaryLimit = 5 } = {}
+  { primaryLimit = 5, order = [] } = {}
 ) {
   const q = String(query || '').trim().toLowerCase();
-  const projById = new Map((Array.isArray(projects) ? projects : []).map((p) => [p.id, p]));
+  const projList = Array.isArray(projects) ? projects : [];
+  const projById = new Map(projList.map((p) => [p.id, p]));
+  const projByPath = new Map();
+  for (const p of projList) {
+    const k = normCmpDir(p?.path || '');
+    if (k && !projByPath.has(k)) projByPath.set(k, p);
+  }
   const filtered = (Array.isArray(sessions) ? sessions : []).filter((s) => {
     if (!s || s.hidden) return false;
     const cleanCwd = isDaemonPseudoPath(s.cwd) ? '' : (s.cwd || '');
@@ -130,11 +152,12 @@ export function groupSessionsByProjectAndTime(
     timeMap.get(tb).push(s);
 
     const cleanCwd = isDaemonPseudoPath(s.cwd) ? '' : String(s.cwd || '').trim();
-    const isUnassigned = !s.projectId && !cleanCwd;
+    const proj = (s.projectId ? projById.get(s.projectId) : null)
+      || (cleanCwd ? projByPath.get(normCmpDir(cleanCwd)) : null);
+    const isUnassigned = !proj && !s.projectId && !cleanCwd;
     const pid = isUnassigned
       ? '__other__'
-      : (s.projectId || `cwd:${cleanCwd.toLowerCase()}`);
-    const proj = s.projectId ? projById.get(s.projectId) : null;
+      : (proj?.id || s.projectId || `cwd:${cleanCwd.toLowerCase()}`);
     const label = isUnassigned
       ? t('其他')
       : (proj?.name || (cleanCwd && s.projectName && !/^daemon-cwd$/i.test(s.projectName) ? s.projectName : '') || cleanCwd.split(/[\\/]/).filter(Boolean).pop() || t('其他'));
@@ -143,9 +166,11 @@ export function groupSessionsByProjectAndTime(
     if (!projBuckets.has(pid)) {
       projBuckets.set(pid, {
         key: pid,
-        projectId: s.projectId || null,
+        projectId: proj?.id || s.projectId || null,
         name: label,
         path: pathStr,
+        pinned: Boolean(proj?.pinned),
+        pinnedAt: Number(proj?.pinnedAt) || 0,
         unassigned: isUnassigned,
         defaultCollapsed: isUnassigned,
         latestMs: ms,
@@ -159,10 +184,27 @@ export function groupSessionsByProjectAndTime(
     group.byTime.get(tb).push(s);
   }
 
-  // 未归属目录的「其他」分组始终排在侧栏底部且默认折叠，不抢真实项目的首位
+  // 未归属目录的「其他」分组始终排在侧栏底部且默认折叠；有手动排序时按 order 排（不在 order 里的新目录排前面），否则置顶在前 + 最近活跃倒序
+  const orderIdx = new Map();
+  if (Array.isArray(order)) {
+    for (let i = 0; i < order.length; i++) {
+      const k = normCmpDir(order[i]);
+      if (k && !orderIdx.has(k)) orderIdx.set(k, i);
+    }
+  }
   const byProject = [...projBuckets.values()]
     .sort((a, b) => {
       if (a.unassigned !== b.unassigned) return a.unassigned ? 1 : -1;
+      if (orderIdx.size > 0) {
+        const ka = normCmpDir(a.path);
+        const kb = normCmpDir(b.path);
+        const ia = ka && orderIdx.has(ka) ? orderIdx.get(ka) : -1;
+        const ib = kb && orderIdx.has(kb) ? orderIdx.get(kb) : -1;
+        if (ia >= 0 && ib >= 0) return ia - ib;
+        if (ia >= 0 !== ib >= 0) return ia < 0 ? -1 : 1;
+      }
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      if (a.pinned && b.pinned && a.pinnedAt !== b.pinnedAt) return b.pinnedAt - a.pinnedAt;
       return b.latestMs - a.latestMs;
     })
     .map((g) => ({
@@ -172,6 +214,8 @@ export function groupSessionsByProjectAndTime(
       displayName: g.name,
       parentHint: '',
       path: g.path,
+      pinned: g.pinned,
+      pinnedAt: g.pinnedAt,
       unassigned: g.unassigned,
       defaultCollapsed: g.defaultCollapsed,
       count: g.sessions.length,
@@ -184,7 +228,8 @@ export function groupSessionsByProjectAndTime(
 
   const realGroups = byProject.filter((g) => !g.unassigned);
   const otherProjects = byProject.filter((g) => g.unassigned);
-  const cap = Math.max(1, Number(primaryLimit) || 5);
+  const pinnedCount = realGroups.filter((g) => g.pinned).length;
+  const cap = Math.max(1, Number(primaryLimit) || 5, pinnedCount);
   const primaryProjects = realGroups.slice(0, cap);
   const moreProjects = realGroups.slice(cap).map((g) => ({ ...g, defaultCollapsed: true }));
 

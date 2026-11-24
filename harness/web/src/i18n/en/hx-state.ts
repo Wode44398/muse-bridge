@@ -174,6 +174,12 @@ export default {
   "已撤销改写": "Edit undone",
   // ── lib/task-notice.ts：后台任务通知（server/job-notify.ts）──
   "后台任务跑完了：{list}": "Background task finished: {list}",
+  "定时唤醒：{reason}": "Scheduled wakeup: {reason}",
+  "定时唤醒（晚了一会儿）：{reason}": "Scheduled wakeup (fired late): {reason}",
+  "定时唤醒": "Scheduled wakeup",
+  "定时唤醒（晚了一会儿）": "Scheduled wakeup (fired late)",
   "后台任务输出了在盯的内容：{list}": "Background task printed a watched line: {list}",
   "后台任务通知": "Background task notice",
+  "后台子 agent 跑完了：{label}": "Background sub-agent finished: {label}",
+  "后台子 agent 没跑完：{label}": "Background sub-agent did not finish: {label}",
 };

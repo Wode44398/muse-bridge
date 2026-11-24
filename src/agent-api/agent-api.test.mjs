@@ -212,7 +212,8 @@ test('手册：每章恰好一个 # 标题、占位符都填上、提到的操�
     const raw = readFileSync(path.join(dir, id + '.md'), 'utf8');
     assert.equal(raw.match(/^# /gm)?.length, 1, id + '：一个 # 标题');
     const md = manualChapter(id, null, 'https://x').markdown;
-    assert.doesNotMatch(md, /\{\{/, id + '：占位符没填');
+    // 代码块与行内代码里的双花括号是示例（Media Studio 调用配方的模板写法），只查正文
+    assert.doesNotMatch(md.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, ''), /\{\{/, id + '：占位符没填');
     for (const [, name] of md.matchAll(/`([a-z]+\.[a-z_]+)`/g)) {
       if (groups.has(name.split('.')[0]) && !/\.(md|mjs|json|js|txt)$/.test(name)) assert.ok(ops.has(name), `${id} 提到了不存在的操作 ${name}`);
     }

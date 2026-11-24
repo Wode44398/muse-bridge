@@ -18,12 +18,17 @@ const KINDS: readonly [RegExp, string][] = [
   [/^\[Permissions\]/, "permission-stop"],
   [/^\[Reminder — your current todo list\]/, "todo"],
   [/^\[Earlier context summary\]/, "compaction-summary"],
+  [/^\[Context restored after compaction\]/, "compaction-restore"], // 整段压缩后紧跟摘要回填的工作现场（待办、最近改过的文件、待批的计划、后台任务）
+  [/^\[Compaction request\]/, "compaction-request"], // inline 摘要请求末尾的指令：只在那一次请求里，不进转录
   [/^\[用户在运行中插话\]/, "steer"],
   [/^Attachment\(s\) from the previous tool call:/, "tool-attachments"],
   [/^\[Skill: /, "skill"], // C5：Skill 工具加载的技能正文（E3 用户 /技能名 点的也是这个开头，但落盘时带着 kind slash-skill）
   [/^\[Skill package: /, "slash-skill"], // E3：用户 /包名 点了一个技能包——列出成员让模型挑
   [/^\[Skill again: /, "slash-skill"], // E3：用户又点了一次已经载入过的技能——只提醒，不再整段注入
+  [/^\[Command: /, "slash-command"], // 用户 /命令名 点的自定义斜杠命令（.claude/commands 等）展开后的正文
+  [/^\[Hook: /, "hook"], // 用户 hooks 给模型的话：SessionStart / UserPromptSubmit 的附加上下文、Stop hook 不让收尾的理由
   [/^\[Playbook: /, "playbook"], // 瘦身 P0-3：按需注入的专章（网页 / 桌面 / 安卓验证、本地服务安全）
+  [/^\[Project instructions: /, "project-doc"], // 工作区子目录里的 AGENTS.md / CLAUDE.md：第一次碰到那个目录的文件时按需加载
   [/^\[Rewound by the user\]/, "rewind"], // U9：从这里改写之后的说明（文件没有回退、改过哪些）
   [/^\[Files restored by the user\]/, "restore"], // U10：审阅面板里撤销了这个对话对哪些文件的改动
   [/^\[Goal\] The user's message above is a goal/, "goal-start"], // O7：目标续跑的第一轮说明
@@ -32,9 +37,12 @@ const KINDS: readonly [RegExp, string][] = [
   [/^\[Resumed\]/, "resume"], // M13：服务重启 / 进程死掉之后自动续跑那一轮的首条
   [/^\[Auto-resume stopped\]/, "resume-stopped"], // M13：连着被切断，不再自动续跑
   [/^\[Model switched\]/, "model-switch"], // 会话中途换了厂商 / 型号：从这里起是谁在答（别照抄前面别的模型的自我介绍）
-  [/^<task-notification>/, "task-notification"], // 后台任务通知（job-notify.ts）：后台命令跑完 / watch 命中的行
+  [/^<task-notification>/, "task-notification"], // 后台任务通知（job-notify.ts）：后台命令跑完 / watch 命中的行 / 后台子 agent 收场
+  [/^\[Message from the main agent\]/, "agent-message"], // 子 agent 还在跑时父 agent 追加的话（agent/subagent.ts，只在子 agent 的转录里）
+  [/^\[Fork\]/, "fork-directive"], // fork 出来的子 agent 收到的任务（agent/subagent/fork.ts，只在子 agent 的转录里）
   [/^<ci-monitor-event>/, "ci-event"], // 拉取请求自动修复：bridge 发来的 CI 失败 / 合并冲突 / 新评审意见（pr.ts，那一轮的首条）
   [/^\[Scheduled task\]/, "routine"], // 定时任务（routine-runs.ts）：跟在任务指令后面的「定时触发、无人值守」说明
+  [/^\[Scheduled wakeup\]/, "wakeup"], // 会话内定时唤醒（wakeup/scheduler.ts）：模型用 ScheduleWakeup 约的那一轮的首条（会话正在跑时在两步之间注入）
   // 会话协作（session-family.ts，信封格式对齐 bridge 里 Claude 的 src/runtime/session-family.mjs）：
   [/^<session-message [^>]*kind="brief"/, "session-brief"], // 子会话的第一条：父会话派来的任务说明
   [/^<session-message /, "session-message"], // 别的会话（父 / 子 / 兄弟，或 bridge 里的 Claude 会话）发来的话

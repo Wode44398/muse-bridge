@@ -1,5 +1,5 @@
 <script>
-  // Claude 工作台里的插件标签（ctx.ui.workbench，插件接口四期）：一张卡 = 插件 web/ 下的一个页面。
+  // 工作区里的插件卡片（ctx.ui.workbench；四期只进 Claude，六期按 hosts 进各分页）：一张卡 = 插件 web/ 下的一个页面。
   // 网页 / 桌面壳：嵌 PluginFrame（不透明源 iframe + 宿主代发请求），把当前会话 / 工作目录作为 context 推给页面
   //   （SDK 的 bridge.context() / bridge.on('context')），切会话时再推一次。
   // 手机 App：主 WebView 的原生桥对所有帧可见，绝不内嵌第三方页面——lib/dock 打开时已经转去原生干净页面；
@@ -10,16 +10,17 @@
   import { dockContext } from '../../lib/dock.svelte.js';
   import { t } from '../../lib/i18n.js';
 
-  let { w } = $props();
+  // host = 所在分页的工作区宿主（lib/dock/host.svelte.js），上下文取它的；老调用方不传时按 Claude 的
+  let { w, host = null } = $props();
   const app = inAndroidApp();
-  const context = $derived(dockContext());
+  const context = $derived(host?.context ? host.context() : dockContext());
 </script>
 
 <div class="pw">
   {#if app}
     <div class="pw-app">
       <p>{t('插件页面在独立页面里打开')}</p>
-      <button type="button" onclick={() => openWorkbenchStandalone(w, dockContext())}>{t('打开「{name}」', { name: w.title })}</button>
+      <button type="button" onclick={() => openWorkbenchStandalone(w, context)}>{t('打开「{name}」', { name: w.title })}</button>
     </div>
   {:else}
     {#key w.plugin + '/' + w.page}

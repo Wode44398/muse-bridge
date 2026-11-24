@@ -12,7 +12,7 @@
   import { onMount, untrack } from 'svelte';
   import { loadCaps } from './lib/caps.js';
   import { api } from './lib/api.js';
-  import { caps, me, ui, prefs, applyMe, agentOn, screenOn, rootScreen, applyFollowSys, hostIsServer } from './lib/state.svelte.js';
+  import { caps, me, ui, prefs, compose, studioInbox, applyMe, agentOn, screenOn, rootScreen, applyFollowSys, hostIsServer } from './lib/state.svelte.js';
   import { openPage } from './lib/pageMorph.js';
   import { busStart, busStop, busOn } from './lib/bus.js';
   import { showToast, setErrorToastAction } from './lib/toast.svelte.js';
@@ -20,7 +20,8 @@
   import { warmThemeWallpapers } from './lib/homeTheme.js';
   import { reportUi } from './lib/uiReport.js';
   import { restoreOnBoot, openSession, newConversation } from './lib/chat.svelte.js';
-  import Preload from './components/Preload.svelte';
+  import BootGate from './components/BootGate.svelte';
+  import { setBootAttr, dropFirstFrame } from './lib/boot/intro.js';
   import Home from './components/Home.svelte';
   import ClaudePage from './components/ClaudePage.svelte';
   import ComingSoon from './components/ComingSoon.svelte';
@@ -68,18 +69,29 @@
   import { syncPluginUi, pluginUi } from './lib/pluginUi.svelte.js';   // 插件界面扩展（主页卡片、工作台标签、各处菜单、主题变量）
   import { isAppKey, appByKey } from './lib/pluginApps.svelte.js';   // 插件应用：应用键 'app:<插件>:<应用>' 也是 ui.screen 的取值
   import PluginAppPage from './components/apps/PluginAppPage.svelte';
+  import { WINDOW_PAGE, isPageWindow, onRouteToPage, pageTitleFor } from './lib/windowPage.svelte.js';
 
-  // —— 单 agent 模式 ——
-  const root = $derived(rootScreen());
+  // —— 单 agent 模式 / 独立分页窗口（?page=<key>）——
+  const lockedPage = isPageWindow();
+  let pageUnavailable = $state(false);
+  const root = $derived(lockedPage ? WINDOW_PAGE : rootScreen());
   const single = $derived(root !== 'home');
   // 开机就落在那一页（组件初始化时同步置，第一帧就不是主页）。以单页模式起步的这次启动永远不放
   // 预载演出——哪怕 auth 回来发现已经不是单页了，也不能在 Claude 页上半路补播一段开机动画。
-  const startedSingle = rootScreen() !== 'home';
-  if (startedSingle) ui.screen = rootScreen();
+  const startedSingle = lockedPage || rootScreen() !== 'home';
+  if (startedSingle) ui.screen = lockedPage ? WINDOW_PAGE : rootScreen();
+  // 单页模式没有开机入场：index.html 的首帧封面（它不知道这次会落在哪一页）当场撤掉，让那一页自己出来
+  if (startedSingle) { setBootAttr(null); dropFirstFrame(); }
   // 模式随名单变：进单页模式时人还在主页 → 送到那一页；退出单页模式不动（侧栏会重新长出「主页」）
   $effect(() => {
     const r = root;
     untrack(() => { if (r !== 'home' && ui.screen === 'home') ui.screen = r; });
+  });
+  // 独立分页窗口：任务栏与 Alt+Tab 标题跟当前分页走
+  $effect(() => {
+    if (!lockedPage) return;
+    const appTitle = isAppKey(WINDOW_PAGE) ? (appByKey(WINDOW_PAGE)?.title || '') : '';
+    document.title = pageTitleFor(WINDOW_PAGE, appTitle);
   });
   // 设置页是整窗浮层：桌面壳的原生浏览器视图恒在 DOM 之上，开着时必须让位（关掉后各面板经 onNativeOverlayChange 自行挂回）
   // 模型中心浮层（hubUi.sheet）同理：可以从 dimensio 页的型号菜单直接打开，不经设置页
@@ -138,8 +150,8 @@
     : ui.theme) === 'light' ? '#F4F1EA' : '#131210');
 
   $effect(() => {
-    if (!ui.booted || needConfig) return;
-    // 预挂载只挂这个身份开着的分页（没开的 agent 连挂载成本都不付）。
+    if (!ui.booted || needConfig || lockedPage) return;
+    // 预挂载只挂这个身份开着的分页（没开的 agent 连挂载成本都不付）；独立分页窗只挂自己，不预挂载其他分页。
     const t1 = setTimeout(() => { if (screenOn('claude')) mountClaude = true; }, 1600);
     const t2 = setTimeout(() => { if (screenOn('studio')) mountStudio = true; }, 3400);
     // 其余已开放扩展只预热脚本分块（不挂 DOM、不打接口），首次点击即同步就位；
@@ -181,9 +193,10 @@
       return;
     }
     if (!ui.booted || s === 'home' || s === 'files') return;
-    if (screenOn(s)) return;
+    if (screenOn(s)) { if (lockedPage && pageUnavailable) pageUnavailable = false; return; }
     untrack(() => {
       showToast(t('这个分页已被管理员关闭'), 'err');
+      if (lockedPage) { pageUnavailable = true; return; }
       ui.screen = rootScreen();
     });
   });
@@ -234,9 +247,10 @@
       const keep = appKeep.filter((k) => appByKey(k));   // filter 只删不重排，留下的节点不会被挪
       if (keep.length !== appKeep.length) appKeep = keep;
       appRecent = appRecent.filter((k) => keep.includes(k));
-      if (!here) return;
+      if (!here) { if (lockedPage && isAppKey(s) && pageUnavailable) pageUnavailable = false; return; }
       // 普通提示，不用 'err'：这是告知（插件停用 / 应用撤了），没有能拿去「问 Claude」诊断的报错
       showToast(t('这个应用已经不可用了'));
+      if (lockedPage) { pageUnavailable = true; return; }
       ui.screen = rootScreen();
     });
   });
@@ -281,10 +295,10 @@
       vv.addEventListener('scroll', updKb);
       updKb();
     }
-    // 单页模式没有预载演出来置 booted：auth 有结果（或确定要先配服务器地址）就算启动完
+    // 单页模式 / 独立分页窗口没有预载演出来置 booted：auth 有结果（或确定要先配服务器地址）就算启动完
     const bootSingle = () => {
       if (ui.booted || !(startedSingle || rootScreen() !== 'home')) return;
-      if (rootScreen() !== 'home') applyFollowSys();
+      if (lockedPage || rootScreen() !== 'home') applyFollowSys();
       ui.booted = true;
     };
     if (needConfig) { bootSingle(); return; }
@@ -331,13 +345,15 @@
     // 手机/网页没有 window.BridgeDesktop，这里恒不挂载，行为完全不变。
     try {
       window.BridgeDesktop?.agent?.onOpenSession?.(({ func, sessionId } = {}) => {
-        if (func === 'codex') { if (screenOn('chatgpt')) ui.screen = 'chatgpt'; return; }
+        if (func === 'codex') { if ((!lockedPage || WINDOW_PAGE === 'chatgpt') && screenOn('chatgpt')) ui.screen = 'chatgpt'; return; }
         // Antigravity：新壳带 func:'agy'；老壳把它的通知当 Claude 的报过来（只认会话 id）——openNoticeTarget 自己认回是哪一页
         if (func === 'agy') {
+          if (lockedPage && WINDOW_PAGE !== 'agy') return;
           if (sessionId) import('./lib/notices.svelte.js').then((m) => m.openNoticeTarget(sessionId, '', 'agy')).catch(() => {});
           else if (screenOn('agy')) ui.screen = 'agy';
           return;
         }
+        if (lockedPage && WINDOW_PAGE !== 'claude') return;
         if (sessionId) {
           ui.taskDone = false;
           import('./lib/notices.svelte.js').then((m) => m.openNoticeTarget(sessionId, '')).catch(() => {});
@@ -348,10 +364,69 @@
         ui.taskDone = false;
       });
     } catch {}
+    // 桌面壳：跨窗口投递动作（从独立工作空间发给 Claude / Media Studio，或在独立窗口点其它分页的通知横幅）
+    try {
+      onRouteToPage(async (ev = {}) => {
+        const act = String(ev.action || '');
+        if (act === 'open-session') {
+          const ag = String(ev.func || '');
+          const want = ag === 'agy' ? 'agy' : ag === 'codex' ? 'chatgpt' : 'claude';
+          if (lockedPage && WINDOW_PAGE !== want) return;
+          if (ev.sessionId) {
+            const m = await import('./lib/notices.svelte.js');
+            await m.openNoticeTarget(String(ev.sessionId), '', ag);
+          } else if (screenOn(want)) {
+            ui.screen = want;
+          }
+        } else if (act === 'open-routines') {
+          if (lockedPage && WINDOW_PAGE !== 'claude') return;
+          if (!screenOn('claude')) return;
+          ui.screen = 'claude';
+          ui.routinesOpen = true;
+        } else if (act === 'studio-inbox' && ev.item) {
+          if (lockedPage && WINDOW_PAGE !== 'studio') return;
+          if (!screenOn('studio')) return;
+          studioInbox.items.push(ev.item);
+          ui.screen = 'studio';
+        } else if (act === 'claude-attach' && ev.attachment) {
+          if (lockedPage && WINDOW_PAGE !== 'claude') return;
+          if (!screenOn('claude')) return;
+          ui.screen = 'claude';
+          if (ev.sessionId === 'new') newConversation();
+          else if (ev.sessionId && ev.sessionId !== '__keep__') await openSession(String(ev.sessionId)).catch(() => {});
+          compose.attachments.push(ev.attachment);
+        } else if (act === 'agy-attach' && ev.attachment) {
+          if (lockedPage && WINDOW_PAGE !== 'agy') return;
+          if (!screenOn('agy')) return;
+          ui.screen = 'agy';
+          const { ensureModule } = await import('./modules/services.svelte.js');
+          const mod = await ensureModule('agy');
+          const tg = mod?.agyFileTarget;
+          if (tg) {
+            if (ev.sessionId === 'new') tg.newChat?.();
+            else if (ev.sessionId && ev.sessionId !== '__keep__') await tg.load?.(String(ev.sessionId));
+            tg.attach?.(ev.attachment);
+          }
+        } else if (act === 'claude-prefill' && ev.text) {
+          if (lockedPage && WINDOW_PAGE !== 'claude') return;
+          if (!screenOn('claude')) return;
+          ui.screen = 'claude';
+          ui.taskDone = false;
+          const handled = !window.dispatchEvent(new CustomEvent('bridge:newchat', { cancelable: true }));
+          if (!handled) newConversation();
+          const { prefillComposer } = await import('./lib/composerBridge.svelte.js');
+          setTimeout(() => prefillComposer(String(ev.text)), 80);
+        } else if (act === 'open-page' && ev.page && !lockedPage) {
+          const target = String(ev.page);
+          if (target === 'files' || screenOn(target)) ui.screen = target;
+        }
+      });
+    } catch {}
     // 桌面壳：需要前端配合的全局快捷键动作（纯窗口层面的由主进程自己做完了）。
     try {
       window.BridgeDesktop?.shortcuts?.onAction?.(({ action } = {}) => {
         if (action !== 'new-session' || !screenOn('claude')) return;
+        if (lockedPage && WINDOW_PAGE !== 'claude') return;
         ui.screen = 'claude';
         ui.taskDone = false;
         // Claude 页挂着就交给它（和侧栏「新对话」同一套落点规则）；还没挂上时照旧开在默认工作空间
@@ -361,8 +436,8 @@
     } catch {}
   });
 
-  // 开机底色（index.html 的 data-booting）在预载结束时撤掉，之后由各页自己的底色接管
-  $effect(() => { if (ui.booted) delete document.documentElement.dataset.booting; });
+  // 开机首帧（index.html 的暖墨底 + 标记）：入场演出自己会撤；没有演出的启动（单页模式、先配服务器）在这里撤
+  $effect(() => { if (ui.booted && !ui.bootStage) { setBootAttr(null); dropFirstFrame(); } });
 
   // 回到 claude 页（且 app 在前台）= 用户看到了结果 → 清掉主页小人的「举旗」未读态。
   $effect(() => { if (ui.screen === 'claude' && !document.hidden) ui.taskDone = false; });
@@ -482,14 +557,21 @@
 
 {#if !single}
   {#if !ui.booted && !startedSingle}
-    <Preload onDone={() => { ui.booted = true; }} />
+    <BootGate onDone={() => { ui.booted = true; }} />
   {/if}
 
-  <!-- 持久品牌标题（全程唯一）：预载中央→左上，之后留在主页左上 -->
+  <!-- 持久品牌标题（全程唯一）：固定在主页左上，开机时等门出画才落位 -->
   <BrandTitle />
 {:else if !needConfig}
   <!-- 单页模式的登录：没登录时压在那一页上（启动自动打开 / 退出后 / 账户菜单「登录」） -->
   <LoginDialog />
+{/if}
+
+{#if lockedPage && pageUnavailable}
+  <div class="page-gone" role="status">
+    <p>{t('这个分页已不可用')}</p>
+    <button type="button" onclick={() => window.close()}>{t('关闭窗口')}</button>
+  </div>
 {/if}
 
 <!-- 离线模式提示条：连不上 PC、正浏览本地缓存时显示（pointer-events:none 不挡交互）。
@@ -571,4 +653,10 @@
   }
   .ob-btn:hover { background: rgba(232,192,122,.22); }
   .hx-stage { position: fixed; inset: 0; z-index: 30; }
+  .page-gone { position: fixed; inset: 0; z-index: 95; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; }
+  .page-gone p { margin: 0; color: var(--muted); }
+  .page-gone button { padding: 7px 18px; border-radius: 999px; border: 1px solid var(--divider); background: transparent;
+    color: var(--text); font: inherit; cursor: pointer; }
+  .page-gone button:hover { background: var(--hover); }
 </style>

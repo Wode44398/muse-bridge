@@ -20,10 +20,10 @@ import {
   promoteMemory,
   readMemory,
   rejectMemory,
-  renderMemoryForPrompt,
   restoreMemory,
   saveMemory,
 } from "./memory.ts";
+import { renderMemoryForPrompt } from "./memory-index.ts";
 import { Sandbox } from "./sandbox.ts";
 import { killTree } from "./tools/bash.ts";
 import { recallTool } from "./tools/recall.ts";
@@ -61,20 +61,21 @@ function proposeNote(ws: string, title: string, topic: string, content = "构建
 }
 const WHY = "构建要用 JDK 17。\n\nWhy: 升级到 AGP 9 之后 JDK 11 编不过。\n\nHow to apply: 本机 JAVA_HOME 指向 JDK 17 再跑 gradle。";
 
+// 记忆放宽（m 线）：待确认的也列进索引（带 unconfirmed）；晋升不再要求 Why / How to apply（以前钉的是「缺了就整条报错」），
+// 校验不过（坏日期之类）照旧一次报全
 test("K4 晋升 / 驳回 / 撤销驳回：确认 = active + user_confirmed；校验不过一次报全；同 topic 要替换；驳回带理由、提示里单独说", () => {
   const ws = workspace();
   const id = proposeNote(ws, "android build jdk", "android.build.jdk");
   assert.equal(readMemory(ws, id)?.status, "proposed");
-  assert.doesNotMatch(renderMemoryForPrompt(ws) ?? "", /android build jdk/, "待确认的进不了提示");
+  assert.match(renderMemoryForPrompt(ws) ?? "", /^- android build jdk — .*\(unconfirmed\)$/m, "待确认的列标题、带标记");
 
-  // 缺 Why / How to apply：两条一起报，不是挤牙膏
-  assert.throws(() => promoteMemory(ws, id), (e: Error) => /Why: section/.test(e.message) && /How to apply: section/.test(e.message));
-  promoteMemory(ws, id, { edits: { content: WHY } });
+  assert.throws(() => promoteMemory(ws, id, { edits: { expiresAt: "someday", description: "x".repeat(300) } }), (e: Error) => /2 problems/.test(e.message) && /ISO date/.test(e.message));
+  promoteMemory(ws, id);
   const promoted = readMemory(ws, id)!;
   assert.equal(promoted.status, "active");
   assert.equal(promoted.confidence, "user_confirmed");
   assert.equal(promoted.origin, "user");
-  assert.match(renderMemoryForPrompt(ws) ?? "", /android build jdk/, "确认后进提示");
+  assert.match(renderMemoryForPrompt(ws) ?? "", /^- android build jdk — [^(]*$/m, "确认后不再带标记");
 
   // 同一个 topic 再确认一条：先报冲突（带是哪条），带 supersedes 才替换
   const id2 = proposeNote(ws, "android build jdk 21", "android.build.jdk", WHY.replace("17", "21"));
@@ -94,7 +95,7 @@ test("K4 晋升 / 驳回 / 撤销驳回：确认 = active + user_confirmed；校
   assert.ok(rejected.rejectedAt);
   const prompt = renderMemoryForPrompt(ws) ?? "";
   assert.doesNotMatch(prompt, /android build jdk 21/);
-  assert.match(prompt, /1 notes the user rejected are omitted/);
+  assert.match(prompt, /1 notes the user rejected are not listed/);
 
   // 撤销驳回：回到待确认，驳回记录清掉
   assert.equal(restoreMemory(ws, id2), true);
@@ -222,10 +223,10 @@ test("K4 /api/memory 按工作区：?workspace= 读写那个项目的桶；没�
     assert.equal((await get(`/api/memory?${q(path.join(projB, "no-such-dir"))}`)).status, 400);
     assert.equal((await get(`/api/memory/${idB}?${q(projB)}`)).body.id, idB);
 
-    // 晋升：缺 Why / How to apply → 400 把问题带回来；带改动 → 200，落在 B 的桶里
-    const bad = await post(`/api/memory/${idB}/promote`, { workspace: projB });
+    // 晋升：校验不过（坏日期）→ 400 把问题带回来；带改动 → 200，落在 B 的桶里
+    const bad = await post(`/api/memory/${idB}/promote`, { workspace: projB, edits: { expiresAt: "someday" } });
     assert.equal(bad.status, 400);
-    assert.match(bad.body.error, /Why: section/);
+    assert.match(bad.body.error, /ISO date/);
     const good = await post(`/api/memory/${idB}/promote`, { workspace: projB, edits: { content: WHY } });
     assert.equal(good.status, 200, JSON.stringify(good.body));
     assert.equal(readMemory(projB, idB)?.status, "active");

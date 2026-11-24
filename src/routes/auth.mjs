@@ -155,7 +155,8 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
   });
 
   // 本机快捷切换账号（前端 lib/account.js 的账号保险箱）：页面已经换成目标账号的 Bearer，这一下把浏览器 cookie
-  // 也对齐到它——设上它的 cookie、清掉另一种身份的残留 cookie。不铸新会话、不吊销任何会话（切回来还能用）。
+  // 也对齐到它——设上它的 cookie、清掉另一种身份的残留 cookie。不铸新会话、不吊销任何会话（切回来还能用）：
+  // 换发新令牌会让绑在旧会话上的设备令牌全部失效、还等于每切一次就给会话续 90 天，所以只在会话上记一笔接手时间。
   // 离线 apk 跨源本来就不带 cookie，调了也无妨。不带 Bearer = 「添加账号」：把两种 cookie 都摘掉（同样不吊销），
   // 好让接下来的账号密码登录不被残留的管理员 cookie 认成管理员。
   router.on('POST', '/api/auth/adopt', (req, res) => {
@@ -163,10 +164,19 @@ export function registerAuthRoutes(router, { adminCredential, adminGen, identify
     const send = (code, body, cookies) => { res.writeHead(code, { 'Content-Type': 'application/json', ...(cookies ? { 'Set-Cookie': cookies } : {}) }); res.end(JSON.stringify(body)); };
     if (!bt) return send(200, { ok: true, kind: 'none' }, [clearAuthCookie(req), clearUserCookie(req)]);
     const id = identify(req);
-    if (id.kind === 'user') return send(200, { ok: true, kind: 'user' }, [userCookie(req, bt), clearAuthCookie(req)]);
+    // 接手 = 一次重新登录（markSessionSwitched）：这台电脑若在这张会话创建之后被吊销过，切到这个号后能重新登记，
+    // 和退出再登录一样（以前只能退出重登，客户端一直 409）。认人必须认的就是 Bearer 本身——Bearer 失效、
+    // identify 回落到 cookie 认出来的人时，不能把失效的 Bearer 写进 cookie，更不能给它记接手。
+    if (id.kind === 'user' && users.getSession(bt)) {
+      users.markSessionSwitched(bt);
+      return send(200, { ok: true, kind: 'user' }, [userCookie(req, bt), clearAuthCookie(req)]);
+    }
     if (id.kind === 'admin') {
       const adm = adminCredential(req);
-      if (adm && adm.via === 'session' && adm.token === bt) return send(200, { ok: true, kind: 'admin' }, [authCookie(req, bt), clearUserCookie(req)]);
+      if (adm && adm.via === 'session' && adm.token === bt) {
+        users.markSessionSwitched(bt);
+        return send(200, { ok: true, kind: 'admin' }, [authCookie(req, bt), clearUserCookie(req)]);
+      }
       // 页面带的是主令牌（旧版登录存下的）：cookie 里不放主令牌，换发一张管理员登录令牌（和 /api/login 同一步），
       // 回给页面换上、cookie 也设成它——不然 cookie 还是上一个号的，桌面客户端按 cookie 认人就会把电脑登记到那个号名下。
       if (adm && adm.via === 'master' && adm.token === bt) {

@@ -92,4 +92,5 @@ export default {
   '装进你的 Edge / Chrome，Claude 就能用你已登录的网站': 'Add it to your Edge / Chrome so Claude can use the sites you’re signed in to',
   '再装一个浏览器…': 'Add to another browser…',
   '装到浏览器…': 'Add to browser…',
+  '这台电脑已被吊销，请退出后重新登录一次': 'This computer was revoked. Sign out and sign in again to reconnect it.',
 };

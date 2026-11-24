@@ -49,7 +49,7 @@ test('插件工具：声明给 agy 的才列、名字规整成小写下划线、
       },
     }),
   });
-  assert.throws(() => kernel.contextOf(id).tools.add({ name: 'x', agents: ['codex'], handler: () => 1 }), /不认识/);
+  assert.throws(() => kernel.contextOf(id).tools.add({ name: 'x', agents: ['nope'], handler: () => 1 }), /不认识/);
   hub._clearHubCacheForTest();
   const tools = await hub.listHubTools(ctx, {});
   const names = tools.map((t) => t.name);
@@ -72,5 +72,46 @@ test('插件工具：声明给 agy 的才列、名字规整成小写下划线、
   assert.ok(!offNames.some((n) => n.startsWith('plugin_')));
   // 插件停用：指纹回到原样
   await kernel.setEnabled(id, false);
+  assert.equal(buildAgySessionTooling({ ctx, settings: {} }).toolingSig, sig0);
+});
+
+test('插件提示：带会话目录、与插件工具脱钩、提示变了改指纹（随 cwd 变的部分不改）', async () => {
+  const sig0 = buildAgySessionTooling({ ctx, settings: {} }).toolingSig;
+  const id = 'demo-prompts';
+  let global = '全局说明 v1';
+  const seen = [];
+  await kernel.register({
+    id, name: id, source: 'local', dir: tmp, pluginApi: 3,
+    load: async () => ({
+      apply: (c) => {
+        // 只给提示、不给任何工具
+        c.claude.prompt((turn) => { seen.push(turn); return turn.cwd ? `目录提示：${turn.cwd}` : ''; }, { agents: ['agy'] });
+        c.claude.prompt(() => global, { agents: ['agy'] });
+      },
+    }),
+  });
+  try {
+    const dir = path.join(tmp, 'work-a');
+    assert.ok(pluginPromptsForAgy(ctx, { cwd: dir, sessionId: 's-1' }).includes('目录提示：' + dir));
+    assert.equal(seen.at(-1).cwd, dir);
+    assert.equal(seen.at(-1).sessionId, 's-1');
+    assert.equal(seen.at(-1).agent, 'agy');
+    const a = buildAgySessionTooling({ ctx, settings: {}, cwd: dir });
+    assert.match(a.systemPromptAppend, /目录提示：/, '没有插件工具也带提示');
+    assert.match(a.systemPromptAppend, /全局说明 v1/);
+    const off = buildAgySessionTooling({ ctx, settings: { bridgeTools: { pluginTools: false } }, cwd: dir });
+    assert.match(off.systemPromptAppend, /全局说明 v1/, '关了插件工具，提示照样带');
+    const bare = buildAgySessionTooling({ ctx, settings: { bridgeTools: { enabled: false } }, cwd: dir });
+    assert.match(bare.systemPromptAppend, /全局说明 v1/);
+    assert.notEqual(bare.toolingSig, 'off', '没挂 bridge 工具时也要带提示指纹');
+    assert.notEqual(a.toolingSig, sig0, '提示进了指纹');
+    // 换个目录：指纹不变（不然在不同目录的会话之间切换会反复重启常驻进程）
+    assert.equal(buildAgySessionTooling({ ctx, settings: {}, cwd: path.join(tmp, 'work-b') }).toolingSig, a.toolingSig);
+    // 不看 cwd 的那部分变了：指纹变
+    global = '全局说明 v2';
+    assert.notEqual(buildAgySessionTooling({ ctx, settings: {}, cwd: dir }).toolingSig, a.toolingSig);
+  } finally {
+    await kernel.setEnabled(id, false);
+  }
   assert.equal(buildAgySessionTooling({ ctx, settings: {} }).toolingSig, sig0);
 });

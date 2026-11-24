@@ -22,6 +22,9 @@ export function applyPrefs(p) {
   settings.effort = (p && p.effort) || null;
   settings.ultracode = !!(p && p.ultracode);
   settings.fast = !!(p && p.fast);
+  // 选择的时刻跟着恢复：比它旧的「实际生效档」是上一轮的，不能盖住这次的选择。以前这里不动 effortAt
+  //（刷新后恒为 0）——选 Max 发出一轮长任务，切回来 / 刷新后芯片却按 11 点那轮的 High 显示还挂点线
+  settings.effortAt = (p && p.at) || 0;
 }
 export function notePrefsNow(id) {
   if (IS_CSNAP) return;

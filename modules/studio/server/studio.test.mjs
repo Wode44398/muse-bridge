@@ -573,3 +573,101 @@ test('Claude 工具（2026-11-18）：卡上参数 / 负面词 / 素材 / 续改
   assert.equal(unitsOfArgs({ params: { n: 99 } }), 16);
   assert.equal(unitsOfArgs({}), 1);
 });
+
+test('applySpecs 的 report：不认的键、enum 回落 / 换档、数字夹紧、类型不对、when 不满足都记下来，规范化结果不变', () => {
+  const specs = [
+    { key: 'outputFormat', type: 'enum', options: [{ value: 'png' }, { value: 'jpeg' }, { value: 'webp' }], default: 'png' },
+    { key: 'duration', type: 'enum', options: [{ value: '5' }, { value: '10' }], default: '5' },
+    { key: 'count', type: 'number', min: 1, max: 10, integer: true },
+    { key: 'hd', type: 'bool' },
+    { key: 'outputCompression', type: 'number', min: 0, max: 100, when: { outputFormat: ['jpeg', 'webp'] } },
+    { key: 'seed', type: 'seed', min: 0, max: 99 },
+  ];
+  const raw = { output_format: 'svg', outputFormat: 'svg', durationSeconds: 8, count: 20, hd: 'yes', outputCompression: 50, seed: -1, junk: '', ok: undefined };
+  const report = {};
+  const out = applySpecs(specs, raw, { report });
+  assert.deepEqual(out, applySpecs(specs, raw), '带不带 report 结果一样');
+  assert.deepEqual(out, { outputFormat: 'png', duration: '10', count: 10 });
+  assert.deepEqual(report.ignored, ['output_format'], '别名搬过去的（durationSeconds → duration）、空值不算忽略');
+  const ch = Object.fromEntries(report.changed.map((c) => [c.key, c]));
+  assert.deepEqual(ch.outputFormat, { key: 'outputFormat', from: 'svg', to: 'png', options: ['png', 'jpeg', 'webp'] });
+  assert.deepEqual(ch.duration, { key: 'duration', as: 'durationSeconds', from: 8, to: '10', options: ['5', '10'] });
+  assert.deepEqual(ch.count, { key: 'count', from: 20, to: 10, min: 1, max: 10 });
+  assert.deepEqual(ch.hd, { key: 'hd', from: 'yes' });
+  assert.deepEqual(ch.outputCompression, { key: 'outputCompression', from: 50, when: { outputFormat: ['jpeg', 'webp'] } });
+  assert.equal(ch.seed, undefined, '种子 -1 = 随机，本来就不下发');
+  // 照原样生效的不记
+  const r2 = {};
+  applySpecs(specs, { outputFormat: 'jpeg', outputCompression: 80, duration: 5, count: '3' }, { report: r2 });
+  assert.deepEqual([r2.ignored, r2.changed], [undefined, undefined]);
+});
+
+test('Claude 工具：params 里没生效的参数在回执里提示（键名写错点出正确键、回落写明实际值），生成照旧', async () => {
+  const { makeAdapter } = await import('./mcp/media-phone.mjs');
+  const { paramWarningText } = await import('./mcp/param-warnings.mjs');
+  const { normalizeWithReport } = await import('./cards/report.mjs');
+  const tools = buildMediaTools({ flavor: 'phone', adapter: makeAdapter({ ctx: admin, genKey: 'admin', getGen: () => null }), defaults: null });
+  const [img] = tools;
+  const d = catalogMod.catalog('admin').kinds.image.defaults;
+  const k = d.provider + '/' + d.model;   // OpenRouter GPT Image 2.5 Sunburst：格式 png / jpeg / webp
+  // 查模型：每张卡都说 extra 收不收（不只通用卡），总览末尾也提
+  const list = tools.find((x) => x.name === 'list_media_models');
+  assert.match((await list.handler({ key: k })).content[0].text, /\n卡上没有的上游参数写进 params\.extra（JSON 对象，原样并入请求体；合并顺序：卡上映射出的字段 < 服务级额外参数 < extra/);
+  assert.match((await list.handler({})).content[0].text, /参数键里有 extra 的模型：卡上没有的上游参数写进 params\.extra/);
+  const r = await img.handler({ prompt: '图标', model: k, params: { output_format: 'svg', outputFormat: 'svg', count: 20, quality: 'low' } });
+  assert.ok(!r.isError, r.content[0].text);
+  const t = r.content[0].text;
+  assert.equal(lastReq.params.outputFormat, 'png', '行为不变：照旧回落 png');
+  assert.equal(lastReq.params.count, 10);
+  assert.match(t, /\n⚠ 以下参数未生效：output_format（正确键名是 outputFormat）：该模型卡没有这个参数，已忽略（可用键：size, quality, count, outputFormat/);
+  assert.match(t, /要把上游参数原样透传，写进 params\.extra/);
+  assert.match(t, /outputFormat=svg 不在可选值 png\/jpeg\/webp 内，已按 png 生成/);
+  assert.match(t, /count=20 超出范围 1–10，已按 10 生成/);
+  assert.doesNotMatch(t.split('⚠')[1], /quality=|aspectRatio|imageSize/, '照原样生效的、工具字段自己补的都不报');
+  // 全都生效：回执不多一句
+  const ok = await img.handler({ prompt: '图标', model: k, params: { outputFormat: 'webp' } });
+  assert.doesNotMatch(ok.content[0].text, /⚠/);
+  // 桌面版英文；Google 卡（自己的 normalize，不走 applySpecs）也能报回落和不认的键
+  const lite = googleCard('vertex', 'gemini-3.1-flash-lite-image');
+  const given = { imageSize: '4K', aspectRatio: '4:1', extra: { a: 1 } };
+  const rep = normalizeWithReport(lite, given, {}, { only: Object.keys(given) });
+  assert.equal(rep.params.imageSize, '1K');
+  const en = paramWarningText('desktop', rep.warnings, given);
+  assert.match(en, /^⚠ Some params did not take effect: extra: not a param of this model card, ignored \(available keys: .*; this model takes no raw passthrough params\)/);
+  assert.match(en, /imageSize=4K is not one of 1K — generated with 1K/);
+  assert.match(en, /aspectRatio=4:1 is not one of .* — generated with auto/);
+});
+
+test('裸 id 路由：先在所有服务里找同名（不限方言），唯一就用、多个报错列候选；凭空造条目只认真正的内置卡', () => {
+  const sa = JSON.stringify({ type: 'service_account', client_email: 'a@b.iam.gserviceaccount.com', private_key: '-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n', project_id: 'proj-1' });
+  const v = P.createProvider({ dialect: 'vertex', google: { credMode: 'json' }, serviceAccount: sa, models: [{ id: 'veo-3.1-fast-generate-001', kind: 'video' }] }, 'admin');
+  const o1 = P.createProvider({ dialect: 'openai', name: '中转 A', baseUrl: 'https://a.example/v1', models: [{ id: 'veo-3.1-generate-001', kind: 'video' }, { id: 'veo-3.1-fast-generate-001', kind: 'video' }] }, 'admin');
+  let o2 = null;
+  try {
+    // 同族继承卡不再凭空造条目（veo-3.1 在 Vertex 里会继承 veo-3.1-* 的卡，但服务里根本没列它，发过去 404）
+    assert.equal(cardFor(P.getProvider(v.id, 'admin'), { id: 'veo-3.1', kind: 'video' }).paramSource, 'family');
+    assert.equal(catalogMod.resolveBare('veo-3.1', 'video', 'admin'), null);
+    assert.throws(() => jobs.startJob(admin, { kind: 'video', key: 'veo-3.1', prompt: 'x' }), /写完整的「服务 id\/模型 id」/);
+    // 只有 OpenAI 兼容服务列了：以前只搜 Google 方言、凭空给 Vertex 造条目，现在用列了它的那个服务
+    assert.equal(catalogMod.resolveBare('veo-3.1-generate-001', 'video', 'admin').provider.id, o1.id);
+    // 本来方言里有内置卡、服务也列了：照旧走它（Vertex 与 Gemini API 都列 Nano Banana 不算歧义）
+    assert.equal(catalogMod.resolveBare('veo-3.1-fast-generate-001', 'video', 'admin').provider.id, v.id);
+    // 多个非本方言服务同名：报错列候选
+    o2 = P.createProvider({ dialect: 'openai', name: '中转 B', baseUrl: 'https://b.example/v1', models: [{ id: 'veo-3.1-generate-001', kind: 'video' }] }, 'admin');
+    assert.throws(() => catalogMod.resolveBare('veo-3.1-generate-001', 'video', 'admin'), (e) => {
+      assert.equal(e.status, 400);
+      assert.deepEqual(e.candidates, [o1.id + '/veo-3.1-generate-001', o2.id + '/veo-3.1-generate-001']);
+      assert.match(e.message, /在 2 个服务里都有：.*（中转 A）、.*（中转 B）。model 写完整的「服务 id\/模型 id」/);
+      return true;
+    });
+    assert.throws(() => jobs.startJob(admin, { kind: 'video', key: 'veo-3.1-generate-001', prompt: 'x' }), /在 2 个服务里都有/);
+    assert.ok(catalogMod.catalog('admin'), '默认模型的裸 id 碰上歧义不会把目录拖垮');
+    // 服务里没列、本方言有内置卡：照旧凭空造（导入后删了某个模型也能用内置 id）
+    P.deleteProvider(o2.id, 'admin'); o2 = null;
+    P.deleteProvider(o1.id, 'admin');
+    const hit = catalogMod.resolveBare('veo-3.1-generate-001', 'video', 'admin');
+    assert.equal(hit.provider.id, v.id); assert.equal(hit.entry.source, 'builtin');
+  } finally {
+    for (const p of [v, o1, o2]) if (p) try { P.deleteProvider(p.id, 'admin'); } catch {}
+  }
+});

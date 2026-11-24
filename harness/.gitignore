@@ -11,6 +11,8 @@ workspace/*
 
 # Agent run state: transcripts, checkpoints, and the shadow git used for rollback.
 sessions/
+# 子 agent 的隔离 worktree（Agent 工具 isolation:"worktree"）
+worktrees/
 # 旁路验证实例（PORT=8801）的会话与工作空间——只是本机验证用的一次性数据。
 .ui-test-sessions/
 .ui-test-workspace/

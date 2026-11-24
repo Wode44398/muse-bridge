@@ -29,14 +29,14 @@ const clip = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n
 
 // ---- 按 agent 分发 ----
 // 没有缺省值：不传就是 Claude，validateArgs 的结果与加这个参数之前一致
-const AGENT_PARAM = { type: 'string', max: 32, desc: '哪个 agent 的会话：不填 = Claude；"agy" = Antigravity（要 Antigravity 对你开着）' };
+const AGENT_PARAM = { type: 'string', max: 32, desc: '哪个 agent 的会话：不填 = Claude；"agy" = Antigravity、"codex" = ChatGPT · Codex（要那个 agent 对你开着）' };
 const needAgent = (args) => ['agent:' + (args.agent || 'claude')];
 const otherAgent = (args) => !!args.agent && args.agent !== 'claude';
 const KIT = { OpError, internalRequest, routeError };
 async function viaAgent(ctx, args, env, verb) {
   const ops = moduleAgentOps(args.agent);
   if (!ops || typeof ops[verb] !== 'function') {
-    throw new OpError('bad_args', `agent「${args.agent}」不支持这个操作`, { hint: '现在能用的：claude（缺省）、agy（Antigravity）' });
+    throw new OpError('bad_args', `agent「${args.agent}」不支持这个操作`, { hint: '现在能用的：claude（缺省）、agy（Antigravity）、codex（ChatGPT · Codex）' });
   }
   const { agent, ...rest } = args;
   return ops[verb](ctx, rest, env, KIT);
@@ -321,6 +321,8 @@ defineOp({
     if (args.permissionMode && !sid) body.permissionMode = args.permissionMode;
     if (Array.isArray(args.attachments) && args.attachments.length) body.attachments = args.attachments.map(String).slice(0, 20);
     if (args.worktree && !sid) body.worktree = true;
+    // 别的 agent（agy / dimensio / codex）经 bridge 操作发来的：标上来源（routes/chat.mjs 的 viaAgentFor 只认进程内请求）
+    if (env.instance && ['agy', 'dimensio', 'codex'].includes(env.instance)) body.viaAgent = env.instance;
     const busy = sid ? getLiveGens(ctx.key).some((g) => g.sessionId === sid) : false;
     if (busy && args.whenBusy === 'queue') body.priority = 'later';
     if (busy && args.whenBusy === 'steer') body.priority = 'next';

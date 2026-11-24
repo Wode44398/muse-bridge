@@ -10,6 +10,8 @@ import { drive, loopState } from "./test-harness/trajectory.ts";
 import { memoryAuditTool } from "./tools/memoryaudit.ts";
 import { verificationAuditTool } from "./tools/verificationaudit.ts";
 import { ok, fail, type Tool } from "./tools/types.ts";
+import { hardenedProfile } from "./agent/profile.ts";
+// 这个文件钉的是加固姿态（hardened）的门禁 / 追问 / 提醒行为：各场景显式在加固档案下跑（lean 默认不设这些）
 
 const emptySchema = { type: "object" as const, properties: {} };
 
@@ -55,7 +57,7 @@ test("done gate ignores Preview and failed checks, then accepts successful expli
     }),
     say("verified final"),
   );
-  const { state } = loopState(t, adapter, {
+  const { state } = loopState(t, adapter, { profile: hardenedProfile(),
     tools: [edit, preview, bash, memoryAuditTool],
     memoryAudit: true,
     user: "edit and verify",
@@ -97,7 +99,7 @@ test("a clean run that was never declared changes the accusation, not the gate",
   const adapter = scripted(t)
     .next(useTool("edit", "Edit", { path: "file.ts" }), useTool("build", "Bash", { command: "./gradlew assembleDebug" }))
     .always(say("done"));
-  const { state } = loopState(t, adapter, {
+  const { state } = loopState(t, adapter, { profile: hardenedProfile(),
     tools: [edit, bash, memoryAuditTool],
     memoryAudit: true,
     user: "edit and build",
@@ -139,7 +141,7 @@ test("done gate repeats until an explicit verification audit records the limitat
     }),
     say("limited final"),
   );
-  const { state } = loopState(t, adapter, {
+  const { state } = loopState(t, adapter, { profile: hardenedProfile(),
     tools: [edit, verificationAuditTool, memoryAuditTool],
     memoryAudit: true,
     user: "edit with unavailable verification",

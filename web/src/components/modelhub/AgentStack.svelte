@@ -1,6 +1,6 @@
 <script>
   // 叠放的 agent 图标：模型行尾「已经添加到哪」、操作条去向片里的单枚标。
-  // 顺序固定 claude → dimensio → studio；每枚坐在 size+4 的圆形小底座里，两枚以上向左压叠约 20%，后一枚压前一枚
+  // 顺序固定 claude → dimensio → codex → studio；每枚坐在 size+4 的圆形小底座里，两枚以上向左压叠约 20%，后一枚压前一枚
   // （DOM 顺序在后 = 画在上面，不用 z-index）。图标是各 agent 的真标（agentMark），必须走 <img>：
   // studio / dimensio 的 svg 里按渲染宽度切换精简版（@media max-width），内联进来那套媒体查询就失效了。
   //
@@ -21,7 +21,7 @@
   // quiet：纯装饰（旁边已经写着 agent 名字，比如操作条的去向片），不出 title / 无障碍名
   let { agents = [], size = 16, quiet = false } = $props();
 
-  const ORDER = ['claude', 'dimensio', 'studio'];
+  const ORDER = ['claude', 'dimensio', 'codex', 'studio'];
   const pick = (a) => ORDER.filter((id) => Array.isArray(a) && a.includes(id));
   const list = $derived(pick(agents));
   // 明暗判断同 SettingsDesktop：studio / dimensio 的标分明暗两版

@@ -146,6 +146,8 @@ export async function runHeadlessTurn(ctx, o, attempt = 0) {
         // 插件的审批策略（ctx.claude.permission）：无人值守的轮里主要用来拦——没表态就照常放行
         const pr = await pluginPermission({ ...tbase, sessionId }, { tool: name, input, mode: 'default', signal: abort.signal });
         if (pr && pr.behavior === 'deny') return { behavior: 'deny', message: pr.message };
+        // 插件要用户本人批（'ask'）：无人值守没人能批，拒
+        if (pr && pr.behavior === 'ask') return { behavior: 'deny', message: pr.message || "This tool requires user approval, which isn't available in this context." };
         if (pr && pr.behavior === 'allow') return { behavior: 'allow', updatedInput: pr.updatedInput };
         return { behavior: 'allow', updatedInput: input };
       },

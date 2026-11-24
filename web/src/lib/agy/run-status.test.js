@@ -68,3 +68,75 @@ test('状态栏：中途接上的轮次按服务端起点计时；老历史没�
   assert.equal(turnElapsed(old), 5000);
   assert.equal(turnTokens(old), 777);
 });
+
+// —— 这一轮说完了、后台还在跑 ——
+import { computeBgWait, cronLabel, timerMs, fmtSpan, BG_STALL_MS } from './run-status.js';
+
+test('后台等待：没有在跑的东西就不显示', () => {
+  assert.equal(computeBgWait(null), null);
+  assert.equal(computeBgWait({ hasActive: false, parentTasks: [{ status: 'running' }] }), null);
+  // 只有主会话残留的 RUNNING 步骤、没有可描述的后台活：不显示
+  assert.equal(computeBgWait({ hasActive: true, parentActive: true, counts: {}, parentTasks: [] }), null);
+});
+
+test('后台等待：转入后台的命令写标题与已跑时长，15 分钟没新输出算没动静', () => {
+  const now = 10_000_000;
+  const tree = {
+    hasActive: true,
+    counts: { active: 0 },
+    parentTasks: [
+      { id: 's/task-1', status: 'done', kind: 'command', title: '旧的', at: now - 9e6 },
+      { id: 's/task-2', status: 'running', kind: 'command', title: 'Run OptiX optcheck', at: now - 250_000, logAt: now - 3000, logTail: '[0.85] scene loaded' },
+    ],
+  };
+  const bg = computeBgWait(tree, now);
+  assert.equal(bg.kind, 'task');
+  assert.equal(bg.label, '后台任务在跑');
+  assert.equal(bg.detail, 'Run OptiX optcheck');
+  assert.equal(bg.since, now - 250_000);
+  assert.equal(bg.stallMs, 0);
+  assert.equal(bg.tail, '[0.85] scene loaded');
+
+  tree.parentTasks[1].logAt = now - BG_STALL_MS - 60_000;
+  assert.ok(computeBgWait(tree, now).stallMs > BG_STALL_MS);
+
+  tree.parentTasks.push({ id: 's/task-3', status: 'running', kind: 'command', title: 'b', at: now - 1000 });
+  assert.equal(computeBgWait(tree, now).detail, '2 个任务');
+});
+
+test('后台等待：子代理优先于后台命令，定时任务排最后', () => {
+  const now = 50_000_000;
+  const team = {
+    hasActive: true,
+    counts: { active: 3, running: 2 },
+    updatedAt: now - 1000,
+    agents: [{ status: 'waiting', spawnedAt: now - 3_600_000, subtreeCounts: { active: 3 } }],
+    parentTasks: [{ status: 'running', kind: 'command', title: 'x', at: now }],
+  };
+  const a = computeBgWait(team, now);
+  assert.equal(a.kind, 'team');
+  assert.equal(a.detail, '2 个在干活');
+  assert.equal(a.since, now - 3_600_000);
+
+  const timer = { hasActive: true, counts: {}, parentTasks: [{ status: 'running', kind: 'timer', schedule: '10m', at: now - 4 * 60_000 }] };
+  const b = computeBgWait(timer, now);
+  assert.equal(b.kind, 'sched');
+  assert.equal(b.detail, '约 6 分钟后');
+
+  const cron = { hasActive: true, counts: {}, parentTasks: [{ status: 'running', kind: 'cron', schedule: '*/10 * * * *', at: now }] };
+  assert.equal(computeBgWait(cron, now).detail, '每 10 分钟');
+});
+
+test('后台等待：计划与时长的人话', () => {
+  assert.equal(cronLabel('*/8 * * * *'), '每 8 分钟');
+  assert.equal(cronLabel('* * * * *'), '每分钟');
+  assert.equal(cronLabel('0 * * * *'), '每小时');
+  assert.equal(cronLabel('0 */2 * * *'), '每 2 小时');
+  assert.equal(cronLabel('30 9 * * 1'), '30 9 * * 1');
+  assert.equal(timerMs('10m'), 600_000);
+  assert.equal(timerMs('1h30m'), 5_400_000);
+  assert.equal(timerMs('600s'), 600_000);
+  assert.equal(fmtSpan(59_000), '59s');
+  assert.equal(fmtSpan(252_000), '4m12s');
+  assert.equal(fmtSpan(27_528_000), '7h38m');
+});

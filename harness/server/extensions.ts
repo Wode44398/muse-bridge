@@ -10,11 +10,17 @@
 // 成员实例（租户模式）不认那份注册表，技能改走 DIMENSIO_SKILL_REGISTRIES：bridge 给的几份【只含技能】的清单
 // （他自己添加的 + 管理员加装给全服的，见 bridge 的 member-skills.mjs），按顺序合并、同名前面的优先。
 // 清单可带 root（item.dir 相对它；没有就相对清单所在目录）。连接器照旧只认 registryFile()——租户恒为空。
+//
+// 技能另有两处来源（Claude Code 同格式，extensions/local-skills.ts）：项目级 <工作区>/.dimensio/skills、.claude/skills，
+// 用户级 ~/.dimensio/skills、~/.claude/skills（成员实例没有用户级）。同名时 项目级 > 用户级 > 扩展中心，目录里标出来源。
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { textTokens } from "./agent/context.ts";
 import { skillHeader } from "./agent/injections.ts";
 import { bridgeRootCandidates } from "./paths.ts";
+import { frontmatterValue, oneLine, splitFrontmatter } from "./extensions/frontmatter.ts";
+import { localSkills, userSkillRoots } from "./extensions/local-skills.ts";
+import { confinedConfigFile } from "./extensions/confine.ts";
 
 interface ExtensionItem {
   id: string;
@@ -180,8 +186,20 @@ export function isExtensionRegistryPath(abs: string): boolean {
 
 // S3（#36）：只读豁免只给「启用且勾给 dimensio 的技能」各自的目录。以前豁免整个扩展根，
 // 于是没勾给 dimensio 的技能正文和注册表（连接器令牌）都能在 workspace 模式下读到。
+// 用户级技能根（~/.claude/skills 这类，成员实例没有）同样只读放行；项目级的技能本来就在工作区里。
 export function grantedSkillDirs(): string[] {
-  return managedSkills().map((s) => path.dirname(s.skillMd));
+  return [...registrySkillDirs(), ...userSkillRoots()];
+}
+
+// 扩展中心勾给 dimensio 的技能各自的目录（Bash 的白名单 sanctionedToolDirs 只收这些；用户级技能根对 Bash 只读，见
+// userSkillReadRoots）
+export function registrySkillDirs(): string[] {
+  return (readRegistries()?.skills ?? []).map((s) => path.dirname(s.skillMd));
+}
+
+// 用户级技能根：Bash 可以读、可以从这里跑脚本，但不许写（写目标照工作区越界拒）
+export function userSkillReadRoots(): string[] {
+  return userSkillRoots();
 }
 
 // 沙箱侧判定：此绝对路径是否落在已授权技能目录内（file tools 的只读豁免 / Bash 白名单共用）。
@@ -203,6 +221,10 @@ export interface ManagedSkill {
   userOnly?: boolean;
   hidden?: boolean;
   argumentHint?: string;
+  // 项目级（<工作区>/.claude/skills 等）或用户级（~/.claude/skills 等）技能目录里的；没有 = 扩展中心勾给 dimensio 的
+  source?: "project" | "user";
+  // 有 source 时：读文件前真实落点要落在的根（extensions/confine.ts）
+  confineBase?: string;
 }
 
 // E3：frontmatter 里那几个字段，按 SKILL.md 的 mtime + 大小缓存（目录每个新会话读一遍，别每次都重读几十个文件）
@@ -212,14 +234,6 @@ interface SkillFlags {
   argumentHint?: string;
 }
 const flagCache = new Map<string, { key: string; flags: SkillFlags }>();
-const FRONTMATTER_RE = /^﻿?---\r?\n([\s\S]*?)\r?\n---/;
-
-function frontmatterValue(head: string, key: string): string | undefined {
-  const m = new RegExp(`^${key}[ \\t]*:[ \\t]*(.*)$`, "m").exec(head);
-  if (!m) return undefined;
-  return m[1].trim().replace(/^(['"])(.*)\1$/, "$2");
-}
-
 // 读不到（没了、不是文件）返回 null
 function skillFlags(skillMd: string): SkillFlags | null {
   let key: string;
@@ -234,7 +248,7 @@ function skillFlags(skillMd: string): SkillFlags | null {
   if (hit?.key === key) return hit.flags;
   let head = "";
   try {
-    head = FRONTMATTER_RE.exec(readFileSync(skillMd, "utf8"))?.[1] ?? "";
+    head = splitFrontmatter(readFileSync(skillMd, "utf8")).head;
   } catch {
     return null;
   }
@@ -268,19 +282,28 @@ function readRegistry(file: string): RegistryFile | null {
   }
 }
 
-const oneLine = (s: unknown, max: number) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, max);
-
-// enabled 且勾选 dimensio 的技能（现读现取；文件损坏/缺失一律视为无扩展，不许拖垮会话创建）。
-export function managedSkills(): ManagedSkill[] {
-  return readManaged()?.skills ?? [];
+// 这个工作区此刻能用的技能：项目级 > 用户级 > 扩展中心勾给 dimensio 的，同名前面的优先（现读现取；文件损坏/缺失一律视为
+// 没有，不许拖垮会话创建）。不给工作区就只有用户级与扩展中心的。
+export function managedSkills(workspace?: string): ManagedSkill[] {
+  return readManaged(workspace)?.skills ?? [];
 }
 
-function readManaged(): { skills: ManagedSkill[]; pkgDescriptions: Map<string, string> } | null {
+type Managed = { skills: ManagedSkill[]; pkgDescriptions: Map<string, string> };
+
+function readManaged(workspace?: string): Managed | null {
+  const local: ManagedSkill[] = localSkills(workspace);
+  const registry = readRegistries(new Set(local.map((s) => s.name.toLowerCase())));
+  if (!local.length) return registry;
+  return { skills: [...local, ...(registry?.skills ?? [])], pkgDescriptions: registry?.pkgDescriptions ?? new Map() };
+}
+
+// 扩展中心（或成员实例的技能清单）里勾给 dimensio 的技能。taken = 已被项目级 / 用户级技能占掉的名字（小写）
+function readRegistries(taken: Set<string> = new Set()): Managed | null {
   const files = skillRegistryFiles();
   if (!files.length) return null;
   const skills: ManagedSkill[] = [];
   const pkgDescriptions = new Map<string, string>();
-  const seen = new Set<string>();
+  const seen = new Set<string>(taken);
   let any = false;
   for (const file of files) {
     const raw = readRegistry(file);
@@ -382,11 +405,13 @@ export function firstSentence(s: string, max = ONE_LINE_MAX): string {
 }
 
 // 退化档：0 = 描述一句（≤120 字）、包带成员名单；1 = 描述截 60 字、包只报个数；2 = 只剩名字。
+// 项目级 / 用户级技能在名字后面标出来源；扩展中心的不标
 function renderEntry(e: CatalogEntry, level: number): string {
   if (e.kind === "skill") {
     const desc = e.skill.short || e.skill.description;
-    if (level >= 2 || !desc) return `- ${e.skill.name}`;
-    return `- ${e.skill.name} — ${level === 0 ? firstSentence(desc) : clip(desc, 60)}`;
+    const name = e.skill.source ? `${e.skill.name} (${e.skill.source})` : e.skill.name;
+    if (level >= 2 || !desc) return `- ${name}`;
+    return `- ${name} — ${level === 0 ? firstSentence(desc) : clip(desc, 60)}`;
   }
   const { pkg, description, members } = e.pkg;
   if (level >= 2) return `- ${pkg} (package, ${members.length} skills)`;
@@ -423,14 +448,19 @@ export function renderCatalog(entries: CatalogEntry[], budget: { tokens?: number
   return { text: kept.join("\n"), level: 3, omitted };
 }
 
-// system prompt 的「托管技能」段。contextWindow 用来算预算（见上）。
-export function managedSkillsSection(opts: { contextWindow?: number } = {}): string | undefined {
-  const managed = readManaged();
+// system prompt 的「托管技能」段。contextWindow 用来算预算（见上）；workspace 决定项目级技能目录。
+// 只有扩展中心的技能时开头那句与以前一字不差
+export function managedSkillsSection(opts: { contextWindow?: number; workspace?: string } = {}): string | undefined {
+  const managed = readManaged(opts.workspace);
   // E3：只能用户点名的技能（disable-model-invocation）不进目录——模型既看不到、也载入不了
   const skills = (managed?.skills ?? []).filter((s) => !s.userOnly);
   if (!managed || !skills.length) return undefined;
   const { text } = renderCatalog(catalogEntries(skills, managed.pkgDescriptions), catalogBudget(opts.contextWindow));
-  return `The user installed these skills via the Bridge extension center. When the user names a skill, or a task clearly matches one, load it FIRST with the Skill tool — Skill({name: "<skill>"}) — and follow its instructions before doing the work your own way. A package groups related skills: load a listed member directly by its name, or Skill({name: "<package>"}) to see what each member does. Don't hand a skill to a sub-agent (Agent / Workflow) to read or follow: load it yourself and put the steps that matter into the sub-agent's prompt.
+  const local = skills.some((s) => s.source);
+  const from = local
+    ? "These skills are available: ones marked (project) come with this project, ones marked (user) are the user's own, the rest were installed via the Bridge extension center."
+    : "The user installed these skills via the Bridge extension center.";
+  return `${from} When the user names a skill, or a task clearly matches one, load it FIRST with the Skill tool — Skill({name: "<skill>"}) — and follow its instructions before doing the work your own way. A package groups related skills: load a listed member directly by its name, or Skill({name: "<package>"}) to see what each member does. Don't hand a skill to a sub-agent (Agent / Workflow) to read or follow: load it yourself and put the steps that matter into the sub-agent's prompt.
 
 ${text}`;
 }
@@ -441,8 +471,8 @@ export type SkillLookup =
   | { kind: "pkg"; pkg: SkillPackage }
   | { kind: "missing"; names: string[]; packages: string[] };
 
-export function findSkill(name: string): SkillLookup {
-  const managed = readManaged();
+export function findSkill(name: string, workspace?: string): SkillLookup {
+  const managed = readManaged(workspace);
   const skills = managed?.skills ?? [];
   const want = name.trim().toLowerCase().replace(/^\//, "");
   const skill = skills.find((s) => s.name.toLowerCase() === want) ?? skills.find((s) => s.pkg && `${s.pkg}/${s.name}`.toLowerCase() === want);
@@ -476,11 +506,19 @@ export function skillMessage(skill: ManagedSkill, opts: { args?: string; lead?: 
   return (
     `${skillHeader(skill.name)}\n` +
     (opts.lead ? `${opts.lead}\n` : "") +
-    `Loaded from the Bridge extension center. Skill directory: ${path.dirname(skill.skillMd)} — its supporting files and scripts live there (read-only; run scripts from that directory with Bash).\n\n` +
+    skillOrigin(skill) +
     body +
     (loaded.truncated ? `\n\n[SKILL.md is longer than this — the rest is in ${skill.skillMd}; Read it from there if the part you need is missing]` : "") +
     (args && !templated && opts.argsBlock !== false ? `\n\n[Arguments given when loading]\n<skill-args>${escapeXml(args)}</skill-args>` : "")
   );
+}
+
+// 技能从哪来、目录在哪：正文里的相对路径（脚本、参考文件）都相对这个目录。扩展中心的那句与以前一字不差
+function skillOrigin(skill: ManagedSkill): string {
+  const dir = path.dirname(skill.skillMd);
+  if (!skill.source) return `Loaded from the Bridge extension center. Skill directory: ${dir} — its supporting files and scripts live there (read-only; run scripts from that directory with Bash).\n\n`;
+  const where = skill.source === "project" ? "this project's skills" : "the user's own skills";
+  return `Loaded from ${where}. Skill directory: ${dir} — relative paths in the instructions below (scripts, reference files) are relative to it; read them from there and run scripts from that directory with Bash.\n\n`;
 }
 
 // E3：正文里有没有 $ARGUMENTS（有的话同一个技能换了参数要重新注入，不能只提醒「前面载入过」）
@@ -490,6 +528,8 @@ export function skillUsesArguments(skill: ManagedSkill): boolean {
 
 // SKILL.md 正文（去掉 frontmatter；过长截断并注明全文在哪）。读不了返回 null。
 export function readSkillBody(skill: ManagedSkill): { body: string; truncated: boolean } | null {
+  // 项目级 / 用户级的：列清单之后链接可能被换过，读正文前按真实落点再判一次
+  if (skill.source && skill.confineBase && !confinedConfigFile(skill.skillMd, skill.source, skill.confineBase)) return null;
   let text: string;
   try {
     text = readFileSync(skill.skillMd, "utf8");

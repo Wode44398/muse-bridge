@@ -38,7 +38,7 @@
   import { dtHasWsFiles, wsDescriptorFrom, attachDescriptorToAgent } from '../lib/fileDrag.js';
   import { IS_PANE, SOLO_ID, SOLO_CARD, SOLO_WS, PANE_MSG, isPaneMsg } from '../lib/solo.js';
   import { isNewChatKey } from '../lib/quickChat.js';
-  import { quoteSession } from '../lib/chatQuote.js';
+  import { quoteSession, refClaudeFolder } from '../lib/chatQuote.js';
   import { dockOverlayFor } from '../lib/claudeSplit.js';
   import { t, tc } from '../lib/i18n.js';
   import { syncPluginUi } from '../lib/pluginUi.svelte.js';   // 插件界面扩展（「/」菜单、＋菜单、消息菜单、工作台标签）
@@ -96,6 +96,8 @@
       if (d.id !== session.id) openSession(d.id).catch(() => {});
     } else if (d.t === 'quote' && d.id) {
       quoteSession({ id: d.id, title: d.title || '' });   // 宿主侧栏把一条会话拖到了这一格的输入栏上
+    } else if (d.t === 'folder' && d.path) {
+      refClaudeFolder({ path: d.path, name: d.name || '' });   // 宿主侧栏把工作空间拖到了这一格的输入栏上
     } else if (d.t === 'away') {
       window.dispatchEvent(new Event('bridge-pane-away'));   // 宿主那边被按下了：收起本格的弹层
     } else if (d.t === 'new') {

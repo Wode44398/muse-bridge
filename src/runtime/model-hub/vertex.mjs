@@ -54,6 +54,10 @@ const sigOf = (call) => call?.extra_content?.google?.thought_signature;
 /** 发给 Vertex 之前：型号补 google/ 前缀；每条回放的 tool_call 补上签名。改的是传进来的对象。 */
 export function prepareOpenAIBody(body) {
   if (typeof body.model === 'string' && !body.model.includes('/')) body.model = 'google/' + body.model;
+  return signToolCalls(body);
+}
+/** 每条回放的 tool_call 补上记下的签名（记不到的填占位值）。Gemini 官方接口的 OpenAI 兼容层也是同一套规矩。改的是传进来的对象。 */
+export function signToolCalls(body) {
   for (const m of Array.isArray(body.messages) ? body.messages : []) {
     if (m?.role !== 'assistant' || !Array.isArray(m.tool_calls)) continue;
     for (const c of m.tool_calls) {
@@ -64,8 +68,10 @@ export function prepareOpenAIBody(body) {
   return body;
 }
 
+/** 上游回的一个 tool_call（或它的增量）：带签名就记下。 */
+export function noteToolCall(c) { const s = sigOf(c); if (s && c.id) rememberSignature(c.id, s); }
 function noteCalls(calls) {
-  for (const c of Array.isArray(calls) ? calls : []) { const s = sigOf(c); if (s && c.id) rememberSignature(c.id, s); }
+  for (const c of Array.isArray(calls) ? calls : []) noteToolCall(c);
 }
 /** 非流式应答（已解析的 JSON）里的签名。 */
 export function noteOpenAIResponse(j) {

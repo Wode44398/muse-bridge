@@ -1,0 +1,112 @@
+/* 文本选中：各页的静态选区色、右键菜单、引用飞行物。墨层的样式在 ink.css（那份也要注入 Codex 的 iframe）。 */
+
+/* ── 静态选区色：墨画不了的地方（触屏、输入框、玻璃弹窗里）也用各页自己的颜色，不再是系统蓝 ──
+   通用那条用 :where 把特异性压到最低，各页自己写的（dimensio 的朱、预览 / 编辑器 / PDF 各自的）照样生效。 */
+:where(html) ::selection { background-color: #4a4945; }
+:where(html[data-theme="light"]) ::selection { background-color: #dfdcd3; }
+.cc-tone ::selection { background-color: #62382a; }
+html[data-theme="light"] .cc-tone ::selection { background-color: #f5dacd; }
+.agy-root ::selection { background-color: #22354f; }
+.agy-root.light ::selection { background-color: #dae6f8; }
+
+/* ── 右键菜单：动作全站一套，材质 / 尺寸 / 颜色取各分页自己弹层的规格 ── */
+.selm { position: fixed; z-index: 4000; min-width: 228px; max-width: 340px; user-select: none; -webkit-user-select: none; outline: none;
+  --ic: 17px; }
+.selm-shadow { position: absolute; inset: 0; border-radius: var(--r); box-shadow: var(--sh-big); pointer-events: none; }
+.selm-surf { position: relative; padding: var(--pad); border-radius: var(--r); background: var(--bg); box-shadow: var(--edge), var(--sh-tight);
+  -webkit-backdrop-filter: var(--blur, none); backdrop-filter: var(--blur, none); }
+.selm-pill { position: absolute; left: var(--pad); right: var(--pad); top: 0; height: var(--rh); border-radius: var(--ir); background: var(--pill);
+  opacity: 0; pointer-events: none; transition: background-color 60ms; }
+.selm-pill.press { background: var(--pill-press); }
+.selm-row { position: relative; height: var(--rh); border-radius: var(--ir); cursor: default; }
+.selm-in { display: flex; align-items: center; gap: 10px; height: 100%; padding: 0 10px 0 9px; font-size: var(--fs); color: var(--t1);
+  transition: transform 60ms cubic-bezier(.165,.84,.44,1); }
+.selm-row.press .selm-in { transform: scale(.985); }
+.selm-ic { width: calc(var(--ic) + 2px); flex: none; display: grid; place-items: center; color: var(--t2); transition: color 80ms; }
+.selm-row.on .selm-ic { color: var(--t1); }
+.selm-ico { display: inline-grid; place-items: center; width: var(--ic); height: var(--ic); font-size: var(--ic); line-height: 1; font-style: normal; flex: none; }
+.selm-ico.ai { font-family: var(--icons); font-variation-settings: "opsz" 16, "wght" 533; }
+.selm-ico.msr { font-family: 'Agy Symbols Rounded'; font-weight: normal; letter-spacing: normal; white-space: nowrap; direction: ltr;
+  font-feature-settings: 'liga' 1; font-optical-sizing: auto; font-variation-settings: 'FILL' 0, 'wght' 400; -webkit-font-smoothing: antialiased; }
+.selm-lb { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.selm-hk { margin-left: 16px; font-size: 12.5px; color: var(--t3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.selm-obj { margin-left: 14px; max-width: 132px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 11.5px; color: var(--t3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.selm-row.dis .selm-in { color: var(--t3); }
+.selm-row.dis .selm-ic { color: var(--t3); opacity: .7; }
+.selm-sep { height: 1px; margin: 5px 10px; background: var(--div); }
+
+/* Claude：官方弹层（圆角 12、32 高的行、行圆角 8） */
+.selm[data-skin="claude"] { --r: 12px; --ir: 8px; --rh: 32px; --pad: 5px; --fs: 14px; --ic: 16px; }
+.selm[data-skin="claude"][data-theme="dark"] { --bg: #2b2b2b; --edge: 0 0 0 1px rgba(255,255,255,.075); --sh-tight: 0 1px 2px rgba(0,0,0,.3);
+  --sh-big: 0 14px 36px rgba(0,0,0,.46), 0 3px 10px rgba(0,0,0,.24); --pill: rgba(255,255,255,.075); --pill-press: rgba(255,255,255,.13);
+  --t1: #ededed; --t2: #a3a3a3; --t3: #6f6f6f; --div: rgba(255,255,255,.08); }
+.selm[data-skin="claude"][data-theme="light"] { --bg: #ffffff; --edge: 0 0 0 1px rgba(0,0,0,.075); --sh-tight: 0 1px 2px rgba(0,0,0,.05);
+  --sh-big: 0 14px 36px rgba(0,0,0,.12), 0 3px 10px rgba(0,0,0,.06); --pill: rgba(0,0,0,.05); --pill-press: rgba(0,0,0,.09);
+  --t1: #1a1a1a; --t2: #6b6b6b; --t3: #a3a3a3; --div: rgba(0,0,0,.09); }
+/* Codex：ChatGPT 弹层（圆角 16、外边 6、行高 36、行圆角 10） */
+.selm[data-skin="codex"] { --r: 16px; --ir: 10px; --rh: 36px; --pad: 6px; --fs: 14px; --ic: 18px; }
+.selm[data-skin="codex"][data-theme="dark"] { --bg: #303030; --edge: 0 0 0 1px rgba(255,255,255,.1); --sh-tight: 0 1px 2px rgba(0,0,0,.2);
+  --sh-big: 0 8px 28px rgba(0,0,0,.36), 0 2px 8px rgba(0,0,0,.18); --pill: rgba(255,255,255,.1); --pill-press: rgba(255,255,255,.16);
+  --t1: #ffffff; --t2: rgba(255,255,255,.7); --t3: #afafaf; --div: rgba(255,255,255,.1); }
+.selm[data-skin="codex"][data-theme="light"] { --bg: #ffffff; --edge: 0 0 0 1px rgba(13,13,13,.1); --sh-tight: 0 1px 2px rgba(0,0,0,.04);
+  --sh-big: 0 8px 28px rgba(0,0,0,.1), 0 2px 8px rgba(0,0,0,.05); --pill: rgba(0,0,0,.05); --pill-press: rgba(0,0,0,.09);
+  --t1: #0d0d0d; --t2: #5d5d5d; --t3: #8f8f8f; --div: rgba(13,13,13,.1); }
+/* agy：AgyPopover（圆角 13、行高 34、行圆角 8、13.5px，不磨砂——agy 整页不用 backdrop-filter） */
+.selm[data-skin="agy"] { --r: 13px; --ir: 8px; --rh: 34px; --pad: 6px; --fs: 13.5px; --ic: 18px; }
+.selm[data-skin="agy"][data-theme="dark"] { --bg: #1f1f1f; --edge: 0 0 0 1px #2a2a2a; --sh-tight: 0 0 0 0 transparent;
+  --sh-big: 0 14px 40px -10px rgba(0,0,0,.7); --pill: rgba(255,255,255,.055); --pill-press: rgba(255,255,255,.09);
+  --t1: #f5f5f5; --t2: #a0a0a0; --t3: #7a7a7a; --div: #222222; }
+.selm[data-skin="agy"][data-theme="light"] { --bg: #ffffff; --edge: 0 0 0 1px #e3e3e3; --sh-tight: 0 0 0 0 transparent;
+  --sh-big: 0 10px 32px -8px rgba(32,33,36,.18); --pill: rgba(32,33,36,.05); --pill-press: rgba(32,33,36,.085);
+  --t1: #202124; --t2: #5f6368; --t3: #80868b; --div: #e6e6e6; }
+/* dimensio：它自己的玻璃浮层（半透明的纸 + 磨砂、受光细边；悬停垫 surface2、按下 surface3） */
+.selm[data-skin="dimensio"] { --r: 16px; --ir: 9px; --rh: 36px; --pad: 6px; --fs: 14px; --ic: 17px; --blur: blur(28px) saturate(1.6); }
+.selm[data-skin="dimensio"][data-theme="dark"] { --bg: rgba(36,34,30,.7); --edge: inset 0 0 0 .5px rgba(255,255,255,.09), inset 0 1px 0 rgba(255,255,255,.09);
+  --sh-tight: 0 0 0 .5px rgba(0,0,0,.5); --sh-big: 0 2px 10px rgba(0,0,0,.25), 0 28px 70px -16px rgba(0,0,0,.65); --pill: #25231f; --pill-press: #2f2c28;
+  --t1: #eeeae2; --t2: #b9b3a8; --t3: #8a857c; --div: rgba(238,234,226,.08); }
+.selm[data-skin="dimensio"][data-theme="light"] { --bg: rgba(250,248,243,.74); --edge: inset 0 0 0 .5px rgba(255,255,255,.7), inset 0 1px 0 rgba(255,255,255,.7);
+  --sh-tight: 0 0 0 .5px rgba(23,22,20,.08); --sh-big: 0 2px 8px rgba(23,22,20,.05), 0 24px 60px -16px rgba(23,22,20,.3); --pill: #ece8df; --pill-press: #e2ddd1;
+  --t1: #171614; --t2: #48453f; --t3: #6f6b63; --div: rgba(23,22,20,.09); }
+/* 其他分页：bridge 浮层的苹果玻璃 */
+.selm[data-skin="bridge"] { --r: 16px; --ir: 10px; --rh: 34px; --pad: 6px; --fs: 14px; --ic: 17px; --blur: blur(26px) saturate(1.8); }
+.selm[data-skin="bridge"][data-theme="dark"] { --bg: rgba(46,46,44,.56); --edge: inset 0 .5px 0 rgba(255,255,255,.2), inset 0 0 0 .5px rgba(255,255,255,.1);
+  --sh-tight: 0 1px 3px rgba(0,0,0,.25); --sh-big: 0 24px 60px rgba(0,0,0,.5), 0 5px 16px rgba(0,0,0,.26); --pill: rgba(255,255,255,.11); --pill-press: rgba(255,255,255,.18);
+  --t1: #f8f8f6; --t2: #a9a79f; --t3: #6e6c66; --div: rgba(255,255,255,.1); }
+.selm[data-skin="bridge"][data-theme="light"] { --bg: rgba(252,252,250,.62); --edge: inset 0 .5px 0 rgba(255,255,255,.9), inset 0 0 0 .5px rgba(0,0,0,.08);
+  --sh-tight: 0 1px 3px rgba(0,0,0,.06); --sh-big: 0 24px 60px rgba(0,0,0,.16), 0 5px 16px rgba(0,0,0,.07); --pill: rgba(0,0,0,.06); --pill-press: rgba(0,0,0,.1);
+  --t1: #121212; --t2: #6b6964; --t3: #a3a19b; --div: rgba(0,0,0,.09); }
+
+/* 引用回复：引文从选区飞进输入栏 */
+.sel-flyer { position: fixed; z-index: 3900; left: 0; top: 0; pointer-events: none; transform-origin: 0 0; }
+.sel-flyer > div { padding: 2px 8px; border-radius: 8px; font-size: 13px; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
+
+/* ── 触屏工具条：横排胶囊，44 高、按钮只放文字；材质取各分页自己浮层的规格 ── */
+.selt { position: fixed; z-index: 4000; left: 0; top: 0; visibility: hidden; touch-action: none; -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none; transform-origin: 50% 100%; }
+.selt.on { visibility: visible; }
+.selt.off { pointer-events: none; }
+.selt-surf { position: relative; height: 44px; border-radius: 22px; overflow: hidden; background: var(--bg); box-shadow: var(--edge), var(--sh);
+  -webkit-backdrop-filter: var(--blur, none); backdrop-filter: var(--blur, none); }
+.selt-row { position: absolute; left: 0; top: 0; height: 44px; display: flex; align-items: center; padding: 0 4px; white-space: nowrap; }
+.selt-it { position: relative; height: 36px; padding: 0 14px; border: 0; background: none; border-radius: 18px; font: inherit; font-size: 15px; color: var(--fg);
+  display: flex; align-items: center; gap: 6px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.selt-it + .selt-it::before { content: ""; position: absolute; left: 0; top: 11px; bottom: 11px; width: 1px; background: var(--div); }
+.selt-it.ico { padding: 0 11px; }
+.selt-it svg { width: 16px; height: 16px; }
+.selt-it .pr { position: absolute; inset: 0 2px; border-radius: 18px; background: var(--press); opacity: 0; transition: opacity 70ms; }
+.selt-it.press .pr { opacity: 1; }
+.selt-it.press::before, .selt-it.press + .selt-it::before { opacity: 0; }
+.selt-ok { display: flex; align-items: center; gap: 7px; padding: 0 16px 0 13px; font-size: 14.5px; color: var(--fg); }
+.selt-ok svg { width: 16px; height: 16px; }
+.selt-ok path { stroke-dasharray: 20; stroke-dashoffset: 20; }
+.selt[data-skin="claude"][data-theme="dark"]  { --bg: #2b2b2b; --edge: 0 0 0 1px rgba(255,255,255,.075); --sh: 0 12px 32px rgba(0,0,0,.5), 0 2px 8px rgba(0,0,0,.3); --fg: #ededed; --div: rgba(255,255,255,.1); --press: rgba(255,255,255,.1); }
+.selt[data-skin="claude"][data-theme="light"] { --bg: #ffffff; --edge: 0 0 0 1px rgba(0,0,0,.075); --sh: 0 12px 32px rgba(0,0,0,.14), 0 2px 8px rgba(0,0,0,.06); --fg: #1a1a1a; --div: rgba(0,0,0,.1); --press: rgba(0,0,0,.06); }
+.selt[data-skin="codex"][data-theme="dark"]   { --bg: #303030; --edge: 0 0 0 1px rgba(255,255,255,.1); --sh: 0 8px 28px rgba(0,0,0,.4), 0 2px 8px rgba(0,0,0,.2); --fg: #ffffff; --div: rgba(255,255,255,.12); --press: rgba(255,255,255,.1); }
+.selt[data-skin="codex"][data-theme="light"]  { --bg: #ffffff; --edge: 0 0 0 1px rgba(13,13,13,.1); --sh: 0 8px 28px rgba(0,0,0,.12), 0 2px 8px rgba(0,0,0,.05); --fg: #0d0d0d; --div: rgba(13,13,13,.1); --press: rgba(0,0,0,.05); }
+.selt[data-skin="agy"][data-theme="dark"]     { --bg: #262626; --edge: 0 0 0 1px #2f2f2f; --sh: 0 14px 40px -10px rgba(0,0,0,.75); --fg: #f5f5f5; --div: #333333; --press: rgba(255,255,255,.08); }
+.selt[data-skin="agy"][data-theme="light"]    { --bg: #ffffff; --edge: 0 0 0 1px #e3e3e3; --sh: 0 10px 32px -8px rgba(32,33,36,.22); --fg: #202124; --div: #e3e3e3; --press: rgba(32,33,36,.07); }
+.selt[data-skin="dimensio"][data-theme="dark"]  { --bg: rgba(36,34,30,.72); --edge: inset 0 0 0 .5px rgba(255,255,255,.1), inset 0 1px 0 rgba(255,255,255,.09); --sh: 0 2px 10px rgba(0,0,0,.25), 0 24px 60px -16px rgba(0,0,0,.65); --blur: blur(28px) saturate(1.6); --fg: #eeeae2; --div: rgba(238,234,226,.1); --press: rgba(238,234,226,.1); }
+.selt[data-skin="dimensio"][data-theme="light"] { --bg: rgba(250,248,243,.76); --edge: inset 0 0 0 .5px rgba(255,255,255,.7), inset 0 1px 0 rgba(255,255,255,.7); --sh: 0 0 0 .5px rgba(23,22,20,.08), 0 24px 60px -16px rgba(23,22,20,.3); --blur: blur(28px) saturate(1.6); --fg: #171614; --div: rgba(23,22,20,.1); --press: rgba(23,22,20,.07); }
+.selt[data-skin="bridge"][data-theme="dark"]  { --bg: rgba(46,46,44,.58); --edge: inset 0 .5px 0 rgba(255,255,255,.2), inset 0 0 0 .5px rgba(255,255,255,.1); --sh: 0 20px 50px rgba(0,0,0,.5), 0 4px 14px rgba(0,0,0,.25); --blur: blur(26px) saturate(1.8); --fg: #f8f8f6; --div: rgba(255,255,255,.12); --press: rgba(255,255,255,.12); }
+.selt[data-skin="bridge"][data-theme="light"] { --bg: rgba(252,252,250,.66); --edge: inset 0 .5px 0 rgba(255,255,255,.9), inset 0 0 0 .5px rgba(0,0,0,.08); --sh: 0 20px 50px rgba(0,0,0,.16), 0 4px 14px rgba(0,0,0,.07); --blur: blur(26px) saturate(1.8); --fg: #121212; --div: rgba(0,0,0,.1); --press: rgba(0,0,0,.07); }

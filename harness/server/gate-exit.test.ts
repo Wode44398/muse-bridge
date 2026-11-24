@@ -16,6 +16,8 @@ import { ok } from "./tools/types.ts";
 import type { AgentEvent, StreamEvent } from "./agent/events.ts";
 import type { ProviderAdapter } from "./providers/types.ts";
 import type { Tool } from "./tools/types.ts";
+import { hardenedProfile } from "./agent/profile.ts";
+// 这个文件钉的是加固姿态（hardened）的门禁 / 追问 / 提醒行为：各场景显式在加固档案下跑（lean 默认不设这些）
 
 const ws = fs.mkdtempSync(path.join(os.tmpdir(), "dimensio-v2-"));
 after(() => fs.rmSync(ws, { recursive: true, force: true }));
@@ -40,7 +42,7 @@ async function run(script: (turn: number) => StreamEvent[]) {
       for (const ev of script(turn)) yield ev;
     },
   };
-  const state = new AgentState({
+  const state = new AgentState({ profile: hardenedProfile(),
     adapter,
     system: "t",
     tools: [edit.def],

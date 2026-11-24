@@ -49,6 +49,8 @@
     position: fixed; left: 0; right: 0; bottom: max(14px, var(--sab, 0px)); z-index: 6; pointer-events: none;
     font-family: var(--sans);
   }
+  /* 开机入场：门洞透明（流光）时，门开着的那一段藏着，之后由 lib/boot/landing.js 落位 */
+  :global(html[data-boot='hide']) .phc { visibility: hidden; }
   .phc-row {
     display: flex; gap: 12px; padding: 6px 18px 10px; overflow-x: auto; overscroll-behavior-x: contain;
     scroll-snap-type: x mandatory; scroll-padding: 0 18px; scrollbar-width: none; pointer-events: auto;

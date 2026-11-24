@@ -22,6 +22,12 @@
   initial-value: 0.5;
 }
 
+/* 共用文件夹头像组的「缝」颜色：注册成颜色才能在飞行落地时平滑换底（对话框底 → 侧栏底板） */
+@property --agy-cut {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
 /* —— 统一动效（11-19，参数与 lib/agy/motion.js 同一套 M3 曲线）——
    agy-grow：这一轮里新长出来的一行（思考 / 工具）——高度从 0 撑开、由下而上淡入，下面的状态栏被平滑推下去，
    不是一帧跳；只挂在流式中的消息上，打开历史不演。agy-rise：新出现的块（卡片、正文段）淡入上浮。 */
@@ -164,6 +170,18 @@
   --ag-elev-shadow: 0 14px 40px -10px rgba(0, 0, 0, 0.7), 0 0 0 1px #2a2a2a;
   --ag-glow-opacity: 0.90;
   --ag-glow-subtle-opacity: 0.66;
+
+  /* 插件工作区外观（共用文件夹）：底板比侧栏亮一档 + 发丝边；陶土色只给 Claude 的标志与进度弧；反色小吃条 */
+  --ag-box: #171717;
+  --ag-box-bd: rgba(255, 255, 255, 0.065);
+  --ag-box-sh: none;
+  --ag-av-agy: #282828;
+  --ag-av-agy-bd: transparent;
+  --ag-clay: #d97757;
+  --ag-pop-sec: #262626;
+  --ag-inv-bg: #e3e3e3;
+  --ag-inv-on: #1f1f1f;
+  --ag-inv-acc: #0b57d0;
   --ag-mono: 'Google Sans Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
   --ag-sans: var(--gm-font-sans, 'Google Sans'), 'PingFang SC', 'Microsoft YaHei UI', system-ui, sans-serif;
 
@@ -257,6 +275,17 @@ html[data-wco="1"] .agy-root {
   --ag-elev-shadow: 0 10px 32px -8px rgba(32, 33, 36, 0.18), 0 0 0 1px #e3e3e3;
   --ag-glow-opacity: 0.56;
   --ag-glow-subtle-opacity: 0.40;
+
+  --ag-box: #ffffff;
+  --ag-box-bd: rgba(32, 33, 36, 0.075);
+  --ag-box-sh: 0 1px 2px rgba(32, 33, 36, 0.05);
+  --ag-av-agy: #ffffff;
+  --ag-av-agy-bd: rgba(32, 33, 36, 0.12);
+  --ag-clay: #c96442;
+  --ag-pop-sec: #f5f5f5;
+  --ag-inv-bg: #303030;
+  --ag-inv-on: #f2f2f2;
+  --ag-inv-acc: #a8c7fa;
   color-scheme: light;
 }
 
@@ -513,6 +542,7 @@ html[data-wco="1"] .agy-root {
    高度从整行高收回字形高（原来比字高出一截）。
    闪烁：系统同款 1060ms 硬闪，打字 / 挪动后立即常亮重计时（JS 摘掉再挂 animation）。
    只挪 background-position，不用 transform 动画（避免合成层在切明暗快照时裁不干净）。 */
+.agy-root .cv-on > .agy-cbox-input,
 .agy-root .agy-cbox.cv-on .agy-cbox-input { caret-color: transparent; }
 .agy-root .agy-caret {
   --caret-blue: #3186ff;
@@ -536,7 +566,8 @@ html[data-wco="1"] .agy-root {
   --rb: linear-gradient(to bottom, #2ecae9 0%, #37db7c 13%, #b7e544 25%, #ffd533 37%, #ffaf40 49%, #ff6e6b 61%, #ff739b 71%, #c199ff 83%, #70abff 93%, #2ecae9 100%);
 }
 .agy-root .agy-cbox.busy .agy-caret { --flow-dur: 3.5s; }
-.agy-root .agy-caret.hidden { visibility: hidden; animation: none; }
+.agy-root .agy-caret.hidden,
+.agy-root .agy-cbox.recording .agy-caret { visibility: hidden; animation: none; }
 @keyframes agy-caret-blink { 0% { opacity: 1; } 50% { opacity: 0; } }
 /* 实心芯：上蓝下彩，下半截逐渐变淡 */
 .agy-root .agy-caret::before {

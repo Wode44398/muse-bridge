@@ -37,7 +37,7 @@ import { listAccounts, activeAccountId, setActive } from './claude-account.mjs';
 import { accountLimits, accountPlan } from './status.mjs';
 import { refreshAccounts, probedInfo } from './account-usage.mjs';
 import { DATA_ROOT } from './paths.mjs';
-import { relevantBucket } from './account-router/buckets.mjs';
+import { relevantBucket, familyOf, DEDICATED, isShared } from './account-router/buckets.mjs';
 import { createDispatch } from './account-router/dispatch.mjs';
 import { createStore } from './account-router/store.mjs';
 
@@ -51,7 +51,9 @@ const SOFT_SWITCH_PCT = 98;
 
 const STRATEGIES = ['smart', 'fill', 'primary'];
 let settings = { enabled: false, strategy: 'smart', returnToPrimary: false, seamless: false };
-const cooldown = new Map();   // accountId -> { until, type }
+// accountId -> { [范围]: { until, type } }。范围 '*' = 整个号（5 小时 / 每周被拒、token 失效、分不清的）；家族名 = 只挡那个家族
+//（撞的是它独占的额度，如 Fable 周限额）——11-23 一次 Fable 429 把一个号整个挡了一周，Opus 任务也全绕开它。
+const cooldown = new Map();
 const log = [];               // 最近的自动切换记录（内存态，控制台展示用）
 let routing = null;           // 进行中的开跑前路由（并发开跑的几轮共用一次决策）
 
@@ -103,8 +105,11 @@ export function accountBlock(id, model, { soft = seamlessActive() } = {}) {
   const now = Date.now();
   const full = soft ? SOFT_SWITCH_PCT : 100;
   let until = 0, type = '';
-  const cd = cooldown.get(id);
-  if (cd && cd.until > now) { until = cd.until; type = cd.type; }
+  const fam = familyOf(model);
+  for (const [scope, cd] of Object.entries(cooldown.get(id) || {})) {
+    if (scope !== '*' && scope !== fam) continue;
+    if (cd.until > now && cd.until > until) { until = cd.until; type = cd.type; }
+  }
   for (const [k, b] of Object.entries(accountLimits(id))) {
     if (!b || !relevantBucket(k, b, model)) continue;
     if (!(b.status === 'rejected' || (typeof b.pct === 'number' && b.pct >= full))) continue;
@@ -232,8 +237,10 @@ export async function noteLimitHit(acct, { kind = 'rate_limit', type = '', reset
   if (typeof model === 'string' && model.startsWith('custom:')) return null;
   const until = kind === 'auth' ? Date.now() + AUTH_COOLDOWN
     : (resetsAt && resetsAt > Date.now() ? resetsAt : Date.now() + GENERIC_COOLDOWN);
-  const prev = cooldown.get(acct);
-  if (!prev || prev.until < until) cooldown.set(acct, { until, type: kind === 'auth' ? 'auth' : (type || 'limit') });
+  const scope = kind === 'auth' ? '*' : limitScope(acct, type, model);
+  const cds = cooldown.get(acct) || {};
+  if (!cds[scope] || cds[scope].until < until) cds[scope] = { until, type: kind === 'auth' ? 'auth' : (type || 'limit') };
+  cooldown.set(acct, cds);
   if (listAccounts().length < 2) return null;
   if (smartActive()) {
     if (!sid) return null;
@@ -254,6 +261,20 @@ export async function noteLimitHit(acct, { kind = 'rate_limit', type = '', reset
     return best ? doSwitch(acct, best, kind === 'auth' ? 'auth' : (type || 'limit'), model) : null;
   })().finally(() => { routing = null; });
   try { return await routing; } catch (e) { console.error('[account-router] failover failed:', (e && e.message) || e); return null; }
+}
+
+// 一次额度拒绝该挡多大范围：'*' 整个号，或某个家族。
+// 拒绝点名的是共用桶（5 小时 / 每周）→ 整个号；点名的是家族独占桶（Fable 周限额等）→ 只挡那个家族；
+// 没点名（429 不带 representative-claim、credits_required）时：请求的模型有独占桶、而这个号的共用桶看着都没满
+//（noteHeaders 已经先把这次 429 的读数记进去了）→ 多半是那个家族自己的额度没了 / 根本没有，只挡它。
+export function limitScope(acct, type, model) {
+  if (isShared(type)) return '*';
+  for (const [f, k] of Object.entries(DEDICATED)) if (type === k) return f;
+  const fam = familyOf(model);
+  if (!DEDICATED[fam]) return '*';
+  const L = accountLimits(acct) || {};
+  const full = (b) => b && (b.status === 'rejected' || (typeof b.pct === 'number' && b.pct >= 100)) && !(b.resetsAt && b.resetsAt < Date.now());
+  return full(L.five_hour) || full(L.seven_day) ? '*' : fam;
 }
 
 // 号池里最早什么时候有号能接着跑这个模型（毫秒；0 = 路由关着 / 号不够两个 / 没有已知的恢复时刻）。

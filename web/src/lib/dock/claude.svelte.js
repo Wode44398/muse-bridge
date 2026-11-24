@@ -3,8 +3,7 @@ import { session } from '../state.svelte.js';
 import { api } from '../api.js';
 import { t, tc } from '../i18n.js';
 import { dockIcon } from '../dockIcons.js';
-import { isPluginView, workbenchByKey, workbenchKeys, openWorkbenchStandalone, uiIcon } from '../pluginUi.svelte.js';
-import { inAndroidApp } from '../pluginPanels.svelte.js';
+import { workbenchKeys } from '../pluginUi.svelte.js';
 import { createDockHost } from './host.svelte.js';
 import { buildTools, toolAllowed } from './tools.js';
 
@@ -18,17 +17,9 @@ const BUILTIN = [...COL_A, 'browser', 'files', 'memory'];
 export const claudeHost = createDockHost({
   id: 'claude',
   initialView: 'review',
-  keys: () => [...BUILTIN, ...workbenchKeys()],
+  keys: () => [...BUILTIN, ...workbenchKeys('claude')],
   sortable: () => BUILTIN,
   colOf: (k) => (COL_A.includes(k) ? 'a' : 'b'),
-  // 插件的工作台标签也是一张卡；手机 App 里不内嵌第三方页面，改成原生干净页面打开
-  intercept(view) {
-    if (!isPluginView(view)) return false;
-    const w = workbenchByKey(view);
-    if (!w) return true;
-    if (inAndroidApp()) { openWorkbenchStandalone(w, dockContext()); return true; }
-    return false;
-  },
   // 浏览器一个对话一份；快照页和还没发出第一条消息的新对话不带，退回整个工作空间共用那份
   session: () => (state.snap ? '' : session.id || ''),
   extra: { snap: false, tasksFocus: null, tasksAgent: null },
@@ -54,12 +45,9 @@ export function claudeTools() {
     own: [
       // 任务 = 官方 Tasks 侧栏（只读数据，快照访客也给）
       { key: 'tasks', label: tc('claude', '任务'), closeLabel: tc('claude', '关闭任务'), icon: dockIcon('tasks'), col: 'a' },
-      // 插件的工作台标签：页面要宽，固定挂在第二列末尾；快照访客不给（插件页面要插件票据，访客没有）
-      ...workbenchKeys().map((key) => {
-        const w = workbenchByKey(key);
-        return { key, label: w?.title || '', closeLabel: t('关闭「{name}」', { name: w?.title || '' }), icon: uiIcon(w?.icon), col: 'b', fixed: true, ok: ({ snap }) => !snap };
-      }),
     ],
+    // 插件的工作台标签（ctx.ui.workbench）：buildTools 按宿主摆进来，内容由 SharedPanel 画；快照访客不给
+    host: 'claude',
   });
 }
 export const claudeToolOk = (key) => {

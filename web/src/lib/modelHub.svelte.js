@@ -25,6 +25,8 @@ export const hub = $state({
   studio: null,     // Studio 自己的服务（StudioView）；null = 没装 studio 扩展。managed 的属于某个模型中心服务，首页不单列
   plugins: [],      // 插件提供的
   claudeGemini: false, // 服务端的 Claude 认得 Gemini 原生协议（v7.82 起）；老服务端 = false，Gemini 协议的服务照旧不给 Claude
+  codexHub: false, // 服务端的 codex 能用模型中心的文本模型（总览带 codexHub: true）；false = 不出 Codex 去向
+  prefs: null,      // 模型中心的开关 { agentMediaConfig }；null = 老服务端没有（界面不出这一组）
   builtins: null,   // Studio 的内置媒体服务（Vertex / 本机）：[{ id, name, dialect, enabled, shared, models:[{ id, label, kind, enabled }] }]；null = 没开 Studio / 老服务端
 });
 
@@ -112,6 +114,9 @@ function adopt(r) {
   hub.plugins = Array.isArray(r.plugins) ? r.plugins : [];
   hub.builtins = Array.isArray(r.builtins) ? r.builtins : null;
   hub.claudeGemini = r.claudeGemini === true;
+  // codex 这一侧接得上模型中心（扩展装了、能读模型中心给它的服务）：文本模型多一个 Codex 去向；老服务端没有这个键
+  hub.codexHub = r.codexHub === true;
+  hub.prefs = r.prefs && typeof r.prefs === 'object' ? { ...r.prefs } : null;
   // v2 的总览带 v: 2；'studio' in r 是给没带 v 的 v2 留的口子（它总会序列化 studio 键，没装扩展也是 null）。
   // 老服务端（v1）两样都没有
   hub.v2 = r.v >= 2 || 'studio' in r;
@@ -159,10 +164,26 @@ export const hubAsk = (p, body) => call(() => api.post(path(p), body || {}));
 /** GET /api/model-hub/<path>（如 'catalog?id=h-…'）。 */
 export const hubGet = (p) => call(() => api.get(path(p)));
 
+/** 改模型中心的开关（{ agentMediaConfig: true }）：成功后重拉总览；失败抛带人话的 Error。 */
+export const setHubPrefs = (patch) => hubPost('prefs', patch);
+
+// —— 媒体模型的调用配置（Media Studio 的模型配置层：参数覆盖、调用配方、预演、试跑）——
+// 键 = '<Studio 服务 id>/<模型 id>'：模型中心服务托管到 Studio 后，服务视图的 media.providerId 就是 Studio 服务 id
+/** 一个模型的配置视图（基础卡、生效卡、覆盖、配方、示例）。 */
+export const mediaConfigGet = (key) => call(() => api.get('/api/studio/model-config?key=' + encodeURIComponent(key))).then((r) => r.config);
+/** 这个 Studio 服务里哪些模型配过：{ 模型 id: { over?, recipe? } }。 */
+export const mediaConfigList = (pid) => call(() => api.get('/api/studio/model-config?provider=' + encodeURIComponent(pid))).then((r) => r.configs || {});
+/** 写配置：{ key, over?, recipe? }（null = 删掉）→ { config, warnings }。 */
+export const mediaConfigSet = (body) => call(() => api.post('/api/studio/model-config', body));
+/** 预演（dry:true，不花钱）/ 试跑（dry:false，回 { job }）。 */
+export const mediaTrial = (body) => call(() => api.post('/api/studio/model-trial', body));
+/** 试跑的记录 { job, trace, done }。 */
+export const mediaTrialResult = (jobId) => call(() => api.get('/api/studio/model-trial?job=' + encodeURIComponent(jobId)));
+
 export const KINDS = ['text', 'image', 'video', 'voice', 'music'];
 /** 种类的中文名（用时套 tr()：tr(KIND_NAME[k])；要静态收词的地方直接写字面的 t('文本') 等，五个词都在字典里）。 */
 export const KIND_NAME = { text: '文本', image: '图像', video: '视频', voice: '配音', music: '音乐' }; // i18n-ignore 这里是键表，显示时才翻
-export const AGENT_NAME = { claude: 'Claude', dimensio: 'dimensio', studio: 'Media Studio' };
+export const AGENT_NAME = { claude: 'Claude', dimensio: 'dimensio', codex: 'Codex', studio: 'Media Studio' };
 export const PROTO_NAME = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini' };
 
 /**

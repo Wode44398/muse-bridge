@@ -461,7 +461,7 @@
    },
    {
     "name": "memory-save",
-    "status": 400,
+    "status": 200,
     "type": "application/json",
     "head": {
      "total": null,
@@ -469,7 +469,13 @@
      "guard": "1"
     },
     "body": {
-     "error": "string"
+     "confidence": "string",
+     "created": "boolean",
+     "downgraded": [],
+     "held": [],
+     "id": "string",
+     "status": "string",
+     "title": "string"
     }
    },
    {
@@ -481,11 +487,30 @@
      "cors": null,
      "guard": "1"
     },
-    "body": []
+    "body": [
+     {
+      "anchors": [],
+      "attended": "boolean",
+      "confidence": "string",
+      "declaredStatus": "string",
+      "description": "string",
+      "evidence": [],
+      "id": "string",
+      "issues": [],
+      "origin": "string",
+      "schema": "number",
+      "scope": [],
+      "status": "string",
+      "title": "string",
+      "topic": "string",
+      "type": "string",
+      "updated": "string"
+     }
+    ]
    },
    {
     "name": "memory-get",
-    "status": 404,
+    "status": 200,
     "type": "application/json",
     "head": {
      "total": null,
@@ -493,7 +518,23 @@
      "guard": "1"
     },
     "body": {
-     "error": "string"
+     "anchors": [],
+     "attended": "boolean",
+     "confidence": "string",
+     "content": "string",
+     "declaredStatus": "string",
+     "description": "string",
+     "evidence": [],
+     "id": "string",
+     "issues": [],
+     "origin": "string",
+     "schema": "number",
+     "scope": [],
+     "status": "string",
+     "title": "string",
+     "topic": "string",
+     "type": "string",
+     "updated": "string"
     }
    },
    {
@@ -520,7 +561,36 @@
     },
     "body": {
      "at": "string",
-     "buckets": [],
+     "buckets": [
+      {
+       "current": "boolean",
+       "history": [],
+       "items": [
+        {
+         "anchors": [],
+         "attended": "boolean",
+         "confidence": "string",
+         "declaredStatus": "string",
+         "description": "string",
+         "evidence": [],
+         "id": "string",
+         "issues": [],
+         "origin": "string",
+         "schema": "number",
+         "scope": [],
+         "status": "string",
+         "title": "string",
+         "topic": "string",
+         "type": "string",
+         "updated": "string"
+        }
+       ],
+       "kind": "string",
+       "name": "string",
+       "promptChars": "number",
+       "ws": "string"
+      }
+     ],
      "budget": "number",
      "emptyProjects": "number"
     }
@@ -591,7 +661,7 @@
    },
    {
     "name": "memory-reject",
-    "status": 404,
+    "status": 200,
     "type": "application/json",
     "head": {
      "total": null,
@@ -599,12 +669,12 @@
      "guard": "1"
     },
     "body": {
-     "error": "unknown memory id"
+     "rejected": true
     }
    },
    {
     "name": "memory-restore",
-    "status": 404,
+    "status": 200,
     "type": "application/json",
     "head": {
      "total": null,
@@ -612,7 +682,7 @@
      "guard": "1"
     },
     "body": {
-     "error": "not a rejected memory"
+     "restored": true
     }
    },
    {
@@ -638,7 +708,7 @@
      "guard": "1"
     },
     "body": {
-     "deleted": false
+     "deleted": true
     }
    },
    {
@@ -916,7 +986,7 @@
      },
      {
       "e": "context",
-      "usedTokens": 2573,
+      "usedTokens": 2738,
       "limitTokens": 131072,
       "compacted": false,
       "cacheTtlMs": 0
@@ -1025,7 +1095,7 @@
      },
      {
       "e": "context",
-      "usedTokens": 2681,
+      "usedTokens": 2846,
       "limitTokens": 131072,
       "compacted": false,
       "cacheTtlMs": 0
@@ -1208,7 +1278,8 @@
        "ask": []
       },
       "workspace": "<TMP:dimensio-char-routes-ws->",
-      "access": "full"
+      "access": "full",
+      "posture": "hardened"
      },
      "messages": [
       {
@@ -1269,7 +1340,7 @@
       "debug": "",
       "date": "<DATE>",
       "knowledge": "",
-      "memory": ""
+      "memory": "<world-sha>"
      },
      "todos": [],
      "totals": {
@@ -1360,8 +1431,8 @@
        "shared": 0,
        "hashes": {
         "system": "<hash>",
-        "tools": "302caf26e975",
-        "params": "1ffb7b8ee3cd"
+        "tools": "4a66bf8a706b",
+        "params": "b3c42464c332"
        },
        "injected": {},
        "usage": {
@@ -1380,8 +1451,8 @@
        "shared": 1,
        "hashes": {
         "system": "<hash>",
-        "tools": "302caf26e975",
-        "params": "1ffb7b8ee3cd"
+        "tools": "4a66bf8a706b",
+        "params": "b3c42464c332"
        },
        "injected": {},
        "usage": {
@@ -2527,7 +2598,8 @@
       "C:\\",
       "D:\\",
       "E:\\",
-      "G:\\"
+      "G:\\",
+      "H:\\"
      ]
     }
    },
@@ -2563,7 +2635,8 @@
       "C:\\",
       "D:\\",
       "E:\\",
-      "G:\\"
+      "G:\\",
+      "H:\\"
      ]
     }
    },

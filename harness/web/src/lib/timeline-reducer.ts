@@ -6,6 +6,7 @@
 import { toolMeta } from "./icons.ts";
 import { t, tr } from "./i18n.ts";
 import { TASK_NOTIFICATION_KIND, taskNoticeText } from "./task-notice.ts";
+import { WAKEUP_KIND, wakeupNoticeText } from "./wakeup-notice.ts";
 import { discardStreamTurn, findSteerItem, resetStreamTurn, startStreamTurn } from "./stream-turn.ts";
 import { markEnd, markStart } from "./live-clock.ts";
 import type { AgentRun, AskItem, DecidedBy, GoalView, Item, PermissionItem, PlanItem, RecallRef, ToolItem, WorkflowRun } from "./timeline-types.ts";
@@ -274,6 +275,7 @@ function newAgentRun(ev: any): AgentRun {
     phase: ev.phase, status: "running", text: "", steps: [], turns: 0, tokens: 0, cached: Boolean(ev.cached), open: false,
     prompt: typeof ev.prompt === "string" ? ev.prompt : "", provider: String(ev.provider ?? ""), toolCalls: 0,
     startedAt: numOr(ev.startedAt) ?? Date.now(), lastAt: Date.now(),
+    ...(ev.background === true ? { background: true } : {}),
   };
 }
 
@@ -282,7 +284,8 @@ export function agentRunFromMeta(m: any): AgentRun {
   const trail: any[] = Array.isArray(m?.trail) ? m.trail : [];
   return {
     id: String(m?.id ?? ""), label: String(m?.label ?? ""), tier: String(m?.tier ?? "research"), model: String(m?.model ?? ""),
-    status: m?.ok ? "ok" : "fail", text: String(m?.text ?? ""),
+    // 后台子 agent 刚起时落盘的记录还没有结果（status running），跑完由服务端改写成最终的
+    status: m?.status === "running" ? "running" : m?.ok ? "ok" : "fail", text: String(m?.text ?? ""),
     steps: trail.map((s, i) => ({
       id: `${m?.id}:${i}`, name: String(s?.name ?? ""), arg: String(s?.arg ?? ""),
       status: s?.ok ? "ok" : "fail", summary: String(s?.summary ?? ""),
@@ -294,6 +297,7 @@ export function agentRunFromMeta(m: any): AgentRun {
     toolCalls: numOr(m?.toolCalls) ?? trail.length, startedAt: numOr(m?.startedAt), durationMs: numOr(m?.durationMs),
     editedFiles: strList(m?.editedFiles),
     stopReason: typeof m?.stopReason === "string" && m.stopReason !== "completed" ? m.stopReason : undefined,
+    ...(m?.background === true ? { background: true } : {}),
   };
 }
 
@@ -764,6 +768,8 @@ export function reduceTimeline(m: TimelineModel, ev: any, fx: TimelineEffects) {
     case "session_message":
       // 后台任务通知（server/job-notify.ts）也走这条注入通道：它只是一行提示，不是会话消息卡
       if (ev.kind === TASK_NOTIFICATION_KIND && typeof ev.text === "string") pushItem(m, { kind: "notice", text: taskNoticeText(ev.text) });
+      // 定时唤醒在会话跑着时到点：同样只是一行提示
+      else if (ev.kind === WAKEUP_KIND && typeof ev.text === "string") pushItem(m, { kind: "notice", text: wakeupNoticeText(ev.text) });
       else if (typeof ev.text === "string" && ev.text) pushItem(m, { kind: "session", text: ev.text, turn: false });
       break;
     // 会话协作：StartSession 开出了一个会话——工具行据此链过去（侧栏的台账随列表重拉）

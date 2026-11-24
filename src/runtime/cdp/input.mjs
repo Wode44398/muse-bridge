@@ -61,6 +61,17 @@ export class CdpInputMethods {
        const nodes=Array.from(document.querySelectorAll(sel)).filter(el=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0;});
        const t=el=>(el.getAttribute('aria-label')||el.value||el.innerText||el.textContent||el.getAttribute('placeholder')||'').replace(/\\s+/g,' ').trim().toLowerCase();
        let hit=nodes.find(el=>t(el)===n)||nodes.find(el=>t(el).includes(n));
+       if(!hit){
+         // 自绘控件（阿里云的地域下拉是个普通 span，没有 role 也不是 button）：退到「看得见、文字完全一致」的任意元素，
+         // 取面积最小的那个（最贴字的那层）；鼠标手形的优先。只认完全一致，免得点到一大段正文里。
+         const vis=el=>{const r=el.getBoundingClientRect();if(r.width<1||r.height<1)return false;try{return el.checkVisibility({opacityProperty:true,visibilityProperty:true});}catch{return true;}};
+         const own=el=>(el.innerText||'').replace(/\\s+/g,' ').trim().toLowerCase();
+         const all=Array.from(document.body?document.body.querySelectorAll('*'):[]).filter(el=>!/^(SCRIPT|STYLE|HTML|BODY)$/.test(el.tagName)&&own(el)===n&&vis(el));
+         const area=el=>{const r=el.getBoundingClientRect();return r.width*r.height;};
+         const ptr=el=>getComputedStyle(el).cursor==='pointer';
+         all.sort((a,b)=>(ptr(b)-ptr(a))||(area(a)-area(b)));
+         hit=all[0];
+       }
        if(!hit)return null;hit.scrollIntoView({block:'center'});const r=hit.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()`,
     );
     if (!c) throw new Error(`页面上没有文字是「${text}」的可点击元素——换个词，或用 find / read_page 拿 ref`);
@@ -192,8 +203,14 @@ export class CdpInputMethods {
     if (target?.ref != null) {
       await this.focusRef(target.ref);
     } else if (target?.selector) {
+      // 选择器常常一并命中单选 / 复选框（「.dialog input」先撞上「自定义创建」那个 radio）：
+      // 在所有匹配里挑第一个看得见、能打字的；一个都没有才退回第一个匹配（后面会照常报「不是可输入的框」）
       const ok = await this.eval(
-        `(()=>{const e=document.querySelector(${JSON.stringify(target.selector)});if(!e)return false;e.focus();return true;})()`,
+        `(()=>{const all=Array.from(document.querySelectorAll(${JSON.stringify(target.selector)}));if(!all.length)return false;
+         const NOTYPE=/^(radio|checkbox|button|submit|reset|hidden|file|image|range|color)$/i;
+         const typable=e=>!e.disabled&&!e.readOnly&&(e.isContentEditable||e.tagName==='TEXTAREA'||(e.tagName==='INPUT'&&!NOTYPE.test(e.type||'')));
+         const vis=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0;};
+         const e=all.find(x=>typable(x)&&vis(x))||all.find(typable)||all[0];e.focus();return true;})()`,
       );
       if (!ok) throw new Error(`no element matching selector ${target.selector}`);
     }

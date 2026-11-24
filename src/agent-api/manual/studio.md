@@ -110,6 +110,38 @@ Google 系内置模型与参数的可选值（服务端按能力表现填；各�
 
 规矩：生成花钱，视频、音乐或用户没明确要求的先征得同意；删除不可撤回，先问。放行与 `media.*` 相同（设置 › Media Studio 的「允许的 agent」「允许的种类」）；同机 agent 实例（dimensio 等）能查、能生成（按设置放行），不能管理服务和改设置。
 
+## 单个模型的调用配置：参数覆盖与调用配方
+
+服务的方言管不到的地方，可以按单个模型叠一层配置（设置 › 模型中心 › 打开服务 › 图像 / 视频 / 配音 / 音乐那栏，已添加给 Media Studio 的模型行尾「调用配置」；也能由 agent 用 `studio_config.*` 改）。配置按「服务 id/模型 id」另存，模型中心同步模型清单时不会冲掉，所以模型中心托管的服务也能配。
+
+- **参数覆盖**：给选项型参数补取值（例：某个模型卡上缺 `svg`，在 outputFormat 补上）、改参数默认值、垫一层「额外请求体」（JSON，原样并进请求，调用时 `params.extra` 的同名键压过它）。优先级：卡上默认 < 覆盖的默认 < 模型自己的默认 < 这次调用给的参数。补上的取值即使模型卡自带的规范化不认识，选了也照原样发。
+- **调用配方**：用一段 JSON 描述这个模型的接口怎么调（提交 → 轮询 → 取结果）。写了配方的模型不再走服务方言的适配器，照配方发请求；接口地址和 Key 仍用服务自己的。不标准的中转站视频接口（请求体、轮询地址、结果字段每家不同）靠它接通，不用等官方适配。
+- **预演**只拼出提交请求给你看（Key 只剩尾号），不发、不花钱；**试跑**真发一次，记下每一步的原始请求与响应（Key 已抹掉、素材只留大小），结果照常进作品。
+
+agent 用 `studio_config.*` 之前，要用户在 设置 › 模型中心 打开「允许 AI 配置媒体接口」（默认关；只管 agent，人在界面里改不受它限制）。流程：`studio_config.get` 看现状（还没配方时带几份示例）→ 照服务方的接口文档写配方 → `studio_config.preview` 预演看请求对不对 → 征得同意后 `studio_config.trial` 真跑一次，看 trace 改字段 → `studio_config.set` 存下（写入同样先说清改什么、征得同意）。托管服务还没有这个模型时，`set` 带上 kind 会先在模型中心把它加给 Media Studio。
+
+### 调用配方的格式
+
+```json
+{
+  "submit": { "method": "POST", "path": "/video/create", "body": { "model": "{{model}}", "prompt": "{{prompt}}", "image": "{{inputs.first.dataUrl}}", "duration": "{{params.duration}}" } },
+  "poll": { "path": "/video/query", "query": { "id": "{{submit.$.id}}" }, "status": "$.status", "done": ["completed"], "failed": ["failed"], "error": "$.error", "progress": "$.progress" },
+  "result": { "url": "$.video_url", "mime": "video/mp4" },
+  "params": [ { "key": "duration", "label": "时长", "type": "enum", "options": [5, 10], "default": 5 } ],
+  "inputs": { "images": { "max": 1, "roles": ["first"] } }
+}
+```
+
+- `submit`：`method`（GET / POST / PUT，默认 POST）；`path` 接在服务地址后面（服务地址已经带 `/v1` 的别再写），或写完整的 `url`（必须和服务同一个协议、域名、端口）；`query`、`headers`（鉴权头不能写）、`body`（JSON 模板）；`bodyType: "multipart"` 时 body 是表单字段，文件用 `{{inputs.<角色>.file}}`；`timeoutSec`（10–600）。
+- `poll`（异步接口才写）：同样的 `path` / `url` / `query` / `headers` / `body`；`url` 可以整个是占位符（`{{submit.$.status_url}}`），运行时也只许同一个域名。`status` 是状态字段的取值路径，`done` / `failed` 是完成 / 失败时它的值；`error`、`progress`（0–1 或 0–100）可选；`intervalSec`（默认 5）、`timeoutMin`（默认 30）。
+- `result`：`from`（submit / poll，默认有 poll 就 poll）；四选一——`url`（结果文件地址的路径，可以是数组；地址是别的域名时下载不带 Key）、`b64`（base64 或 data URL）、`binary: true`（没有 poll、提交的响应本身就是文件，如配音接口）、`download`（再发一个请求取文件内容，如 `/videos/{{submit.$.id}}/content`）；`mime` 兜底类型。
+- `params`：这个模型在界面和 agent 里能调的参数（key、label、type = enum / number / bool / text / json、options、min / max / step、default、desc）。请求里用 `{{params.<key>}}` 取；另有一个自动加的「额外参数」extra，JSON 请求体时原样并进去。
+- `inputs`：能收的素材，`images: { max, roles }`（roles：edit 改图 / ref 参考图 / first 首帧 / last 尾帧）、`audio: { max }`、`video: { max }`。
+- `auth`（可选，不写 = 用服务的鉴权方式）：`{ "header": "X-Token", "prefix": "" }` 或 `{ "query": "key" }` 或 `{ "none": true }`。配方里拿不到 Key 本身。
+- `etaSec`（进度条估时）、`note`（模型说明）。
+
+占位符 `{{…}}`：`prompt`、`negative`、`model`（模型 id）、`kind`、`uuid`、`now`、`params.<key>`、`inputs.<角色>.<字段>`（字段 dataUrl / b64 / mime / name / file；`inputs.ref[1].b64` 第 2 张，`inputs.ref[*].dataUrl` 全部、得到数组，`inputs.ref.count` 张数）、`submit.$…` / `poll.$…`（响应 JSON 里取值）。整个值就是一个占位符时保留原类型，取不到这个键整个不发（没设置就不传）；夹在文字里时拼成字符串。`{{params.size ?? "1024x1024"}}` 给缺省值（JSON 字面量），`| string` / `number` / `int` / `bool` / `json` / `lower` / `upper` 转换。取值路径只认 `$.键`、`$['带空格的键']`、`[下标]`（负数从尾数）、`[*]`。
+
 ## Media Studio 的限制
 
 - 没有 Key、没真打过的方言（OpenAI、fal、Replicate、ElevenLabs、MiniMax、火山方舟）按官方文档实现，第一次用建议先「测试连接」再小额试一条。

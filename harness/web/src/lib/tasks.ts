@@ -28,6 +28,7 @@ interface RunLike {
   id: string;
   label: string;
   status: "running" | "ok" | "fail";
+  background?: boolean; // 后台子 agent：在跑不看工具行
   phase?: string;
   error?: string;
   tokens?: number;
@@ -67,13 +68,14 @@ export function toolTaskKind(tool: any): TaskKind | "" {
 // 运行被掐（停止按钮 / 父轮 abort）落成 error "aborted"：算「已停止」而不是「失败」。
 const STOP_RE = /abort|中断|cancel/i;
 
-// 终态：有 run 记录看 run；run 还挂着 running 而工具行已经结束 = 被中断没收到 end 事件。
+// 终态：有 run 记录看 run；run 还挂着 running 而工具行已经结束 = 被中断没收到 end 事件——后台子 agent 除外（发起它的调用
+// 立刻就返回了，它的结局由服务端改写卡片记录、或 subagent_end 事件送到）。
 // 没有 run（工作流还在等确认卡 / 历史里没拿到结果）按工具行推：重建出来的无结果行摘要是「已中断…」。
 export function toolTaskStatus(tool: any): TaskStatus {
   const run: RunLike | WorkflowLike | undefined = tool?.workflow ?? tool?.agent;
   const toolRunning = tool?.status === "running";
   if (run) {
-    if (run.status === "running") return toolRunning ? "running" : "stopped";
+    if (run.status === "running") return toolRunning || (run as RunLike).background ? "running" : "stopped";
     if (run.status === "ok") return "completed";
     return STOP_RE.test(run.error ?? "") ? "stopped" : "failed";
   }
@@ -180,7 +182,7 @@ export function agentView(tool: any, opts: { now: number; chatRunning: boolean }
     | (RunLike & { tier?: string; model?: string; steps?: { id: string; name: string; arg: string; status: string }[]; toolCalls?: number })
     | undefined;
   const raw = toolTaskStatus(tool);
-  const status: TaskStatus = raw === "running" && !opts.chatRunning ? "stopped" : raw;
+  const status: TaskStatus = raw === "running" && !opts.chatRunning && !run?.background ? "stopped" : raw;
   const running = status === "running";
   const steps = run?.steps ?? [];
   const last = steps[steps.length - 1];
@@ -191,7 +193,7 @@ export function agentView(tool: any, opts: { now: number; chatRunning: boolean }
     status,
     stalled: dot === "stalled" && !suspended,
     suspended,
-    tier: run?.tier || (tool?.args?.tools === "coder" ? "coder" : "research"),
+    tier: run?.tier || ((tool?.args?.subagent_type ?? tool?.args?.tools) === "coder" ? "coder" : "research"),
     model: modelShort(run?.model),
     calls: run ? (run.toolCalls ?? steps.length) : 0,
     tokens: run?.tokens ?? 0,

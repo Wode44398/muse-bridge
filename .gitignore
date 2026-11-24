@@ -126,3 +126,17 @@ local-pc-broker.json
 remote-control.state.json
 signing.properties
 vertex-history/
+# 跟公开版对齐的运行时数据（数据根 = 程序根时落在这里；Muse 部署的数据根另在别处，开发和跑测试时会写进仓库根）
+# Antigravity 号池与项目、Codex 号池（含登录凭据）、模型中心与 Media Studio 的服务配置（含加密的 Key）
+/agy/
+agy-projects.json
+/codex/
+/model-hub/
+/studio-providers/
+# 调试模式反馈、消息来源、意外重启后待续的会话（含重放用的身份头）、全服忙闲信号
+/harness-feedback/
+claude-msg-origins.json
+claude-restart-resume.json
+claude-restart-resume.json.tmp
+live-runs.json
+live-runs.json.tmp

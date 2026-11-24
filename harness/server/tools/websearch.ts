@@ -141,10 +141,7 @@ export const webSearchTool: Tool = {
   def: {
     name: "WebSearch",
     description:
-      "Search the live web and get back ranked results (title, URL, snippet), plus a grounded " +
-      "answer when the backend provides one. Use for DISCOVERY — current model names, versions, " +
-      "docs locations, error messages — when you don't know the exact URL; then use WebFetch to " +
-      "read the best source in depth.",
+      "Search the live web: ranked results (title, URL, snippet), plus a grounded answer when the backend provides one.",
     parameters: {
       type: "object",
       properties: {

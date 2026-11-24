@@ -17,6 +17,7 @@
   import { openPageGrants } from '../../lib/pageGrantsNav.svelte.js';
   import { reloadView } from '../../lib/appView.svelte.js';
   import { isNativeDesktop } from '../../lib/nativeDesktop.js';
+  import { isPageWindow } from '../../lib/windowPage.svelte.js';
   import { t } from '../../lib/i18n.js';
   import PluginFrame from '../ext/PluginFrame.svelte';
   import '../appview/appview.css';
@@ -28,8 +29,9 @@
   const kind = $derived(app?.kind || 'page');
   const light = $derived(ui.theme === 'light');
   const iconUrl = $derived(app ? appIconUrl(app, light) : null);
-  // 单页模式没有主页：「从主页隐藏」没有意义，菜单里不给
-  const hasHome = $derived(rootScreen() === 'home');
+  // 单页模式与独立分页窗口没有主页：「从主页隐藏」与左上返回箭头都不显示
+  const pageWin = isPageWindow();
+  const hasHome = $derived(rootScreen() === 'home' && !pageWin);
   const hidden = $derived(hasHome && homeView().hidden.has(appKey));
 
   // 刷新：插件页 = 整个 iframe 重挂（插件页自己的状态全丢，等于重新打开）；声明式应用 = 带着现有 state 重拉一次 view
@@ -70,9 +72,11 @@
 <section class="app-page" class:av={isView} class:av-touch={isView && !desk} class:av-desk={isView && desk}
   class:av-dark={isView && !light} class:av-light={isView && light} data-app-page={appKey}>
   <header class="ap-bar">
-    <button class="ap-btn" type="button" onclick={back} aria-label={hasHome ? t('返回主页') : t('返回')}>
-      <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true"><path d="M12.5 4.5 7 10l5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    </button>
+    {#if !pageWin}
+      <button class="ap-btn" type="button" onclick={back} aria-label={hasHome ? t('返回主页') : t('返回')}>
+        <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true"><path d="M12.5 4.5 7 10l5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    {/if}
     {#if app}
       <span class="ap-ic" aria-hidden="true">
         {#if iconUrl}<img src={iconUrl} alt="" draggable="false" />{:else}{@html uiIcon(app.icon?.name)}{/if}

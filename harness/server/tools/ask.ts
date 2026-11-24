@@ -75,14 +75,9 @@ export const askUserQuestionTool: Tool = {
   def: {
     name: "AskUserQuestion",
     description:
-      "Ask the user to resolve a decision that is genuinely THEIRS to make, and block until they answer. " +
-      "Use this ONLY when you cannot proceed on a reasonable assumption: a real fork the task left open " +
-      "(which of several valid approaches / targets / scopes), or confirmation before a hard-to-reverse " +
-      "action. Do NOT use it for things you can decide yourself, look up, or verify — the default is to " +
-      "make a sensible choice, state it, and keep working. Prefer ONE call posing every open question " +
-      "(1-4 questions) over stopping repeatedly. Each question gives 2-5 concrete options with a short " +
-      "label and a description; the user can always choose 'Other' and type their own answer. After they " +
-      "answer, continue the task with their choices.",
+      "Ask the user 1-4 questions about decisions that are theirs to make (an open fork in the task, or confirmation " +
+      "before a hard-to-reverse action) and wait for the answer. Each question offers 2-5 options; the user can also " +
+      "type their own answer.",
     parameters: {
       type: "object",
       properties: {

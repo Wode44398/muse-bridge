@@ -58,6 +58,7 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   { name: "DIMENSIO_SHARED_PROVIDERS_DIR", area: "路径", description: "管理员那份自定义服务目录（只读）：成员实例据此用管理员标了「共享给成员」的服务；bridge 拉起成员实例时给" },
   { name: "MEMORY_DIR", area: "路径", description: "记忆库目录（按工作区分）", default: "<数据目录>/memory" },
   { name: "KNOWLEDGE_DIR", area: "路径", description: "项目知识索引目录", default: "<数据目录>/knowledge" },
+  { name: "DIMENSIO_USER_CONFIG_DIRS", area: "路径", description: "用户级 agent 配置目录列表（按 PATH 分隔符，前面的优先）：hooks 的 settings.json、skills/、commands/ 从这里读；成员实例不读", default: "~/.dimensio;~/.claude" },
   { name: "DIMENSIO_GLOBAL_GUIDE", area: "路径", description: "全局 GUIDE.md（每个新会话都带的个人指南）", default: "~/.dimensio/GUIDE.md" },
   { name: "HARNESS_ENV_FILE", area: "路径", description: "启动时加载的 .env 文件", default: "<数据目录>/.env" },
 
@@ -101,7 +102,7 @@ export const ENV_REGISTRY: readonly EnvVar[] = [
   // ── 知识与记忆 ──
   { name: "KNOWLEDGE_AUTO_SEMANTIC", area: "知识与记忆", description: "每轮自动召回是否带语义检索；0 = 只用关键词", default: "开" },
   { name: "KNOWLEDGE_EMBEDDING_API_KEY", area: "知识与记忆", description: "语义检索的 embedding key；没有就用通义 key", secret: true },
-  { name: "KNOWLEDGE_EMBEDDING_BASE_URL", area: "知识与记忆", description: "embedding 接口地址；没有就用通义 / 视觉的地址", default: "DashScope 兼容地址" },
+  { name: "KNOWLEDGE_EMBEDDING_BASE_URL", area: "知识与记忆", description: "embedding 接口地址；配了自己的 embedding key 时默认 DashScope 兼容地址，借用通义 key 时跟着通义那家服务的地址", default: "DashScope 兼容地址" },
   { name: "KNOWLEDGE_EMBEDDING_MODEL", area: "知识与记忆", description: "embedding 型号", default: "text-embedding-v4" },
   { name: "KNOWLEDGE_EMBEDDING_DIMENSIONS", area: "知识与记忆", description: "embedding 维度", default: "256" },
   { name: "DIMENSIO_EXTERNAL_MEMORY", area: "知识与记忆", description: "K8 外部记忆库只读挂载：`<库目录>` 或 `<库目录>=><工作区>|<工作区>`，分号分隔；默认不挂" },

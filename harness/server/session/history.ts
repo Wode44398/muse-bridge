@@ -8,12 +8,14 @@ import { registry } from "./registry.ts";
 import { dropSession, lifecycle } from "./lifecycle.ts";
 import { sessionRecord, writeRecord } from "./persist.ts";
 import { sessionWorkspace } from "./workspace.ts";
+import { backgroundAgentsRunning, sessionHasRunningAgents } from "./subagents.ts";
 
 // Roll a session back to checkpoint n: restore the workspace files and the
 // conversation as they were before that checkpoint's message. The in-memory
 // session is dropped; the next access resumes from the restored file on disk
 // (the normal resume path does all hydration). Refused while ANY session runs —
 // the workspace is shared, a rollback under a running agent's feet corrupts both.
+// 后台子 agent 也算在跑：父会话这一轮早收工了，它还在同一个工作区里写文件。
 type RollbackResult = { ok: boolean; error?: string; code?: "running" | "external"; external?: string[] };
 
 // M11（K29）：进这个会话的生命周期链；查「有没有会话在跑」与占上全局静默标记之间没有 await——查完到回滚结束，
@@ -24,6 +26,9 @@ export function rollbackSession(sessionId: string, n: number, opts: { force?: bo
       if (s.running) {
         return { ok: false, code: "running", error: "a session is currently running — stop it before rolling back" };
       }
+    }
+    if (backgroundAgentsRunning()) {
+      return { ok: false, code: "running", error: "background sub-agents are still running — stop them (stop the session) or wait for them before rolling back" };
     }
     if (registry.rollingBack) return { ok: false, code: "running", error: "another rollback is in progress — try again when it finishes" };
     registry.rollingBack = sessionId;
@@ -173,6 +178,10 @@ export function rewindSession(sessionId: string, target: { ordinal: number; text
     if (registry.sessions.get(sessionId)?.running) {
       return { ok: false, code: "running", error: "this conversation is running — stop it before rewriting from an earlier message" };
     }
+    // 改写会把内存里的会话丢掉重读：它的后台子 agent 收场时就找不到发起它的那张卡片了
+    if (sessionHasRunningAgents(sessionId)) {
+      return { ok: false, code: "running", error: "this conversation's background sub-agents are still running — stop them or wait for them first" };
+    }
     registry.rewinding.add(sessionId);
     try {
       const ws = await sessionWorkspace(sessionId);
@@ -224,7 +233,7 @@ export type SessionReview =
       busy: boolean;
     };
 
-const restoreBusy = (): boolean => registry.rollingBack !== null || [...registry.sessions.values()].some((s) => s.running);
+const restoreBusy = (): boolean => registry.rollingBack !== null || [...registry.sessions.values()].some((s) => s.running) || backgroundAgentsRunning();
 
 export async function sessionReview(sessionId: string): Promise<SessionReview> {
   const list = await sessionChangeList(sessionId, await sessionWorkspace(sessionId));
@@ -272,6 +281,9 @@ export function restoreSessionFiles(sessionId: string, paths: readonly string[],
   return lifecycle(sessionId, async () => {
     if ([...registry.sessions.values()].some((s) => s.running)) {
       return { ok: false, code: "running", error: "a session is currently running — stop it before undoing file changes" };
+    }
+    if (backgroundAgentsRunning()) {
+      return { ok: false, code: "running", error: "background sub-agents are still running — stop them or wait for them before undoing file changes" };
     }
     if (registry.rollingBack) return { ok: false, code: "running", error: "a rollback is in progress — try again when it finishes" };
     registry.rollingBack = sessionId;
@@ -321,7 +333,7 @@ async function restoreQuiesced(sessionId: string, wanted: string[], opts: { forc
 // 撤销改写：把「改写前现场」那份对话原样换回来（文件本来就没动）。改写之后又发过消息就不许了——那会把新的一轮抹掉。
 export function undoRewind(sessionId: string, n: number, expectLength: number): Promise<RewindResult> {
   return lifecycle(sessionId, async () => {
-    if (registry.sessions.get(sessionId)?.running) return { ok: false, code: "running", error: "this conversation is running — stop it first" };
+    if (registry.sessions.get(sessionId)?.running || sessionHasRunningAgents(sessionId)) return { ok: false, code: "running", error: "this conversation is running — stop it first" };
     registry.rewinding.add(sessionId);
     try {
       const { rec: current, error } = await currentRecord(sessionId);

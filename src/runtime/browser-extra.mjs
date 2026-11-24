@@ -19,7 +19,7 @@ export const EXTRA_DESC = `
 find(text) locates elements: every word must appear in the accessibility line (case-insensitive); returns up to 20 lines with fresh [refN] handles — cheaper than paging through read_page.
 network(query?, lines?) lists recent requests captured on this tab (method, status, mime, size, id; filter by url substring); network(id) returns that request's response body (JSON/text shown, binary summarized) — use it to inspect API calls and payloads instead of guessing.
 set_value(ref | selector, value) sets a form control directly — native <select> (option text or value; array for multi-select; its popup is invisible in screenshots and cannot be clicked), checkbox / radio (true/false), date / time / range / color / number / text inputs, textarea, contenteditable — firing input + change like a real edit; the result reads the control back.
-page_text(maxChars?, links?, query?) returns the readable text of the page (article / main first, else body; reads through open shadow DOM) — far cheaper than read_page for reading articles, docs and long lists. links:true appends the visible links (text → URL; query filters them) instead of eval-ing querySelectorAll. Blocks that render only once scrolled into view (e.g. MDN's compatibility table) stay empty until you scroll there and wait.
+page_text(maxChars?, links?, query?) returns the readable text of the page (article / main first, else body; reads through open shadow DOM; an open dialog comes first, collapsed / off-screen drawers are left out) — far cheaper than read_page for reading articles, docs and long lists. links:true appends the visible links (text → URL; query filters them) instead of eval-ing querySelectorAll. Blocks that render only once scrolled into view (e.g. MDN's compatibility table) stay empty until you scroll there and wait.
 upload(files[], ref? | selector?) puts local files (absolute paths on the bridge machine, e.g. attachments under uploads/) into an <input type=file> (hidden inputs work too; default target = the first file input in the part of the page that is currently shown, ignoring inputs of hidden/background views — the result names the input it chose); then submit the form normally.
 Native alert / confirm / prompt dialogs are answered automatically so they never freeze the page: alert → OK, confirm / prompt → Cancel. Every dialog (including ones a page timer opens between your actions) is reported once, at the end of your next action's result; to accept a confirm, first eval window.confirm = () => true.`;
 
@@ -32,7 +32,7 @@ export async function browserFind(b, args = {}) {
   const q = String(args.text ?? args.query ?? '').trim();
   if (!q) return err('find 需要 text（要找的文字/角色，多个词用空格分开）');
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const snap = await b.axSnapshot({ filter: 'all', maxChars: 80_000 });
+  const snap = await b.axSnapshot({ filter: 'all', maxChars: 80_000, layers: false });
   const lines = String(snap.text || '').split('\n').filter((l) => l.trim() && !l.startsWith('…'));
   const scored = [];
   lines.forEach((line, i) => {

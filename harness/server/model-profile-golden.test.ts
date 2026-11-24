@@ -1,10 +1,12 @@
-// 模型档案 P0「零行为变化」的锁：目录里每个型号（含本机型号与几条自定义服务样例）在各条路径上发给模型的东西——
+// 模型档案的锁：目录里每个型号（含本机型号与几条自定义服务样例）在各条路径上发给模型的东西——
 // 主会话 system 全文、工具 schema（全量 / 延迟加载后）、子 agent 的 system + 工具 + 预算、一次真实请求体、压缩摘要旁路的请求——
-// 算成 sha256 与金样（agent/profile-golden.json）逐条比对。金样由接入档案【之前】的 main 代码生成：
+// 算成 sha256 与金样（agent/profile-golden.json）逐条比对。每个型号两套：按它自己解析出的姿态（多半是 lean），以及用
+// DIMENSIO_PROFILE_OVERRIDES 强制 hardened 的那套（hardened.* 行；它们等于姿态改造之前这个型号的金样，改造时逐条核对过）。
+// 重写金样：
 //   DIMENSIO_PROFILE_GOLDEN_WRITE=1 node --import ./server/test-setup.ts --test server/model-profile-golden.test.ts
 // 以后按家族改提示词 / 工具 / 请求是有意的行为变化：先确认改动只落在想改的家族上，再重写金样。
 // 接入档案后，各条路径都按这个型号解析出的档案走（system 的 env.profile、AgentState 的 profile、延迟加载的族表、摘要旁路预算；
-// 子 agent 在 subagent.ts 里自己解析），比对的仍是接入前的同一份金样。
+// 子 agent 在 subagent.ts 里自己解析）。
 // 本机网卡地址那一行随机器变，比对前抹成占位；临时目录路径同理。
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -21,7 +23,9 @@ import { systemPrompt, type PromptEnv } from "./agent/prompt.ts";
 import { makeSubAgentRunner } from "./agent/subagent.ts";
 import { AgentState } from "./agent/state.ts";
 import { summarize } from "./agent/context.ts";
-import { resolveProfile } from "./agent/profile.ts";
+import { hardenedProfile, resolveProfile } from "./agent/profile.ts";
+import { shapeVerifyTools } from "./agent/verify-tools.ts";
+import { describeDef, describeTools, type DescriptionMode } from "./agent/tool-descriptions.ts";
 import { Sandbox } from "./sandbox.ts";
 import type { ProviderAdapter } from "./providers/types.ts";
 import type { Msg, ToolDef } from "./agent/turn.ts";
@@ -57,6 +61,18 @@ function goldenModels(): GoldenModel[] {
 
 const profileOf = (g: GoldenModel) => resolveProfile(g.provider, g.model, { effort: g.custom ? undefined : defaultEffort(g.provider as never, g.model) });
 
+// 强制加固姿态（经评测臂同一个环境变量，子 agent 在 subagent.ts 里自己解析档案也吃得到）
+async function asHardened<T>(fn: () => Promise<T> | T): Promise<T> {
+  const saved = process.env.DIMENSIO_PROFILE_OVERRIDES;
+  process.env.DIMENSIO_PROFILE_OVERRIDES = JSON.stringify({ "*": { posture: "hardened" } });
+  try {
+    return await fn();
+  } finally {
+    if (saved === undefined) delete process.env.DIMENSIO_PROFILE_OVERRIDES;
+    else process.env.DIMENSIO_PROFILE_OVERRIDES = saved;
+  }
+}
+
 function minEnv(g: GoldenModel): PromptEnv {
   return { root: "C:/ws", shell: "bash", platform: "win32", provider: g.provider, model: g.model, profile: profileOf(g) };
 }
@@ -83,6 +99,10 @@ function maxEnv(g: GoldenModel): PromptEnv {
 }
 
 const mainToolDefs = (): ToolDef[] => ALL_TOOLS.map((t) => t.def);
+// 按档案的验证工具形状（lean 去掉 verify 参数与 VerificationAudit）与说明姿态（hardened 换回改造前的说明），与 buildState 同一套函数
+const shapedToolDefs = (verifyTools: "on" | "off", descriptions: DescriptionMode = "lean"): ToolDef[] =>
+  describeTools(shapeVerifyTools(ALL_TOOLS, verifyTools), descriptions).map((t) => t.def);
+const searchDef = (descriptions: DescriptionMode): ToolDef => describeDef(toolSearchTool.def, descriptions);
 
 // 子 agent：真适配器给能力（输出上限进预算），stream 换成一次就答完的假流，抓第一轮请求
 async function subAgentTurn(g: GoldenModel, tier: "research" | "coder", schema: boolean): Promise<string> {
@@ -128,7 +148,7 @@ async function requestBody(g: GoldenModel, build?: (init: ConstructorParameters<
   }) as typeof fetch;
   try {
     const adapter = createAdapter({ provider: g.provider as never, model: g.model, apiKey: "FAKE-DUMMY-KEY", baseUrl: "http://127.0.0.1:1/v1" });
-    const tools = mainToolDefs().filter((d) => ["Read", "Edit", "Bash"].includes(d.name));
+    const tools = shapedToolDefs(profileOf(g).tools.verifyTools, profileOf(g).tools.descriptions).filter((d) => ["Read", "Edit", "Bash"].includes(d.name));
     const init: ConstructorParameters<typeof AgentState>[0] = {
       adapter,
       system: systemPrompt(minEnv(g)),
@@ -168,24 +188,35 @@ async function snapshot(): Promise<Record<string, Record<string, string>>> {
   const out: Record<string, Record<string, string>> = {};
   const defs = mainToolDefs();
   const deferred = deferToolDefs(defs);
+  const leanDefs = shapedToolDefs("off");
+  const leanDeferred = deferToolDefs(leanDefs);
+  // 加固姿态：工具带 verify / VerificationAudit，推迟回到改造前的五族，说明回到改造前的原文（profile.ts hardenedPatch）
+  const hardDeferred = deferToolDefs(shapedToolDefs("on", "hardened"), hardenedProfile().tools.deferredFamilies);
   out["*"] = {
     "tools.main": sha(JSON.stringify(defs)),
     "tools.deferred": sha(JSON.stringify([...deferred.defs, toolSearchTool.def])),
     "tools.deferredNames": [...deferred.deferred.keys()].join(","),
+    "tools.main.lean": sha(JSON.stringify(leanDefs)),
+    "tools.deferred.lean": sha(JSON.stringify([...leanDeferred.defs, toolSearchTool.def])),
+    "tools.deferred.hardened": sha(JSON.stringify([...hardDeferred.defs, searchDef("hardened")])),
+    "tools.deferredNames.hardened": [...hardDeferred.deferred.keys()].join(","),
     summary: sha(await summaryTurn((a, m) => summarize(a, m))),
   };
-  for (const g of goldenModels()) {
+  const rowFor = async (g: GoldenModel, prefix: string): Promise<Record<string, string>> => {
     const row: Record<string, string> = {
-      "prompt.min": sha(scrub(systemPrompt(minEnv(g)))),
-      "prompt.max": sha(scrub(systemPrompt(maxEnv(g)))),
+      [`${prefix}prompt.min`]: sha(scrub(systemPrompt(minEnv(g)))),
+      [`${prefix}prompt.max`]: sha(scrub(systemPrompt(maxEnv(g)))),
     };
     if (!g.custom) {
-      row["sub.research"] = sha(await subAgentTurn(g, "research", false));
-      row["sub.coder"] = sha(await subAgentTurn(g, "coder", false));
-      row["sub.schema"] = sha(await subAgentTurn(g, "research", true));
-      row.body = sha(await requestBody(g));
+      row[`${prefix}sub.research`] = sha(await subAgentTurn(g, "research", false));
+      row[`${prefix}sub.coder`] = sha(await subAgentTurn(g, "coder", false));
+      row[`${prefix}sub.schema`] = sha(await subAgentTurn(g, "research", true));
+      row[`${prefix}body`] = sha(await requestBody(g));
     }
-    out[keyOf(g)] = row;
+    return row;
+  };
+  for (const g of goldenModels()) {
+    out[keyOf(g)] = { posture: profileOf(g).posture, ...(await rowFor(g, "")), ...(await asHardened(() => rowFor(g, "hardened."))) };
   }
   return out;
 }
@@ -209,16 +240,18 @@ test("金样：目录里每个型号的 system / 工具 / 子 agent / 请求体 
   for (const k of shared) assert.deepEqual(now[k], want[k], `${k} 与金样不同`);
 });
 
-// 每个型号按自己档案的族表推迟工具、按自己档案的旁路预算写摘要：结果都等于接入前的那一份
+// 每个型号按自己档案的验证工具形状与族表推迟工具、按自己档案的旁路预算写摘要：结果都等于金样里那一份（lean / hardened 各一份）
 test("金样：每个型号的档案下，延迟加载后的工具表与摘要旁路请求不变", async () => {
   const want = readGolden()["*"];
-  const defs = mainToolDefs();
   for (const g of goldenModels()) {
-    const p = profileOf(g);
-    const r = deferToolDefs(defs, p.tools.deferredFamilies);
-    assert.equal(sha(JSON.stringify([...r.defs, toolSearchTool.def])), want["tools.deferred"], `${keyOf(g)} 的延迟工具表变了`);
-    assert.equal([...r.deferred.keys()].join(","), want["tools.deferredNames"]);
-    assert.equal(sha(await summaryTurn((a, m) => summarize(a, m, undefined, undefined, p.side.summary))), want.summary, `${keyOf(g)} 的摘要请求变了`);
+    for (const p of [profileOf(g), await asHardened(() => profileOf(g))]) {
+      const r = deferToolDefs(shapedToolDefs(p.tools.verifyTools, p.tools.descriptions), p.tools.deferredFamilies);
+      const hard = p.posture === "hardened";
+      const key = hard ? "tools.deferred.hardened" : p.tools.verifyTools === "on" ? "tools.deferred" : "tools.deferred.lean";
+      assert.equal(sha(JSON.stringify([...r.defs, searchDef(p.tools.descriptions)])), want[key], `${keyOf(g)}（${p.posture}）的延迟工具表变了`);
+      assert.equal([...r.deferred.keys()].join(","), want[hard ? "tools.deferredNames.hardened" : "tools.deferredNames"]);
+      assert.equal(sha(await summaryTurn((a, m) => summarize(a, m, undefined, undefined, p.side.summary))), want.summary, `${keyOf(g)} 的摘要请求变了`);
+    }
   }
 });
 

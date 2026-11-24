@@ -14,6 +14,8 @@ import { calls, call, say, scripted, useTool } from "./test-harness/scripted-ada
 import { drive, loopState } from "./test-harness/trajectory.ts";
 import { bashTool } from "./tools/bash.ts";
 import { ok, type Tool } from "./tools/types.ts";
+import { hardenedProfile } from "./agent/profile.ts";
+// 这个文件钉的是加固姿态（hardened）的门禁 / 追问 / 提醒行为：各场景显式在加固档案下跑（lean 默认不设这些）
 
 const nudged = (messages: { content: { t: string; text?: string }[] }[], events: { e: string }[]) =>
   events.some((e) => e.e === "turn_discard") ||
@@ -28,7 +30,7 @@ test("V5: a verification command that writes its own output file does not void i
       say("改好了，也验过了"),
     )
     .always(say("改好了"));
-  const { state } = loopState(t, adapter, {
+  const { state } = loopState(t, adapter, { profile: hardenedProfile(),
     tools: [bashTool],
     user: "把 x 改成 2",
     ctx: { limits: { bashTimeoutMs: 20_000, bashMaxTimeoutMs: 20_000 } },
@@ -44,7 +46,7 @@ async function sessionRun(t: TestContext, steps: ReturnType<typeof calls>[], too
   fs.writeFileSync(path.join(root, "seed.ts"), "export const seed = 1;\n");
   const adapter = scripted(t).next(...steps).always(say("好了"));
   const session = createSession();
-  session.state = new AgentState({
+  session.state = new AgentState({ profile: hardenedProfile(),
     adapter,
     system: "t",
     tools: tools.map((tool) => tool.def),

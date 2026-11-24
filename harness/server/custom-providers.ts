@@ -70,10 +70,12 @@ export interface CustomProvider {
   authStyle: AuthStyle;
   headers: { name: string; value: string }[];
   maxTokensField: "max_tokens" | "max_completion_tokens"; // 只对 OpenAI 协议有意义（OpenAI 自家推理模型要后者）
-  promptCaching: boolean; // 只对 Anthropic 协议有意义：发 cache_control（官方端点默认开，第三方默认关）
+  promptCaching: boolean; // 只对 Anthropic 协议有意义：发 cache_control（没声明时默认开）
   // 请求实际发到的上游主机。只有 bridge 模型中心发布的卡带（它们的 baseUrl 是本机网关，看不出上游）；自己填地址的服务看 baseUrl
   upstream?: string;
-  replayReasoning: boolean; // 只对 OpenAI 协议有意义：工具续轮把思考原文回传为 reasoning_content（标了「自带思考」的型号总会回传）
+  // 只对 OpenAI 协议有意义：工具续轮把思考原文回传为 reasoning_content（标了「自带思考」的型号总会回传）。
+  // 没有这个键 = 没声明（自动）；false = 明确关掉
+  replayReasoning?: boolean;
   models: CustomModel[];
   defaultModel: string;
   createdAt: number;
@@ -297,17 +299,20 @@ function pickDefault(models: CustomModel[], want: unknown): string {
   return chat[0] ?? models[0]?.id ?? "";
 }
 
-function connFields(r: Record<string, unknown>, prev: Partial<CustomProvider> | null, strict: boolean, baseUrl = "") {
+function connFields(r: Record<string, unknown>, prev: Partial<CustomProvider> | null, strict: boolean) {
   const protocol = oneOf(r.protocol ?? prev?.protocol, PROTOCOLS, "openai");
   const caching = r.promptCaching ?? prev?.promptCaching;
+  const replay = r.replayReasoning ?? prev?.replayReasoning;
   return {
     protocol,
     authStyle: oneOf(r.authStyle ?? prev?.authStyle, AUTH_STYLES, defaultAuth(protocol)),
     headers: normalizeHeaders(r.headers ?? prev?.headers, strict),
     maxTokensField: oneOf(r.maxTokensField ?? prev?.maxTokensField, ["max_tokens", "max_completion_tokens"] as const, "max_tokens"),
-    // 提示缓存：没说就只给官方端点开（第三方多半不认 cache_control，有的直接 400）
-    promptCaching: typeof caching === "boolean" ? caching : hostOf(baseUrl || String(r.baseUrl ?? prev?.baseUrl ?? "")) === "api.anthropic.com",
-    replayReasoning: (r.replayReasoning ?? prev?.replayReasoning) === true,
+    // 提示缓存：声明了就照声明；没声明时按协议——Anthropic 协议默认开（兼容端点多数认或忽略 cache_control）。
+    // 网关地址看不出上游，所以不按主机名判
+    promptCaching: typeof caching === "boolean" ? caching : protocol === "anthropic",
+    // 回传思考是三态：没声明（不写这个键）= 自动，开 / 关 = 照声明
+    ...(typeof replay === "boolean" ? { replayReasoning: replay } : {}),
   };
 }
 
@@ -717,7 +722,7 @@ export interface Conn {
   headers: { name: string; value: string }[];
   maxTokensField: "max_tokens" | "max_completion_tokens";
   promptCaching: boolean;
-  replayReasoning: boolean;
+  replayReasoning?: boolean;
 }
 
 /** 编辑器发来的草稿（还没保存）→ 连接参数 + key（草稿没带 key 就用已存的）。 */
@@ -727,7 +732,7 @@ export function draftConn(input: unknown): { conn: Conn; key: string; models: Cu
   if (typeof r.id === "string" && isSharedProvider(r.id)) throw managedByAdmin(r.id);
   const prev = typeof r.id === "string" ? ownProvider(r.id) ?? null : null;
   const baseUrl = normalizeBaseUrl(r.baseUrl ?? prev?.baseUrl);
-  const fields = connFields(r, prev, false, baseUrl);
+  const fields = connFields(r, prev, false);
   const conn: Conn = { ...(prev ? { id: prev.id } : {}), name: str(r.name, 40) || prev?.name || hostOf(baseUrl), baseUrl, ...fields };
   const key = (typeof r.apiKey === "string" && r.apiKey.trim()) || (prev ? keys.get(prev.id) ?? "" : "");
   const models: CustomModel[] = [];
@@ -1135,7 +1140,7 @@ export async function addCustomProvider(input: CustomProviderInput): Promise<{ p
   if (list.length >= MAX_PROVIDERS) throw bad(`最多添加 ${MAX_PROVIDERS} 个自定义服务`);
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   await assertPublicEndpoint(baseUrl); // 成员实例：不填型号清单、鉴权选「不需要」时一次请求都不发，这里先拦
-  const fields = connFields(input as Record<string, unknown>, null, true, baseUrl);
+  const fields = connFields(input as Record<string, unknown>, null, true);
   const apiKey = str(input.apiKey, 4000);
   if (!apiKey && fields.authStyle !== "none") throw bad("请填写 API key");
   const name = str(input.name, 40) || hostOf(baseUrl);
@@ -1172,7 +1177,7 @@ export async function updateCustomProvider(id: string, input: CustomProviderInpu
   if (!cur) throw bad("这个自定义服务不存在（可能已被删除）");
   const baseUrl = input.baseUrl === undefined ? cur.baseUrl : normalizeBaseUrl(input.baseUrl);
   await assertPublicEndpoint(baseUrl);
-  const fields = connFields(input as Record<string, unknown>, cur, true, baseUrl);
+  const fields = connFields(input as Record<string, unknown>, cur, true);
   const newKey = str(input.apiKey, 4000);
   const apiKey = newKey || keys.get(id) || "";
   if (!apiKey && fields.authStyle !== "none") throw bad("请填写 API key");

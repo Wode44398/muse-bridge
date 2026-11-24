@@ -3,6 +3,7 @@ import { clipMessage, lastAnswer, notifyBridge } from "../bridge-events.ts";
 import { prAfterTurn } from "../pr-bridge.ts";
 import { type FamilyOrigin, familyRunEnd, familyRunStart } from "../session-family.ts";
 import { jobNotifyRunEnd, jobNotifyRunStart } from "../job-notify.ts";
+import { settlePendingAgentCards } from "./subagents.ts";
 import { cancelIdleCompact, idleCompactRunEnd } from "../idle-compact.ts";
 import { cancelMemoryDream } from "../memory-dream.ts";
 import { randomUUID } from "node:crypto";
@@ -12,12 +13,14 @@ import { AgentState, isPureSocialTurn, visibleMessages } from "../agent/state.ts
 import { recallIds, ROUTINE_KIND, skillLoadedIn } from "../agent/injections.ts";
 import { runAgent } from "../agent/loop.ts";
 import { GOAL_CONTINUE_KIND, GOAL_START_KIND, goalContinueText, goalStartText, type RoundOutcome } from "../goal.ts";
-import { resolveSlash, SLASH_SKILL_KIND, type SlashHit, slashInjection } from "../commands.ts";
+import { resolveSlash, type SlashHit, slashInjection } from "../commands.ts";
+import { runStartHooks } from "../hooks/index.ts";
 import { clearRunMarker, PROCESS_CREATED, readRunMarker, writeRunMarker } from "../run-markers.ts";
 import { noteRecalledDocs } from "../memory-usage.ts";
 import { fileRunMemory, memoryExtractEnabled, runDigest, type RunDigest } from "../memory-extract.ts";
 import { knowledgeWithin, refreshProjectKnowledge } from "../knowledge-service.ts";
 import { searchUnifiedKnowledge, worthAutoRecall } from "../knowledge-search.ts";
+import { warmRecentSessions } from "../recent-sessions.ts";
 import type { PersistedSession } from "../store.ts";
 import { changedPathsSinceCheckpoint, noteBeforeWrite, recordRunEnd, takeCheckpoint, takeFilesSnapshot } from "../checkpoints.ts";
 import type { Msg } from "../agent/turn.ts";
@@ -203,7 +206,7 @@ export function startRun(
     if (!session.title) session.title = prepared.title;
     checkpointLabel = prepared.title;
     retrievalText = prepared.retrievalText;
-    slash = resolveSlash(message);
+    slash = resolveSlash(message, session.state.ctx.sandbox.root);
     // O7：这条消息开了一个目标——第一轮，跟一条说明（界面上是一行提示）
     if (session.goal?.status === "active" && session.goal.round === 0) {
       session.goal = { ...session.goal, round: 1, updatedAt: Date.now() };
@@ -253,10 +256,10 @@ export function startRun(
   // E3：技能正文追加在本轮用户消息（镜像底座）之后——后附着的设备看到的底座不含它，靠 runLog 里的 skill_loaded 补那一行
   // 提示，不会重复
   if (slash) {
-    const inj = slashInjection(slash, (name) => skillLoadedIn(session.state!.messages, name));
+    const inj = slashInjection(slash, (name) => skillLoadedIn(session.state!.messages, name), session.state.ctx.sandbox.root);
     if (inj) {
-      session.state.appendUserBlocks([{ t: "text", text: inj.text }], false, { origin: "harness", kind: SLASH_SKILL_KIND });
-      fanout(session, { e: "skill_loaded", name: inj.name, via: "slash", ...(inj.pkg ? { pkg: true } : {}) });
+      session.state.appendUserBlocks([{ t: "text", text: inj.text }], false, { origin: "harness", kind: inj.kind });
+      if (!inj.command) fanout(session, { e: "skill_loaded", name: inj.name, via: "slash", ...(inj.pkg ? { pkg: true } : {}) });
     }
   }
   // O7：目标的状态进这一轮的 runLog（后附着的设备重放得到）
@@ -269,8 +272,8 @@ export function startRun(
   fanout(session, runClockEvent(session));
   // P3：用户在这个会话发了新消息 = 人回来了，离开模式自动关（放在 runLog 重置之后，附着的设备重放得到）。续跑不算人回来。
   // 定时任务那一轮也不算人回来（它是到点自己跑的）
-  if (!opts.resume && !opts.goal && !opts.event && !opts.routine && isAway(session)) setSessionAway(session, false);
-  if (!opts.resume && !opts.goal && !opts.head && !opts.routine && isAway(session)) setSessionAway(session, false);
+  // 首条是 harness 片段的轮（后台任务通知、定时唤醒、CI 事件、会话间消息）同样不算：以前两行各漏一样，event 与 head 的轮都会把离开模式关掉
+  if (!opts.resume && !opts.goal && !opts.event && !opts.head && !opts.routine && isAway(session)) setSessionAway(session, false);
   const done = runInTrace(trace, () => executeRun(session, preRec, checkpointLabel, retrievalText, abort, ownUserMsg));
   session.runPromise = done;
   return { started: true, done };
@@ -343,13 +346,24 @@ async function executeRun(
         state.snappedAtSeq = state.workSeq;
       }
     }
+    // 用户 hooks：项目级 hooks 的信任确认、SessionStart、UserPromptSubmit——拦下了就不开跑，原因给用户看
+    const hookGate = await runStartHooks(state, ownUserMsg);
+    if (hookGate.blocked) {
+      const summary = `这条消息被 UserPromptSubmit hook 拦下了：${hookGate.blocked.replace(/\s+/g, " ").slice(0, 200)}`;
+      fanout(session, { e: "error", message: `UserPromptSubmit hook blocked this message: ${hookGate.blocked.slice(0, 2000)}`, retriable: false, summary });
+      outcome = { kind: "error", summary: summary.slice(0, 120) };
+      return;
+    }
     try {
       const ws = session.cfg?.workspace ?? workspaceRoot();
       // M12：开跑时踢的那次对知识（与拍检查点并行）最多再等一个预算；超时先用旧快照（后台接着对），召回与 World State
       // 都读这一份。以前这里在主线程上同步扫描整个工作区，笔记库一次冻住所有会话 5–8 秒。
       const knowledge = await knowledgeWithin(ws, RUN_START_KNOWLEDGE_BUDGET_MS).catch(() => null);
+      // 新会话的 system 里列这个工作区最近的会话：列会话要读文件（异步），在补 system 之前暖好
+      if (!state.messages.some((m) => m.role === "assistant")) await warmRecentSessions(ws);
       state.refreshSystemIfUnsent(); // 新会话建 system 时知识可能还没对完：第一次请求前补进 system，不走片段
-      if (!isPureSocialTurn(userMessage)) {
+      // 每轮自动召回：档案开关（hardened 开；lean 关——记忆索引常驻 system）
+      if (state.profile.memory.autoRecall && !isPureSocialTurn(userMessage)) {
         const recalled = await searchUnifiedKnowledge(ws, userMessage, {
           limit: 6,
           semantic: process.env.KNOWLEDGE_AUTO_SEMANTIC !== "0",
@@ -504,6 +518,8 @@ async function executeRun(
     prAfterTurn(session.id, session.cfg?.workspace ?? workspaceRoot(), state.messages, runMsgStart, ownUserMsg !== null);
     // 后台任务通知：这一轮没注入的 watch 行收回来；模型最后一步之后才结束的 job 叫醒它（job-notify.ts）
     jobNotifyRunEnd(session);
+    // 后台子 agent 在发起它的那条 tool_result 落进转录之前就结束了：卡片记录这时补上（session/subagents.ts）
+    settlePendingAgentCards(session);
     // 会话协作：子会话这一轮收工 → 给父会话汇报、该唤醒的唤醒；没送进模型的会话消息收回收件箱（session-family.ts）
     familyRunEnd(session, {
       outcome: outcome.kind,

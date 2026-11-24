@@ -20,8 +20,8 @@ const FETCH_COMMAND_RE = /(?:^|[;&|(\n`=]|\$\()\s*(?:curl|wget|iwr|irm|invoke-we
 
 function readsExternal(call: { name: string; args: Record<string, unknown> }): boolean {
   if (EXTERNAL_CONTENT_TOOLS.has(call.name)) return true;
-  // E1：MCP 连接器是别人的程序 / 服务，回来的都算外部内容
-  if (call.name.startsWith("mcp__") || call.name === "McpCall" || call.name === "McpDescribe") return true;
+  // E1：MCP 连接器是别人的程序 / 服务，回来的都算外部内容（McpResources：直连连接器的资源列读，失败时的错误文本也是连接器给的）
+  if (call.name.startsWith("mcp__") || call.name === "McpCall" || call.name === "McpDescribe" || call.name === "McpResources") return true;
   return call.name === "Bash" && FETCH_COMMAND_RE.test(String(call.args.command ?? ""));
 }
 

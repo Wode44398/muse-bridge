@@ -1,10 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import {
   parseMcpListOutput,
   buildMcpAddArgs,
   parsePluginListOutput,
   extractAccountFromLogText,
+  readAgyAccountInfo,
 } from './cli-ops.mjs';
 
 test('parseMcpListOutput：解析录制的真实 agy mcp list 表格与空态输出', () => {
@@ -138,4 +142,24 @@ test('extractAccountFromLogText：从真实 ACP 日志提取最新登录邮箱�
     email: 'architect@corp.dev',
     authMethod: 'oauth-business',
   });
+});
+
+test('readAgyAccountInfo：--process-per-session 模式下可从派生 worker 日志提取登录邮箱', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'agy-cliops-acct-'));
+  const frontLog = path.join(dir, 'acp.log');
+  const workerLog = `${frontLog}.20480`;
+  try {
+    writeFileSync(frontLog, 'I1 Starting ACP front (pid 9001, isJetski=false)\nI2 front: started worker 1 (pid 20480)\n');
+    writeFileSync(workerLog, 'I1 applyAuthResult: email=worker-user@example.com, authMethod=consumer\n');
+    const fakeClient = {
+      logFile: frontLog,
+      status: () => ({ authState: 'authed', tier: { name: 'Google AI Ultra' }, authMethods: [] }),
+    };
+    const acct = readAgyAccountInfo(fakeClient);
+    assert.equal(acct.authed, true);
+    assert.equal(acct.email, 'worker-user@example.com');
+    assert.equal(acct.authMethod, 'consumer');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

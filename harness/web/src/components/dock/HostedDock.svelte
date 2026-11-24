@@ -13,6 +13,15 @@
     live: boolean; // 开关上的提示点：有动静而没在看
     lamp: boolean; // 状态灯：看着也亮
     hot: boolean; // 卡片标题行上的在跑点
+    fixed?: boolean; // 不进拖动排序、固定挂在第二列末尾（宿主注入的插件卡片）
+    plugin?: boolean;
+  }
+  // 宿主注入的额外卡片（bridge 插件的工作区卡片，ctx.ui.workbench 的 hosts 含 dimensio）：内容与图标都由宿主画
+  export interface ExtraDockTool {
+    key: string;
+    label: string;
+    closeLabel: string;
+    icon: string; // 宿主给的 SVG 串
   }
   // 宿主外壳读写工作区状态的唯一口子：状态仍只有 dimensio 自己这一份（app / dockCards），外壳不另存。
   export interface DockBridge {
@@ -46,6 +55,7 @@
     pushLayer(close: () => void): () => void;
     // 共用浏览器面板把标签与地址写回来：输入框上方的「Agent 浏览器」胶囊、状态灯都读 app.browser
     noteBrowser(tabs: { id: string; url: string; title?: string; active?: boolean }[], alive: boolean): void;
+    setExtraTools(list: ExtraDockTool[]): void;
   }
   export type DockView = Snippet<[{ dk: DockBridge; panel: Snippet<[string]>; icon: Snippet<[string]> }]>;
 </script>
@@ -161,8 +171,10 @@
     { key: "memory", label: tc("dimensio", "记忆"), icon: "memory", kbd: "", col: "b" },
   ];
   const iconOf = (key: string) => META.find((x) => x.key === key)?.icon ?? "folder";
-  const tools = $derived<DockToolSpec[]>(
-    META.filter((x) => (x.key !== "term" || termOn) && (x.key !== "browser" || browserOn)).map((x) => ({
+  let extra = $state<ExtraDockTool[]>([]);
+  const extraIcon = (key: string) => extra.find((x) => x.key === key)?.icon ?? "";
+  const tools = $derived<DockToolSpec[]>([
+    ...META.filter((x) => (x.key !== "term" || termOn) && (x.key !== "browser" || browserOn)).map((x) => ({
       key: x.key,
       label: x.label,
       closeLabel: t("关闭{name}", { name: x.label }),
@@ -173,7 +185,11 @@
       lamp: x.key === "browser" && Boolean(app.browser), // 前台会话的浏览器里有标签才亮
       hot: x.key === "tasks" ? tasksLive : x.key === "browser" ? Boolean(app.browser) : false,
     })),
-  );
+    ...extra.map((x) => ({
+      key: x.key, label: x.label, closeLabel: x.closeLabel, kbd: "", col: "b" as const,
+      own: false, live: false, lamp: false, hot: false, fixed: true, plugin: true,
+    })),
+  ]);
   const avail = (v: string) => tools.some((x) => x.key === v);
 
   // 宽屏：最近聚焦的那张必须在桌上（手机上切过工具再拉宽、服务端收回了某个工具）；一张都不剩就摆回一张
@@ -225,6 +241,10 @@
     noteFocus(tool) { noteDockFocus(tool as DockTool); },
     // 返回键先关工作区；Esc 不关（终端 / 浏览器要收 Esc）；它自己装着浏览器视图，不让位
     pushLayer(close) { return pushLayer(close, { escape: false, native: false }); },
+    setExtraTools(list) {
+      const next = Array.isArray(list) ? list.filter((x) => x && typeof x.key === "string" && /^plg:/.test(x.key)) : [];
+      if (JSON.stringify(next) !== JSON.stringify(extra)) extra = next;
+    },
     noteBrowser(tabs, alive) {
       const list = alive ? tabs : [];
       app.browserTabs = list as typeof app.browserTabs;
@@ -235,7 +255,10 @@
   };
 </script>
 
-{#snippet icon(key: string)}<Icon name={iconOf(key)} size={16} stroke={1.7} />{/snippet}
+{#snippet icon(key: string)}
+  {#if extraIcon(key)}<span class="hx-plg-ic" aria-hidden="true">{@html extraIcon(key)}</span>
+  {:else}<Icon name={iconOf(key)} size={16} stroke={1.7} />{/if}
+{/snippet}
 
 {#snippet panel(tool: string)}
   {#if tool === "tasks"}
@@ -252,3 +275,9 @@
 {/snippet}
 
 {@render view({ dk, panel, icon })}
+
+<style>
+  /* 宿主注入的插件卡片图标（SVG 串）：和内置图标同样 16px、线条跟随文字色 */
+  .hx-plg-ic { display: inline-flex; width: 16px; height: 16px; }
+  .hx-plg-ic :global(svg) { width: 100%; height: 100%; }
+</style>

@@ -1,13 +1,13 @@
 // 模型档案里可以按家族关掉 / 放松的门禁：完成门禁（verifyGate）、verify:true 写法契约（verifyContract）、Edit 先读（readBeforeEdit）、
 // 待办提醒（todoReminderEvery / todoReminderOnlyIncomplete）、只思考不回答的处理（thinkingOnly）。
-// 每项两头都测：默认档案 = 现状行为；改成放松值，行为确实变了。默认档案下请求逐字节不变由 model-profile-golden.test.ts 锁着。
+// 每项两头都测：加固档案（hardened）= 姿态改造前的行为；改成放松值（lean 的默认就是放松值），行为确实变了。
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test, { after, afterEach, type TestContext } from "node:test";
 import { ANSWER_NUDGE } from "./agent/loop.ts";
-import { defaultProfile, resolveProfile, type ModelProfile } from "./agent/profile.ts";
+import { defaultProfile, hardenedProfile, resolveProfile, type ModelProfile } from "./agent/profile.ts";
 import type { StreamEvent } from "./agent/events.ts";
 import type { Msg } from "./agent/turn.ts";
 import { setBrowserForTests } from "./cdp/pool.ts";
@@ -46,8 +46,9 @@ afterEach(() => {
   delete process.env.DIMENSIO_PROFILE_OVERRIDES;
 });
 
+// 以加固档案为底改一项（各测试「改成放松值」那一头）
 const profileWith = (edit: (p: ModelProfile) => void): ModelProfile => {
-  const p = defaultProfile();
+  const p = hardenedProfile();
   edit(p);
   return p;
 };
@@ -71,17 +72,28 @@ const toolResultText = (messages: readonly Msg[], id: string): string =>
   messages.flatMap((m) => m.content).flatMap((b) => (b.t === "tool_result" && b.id === id ? [textOf(b.content as never)] : [])).join("\n");
 
 // ── 默认值与评测覆盖 ───────────────────────────────────────────────────────────
-test("新开关的默认值等于现状；评测覆盖能按家族设，写错取值直接抛", () => {
+test("开关的默认值（lean）都是放松值、加固档案是改造前的现状；评测覆盖能按家族设，写错取值直接抛", () => {
   const p = defaultProfile();
-  assert.equal(p.loop.verifyGate, "on");
-  assert.equal(p.loop.todoReminderEvery, 5);
+  assert.equal(p.loop.verifyGate, "off");
+  assert.equal(p.loop.todoReminderEvery, 0);
   assert.equal(p.loop.todoReminderOnlyIncomplete, true);
-  assert.equal(p.loop.thinkingOnly, "nudge");
-  assert.equal(p.tools.verifyContract, "strict");
-  assert.equal(p.tools.readBeforeEdit, "strict");
+  assert.equal(p.loop.thinkingOnly, "retry");
+  assert.equal(p.loop.verifyFootnote, "off");
+  assert.equal(p.tools.verifyContract, "lenient");
+  assert.equal(p.tools.readBeforeEdit, "off");
+  assert.equal(p.tools.verifyTools, "off");
+  const h = hardenedProfile();
+  assert.equal(h.loop.verifyGate, "on");
+  assert.equal(h.loop.todoReminderEvery, 5);
+  assert.equal(h.loop.thinkingOnly, "nudge");
+  assert.equal(h.loop.verifyFootnote, "on");
+  assert.equal(h.tools.verifyContract, "strict");
+  assert.equal(h.tools.readBeforeEdit, "strict");
+  assert.equal(h.tools.verifyTools, "on");
 
   process.env.DIMENSIO_PROFILE_OVERRIDES = JSON.stringify({
     kimi: {
+      posture: "hardened",
       loop: { verifyGate: "off", thinkingOnly: "retry", todoReminderEvery: 10, todoReminderOnlyIncomplete: false },
       tools: { verifyContract: "lenient", readBeforeEdit: "off" },
     },
@@ -93,14 +105,18 @@ test("新开关的默认值等于现状；评测覆盖能按家族设，写错�
   assert.equal(kimi.loop.todoReminderOnlyIncomplete, false);
   assert.equal(kimi.tools.verifyContract, "lenient");
   assert.equal(kimi.tools.readBeforeEdit, "off");
-  // 深合并：没点名的项照旧
+  // 深合并：没点名的项按覆盖里定的姿态（hardened）走
+  assert.equal(kimi.posture, "hardened");
+  assert.equal(kimi.loop.verifyFootnote, "on");
+  assert.equal(kimi.tools.verifyTools, "on");
   assert.equal(kimi.loop.maxAnswerNudges, 1);
   assert.equal(kimi.loop.emptyResponseRetries, 1);
   assert.equal(kimi.tools.subset, null);
   // 别的家族不受影响
   const other = resolveProfile("openai", "deepseek-flash");
-  assert.equal(other.loop.verifyGate, "on");
-  assert.equal(other.tools.readBeforeEdit, "strict");
+  assert.equal(other.posture, "lean");
+  assert.equal(other.loop.verifyGate, "off");
+  assert.equal(other.tools.readBeforeEdit, "off");
 
   for (const bad of [
     { loop: { verifyGate: "of" } },
@@ -110,6 +126,9 @@ test("新开关的默认值等于现状；评测覆盖能按家族设，写错�
     { loop: { todoReminderOnlyIncomplete: "yes" } },
     { tools: { verifyContract: "loose" } },
     { tools: { readBeforeEdit: false } },
+    { tools: { verifyTools: true } },
+    { loop: { verifyFootnote: "no" } },
+    { posture: "weak" },
   ]) {
     process.env.DIMENSIO_PROFILE_OVERRIDES = JSON.stringify({ "*": bad });
     assert.throws(() => resolveProfile("kimi", "k3.1-pro"), /取值不对的开关/, JSON.stringify(bad));
@@ -127,14 +146,14 @@ const fakeEdit: Tool = {
 };
 const AUDIT_REASON = "This synthetic profile test contains no durable cross-session project knowledge.";
 
-test("verifyGate 默认 on：改了代码没验证就收尾——撤回答复、追问补验证", async (t) => {
+test("verifyGate on（加固档案）：改了代码没验证就收尾——撤回答复、追问补验证", async (t) => {
   const adapter = scripted(t).next(
     useTool("e1", "Edit", { path: "a.ts" }),
     say("done"),
     useTool("va", "VerificationAudit", { decision: "blocked", reason: "The required external test service is unavailable in this isolated test environment." }),
     say("final"),
   );
-  const { state } = loopState(t, adapter, { tools: [fakeEdit, verificationAuditTool], user: "改一下" });
+  const { state } = loopState(t, adapter, { tools: [fakeEdit, verificationAuditTool], user: "改一下", profile: hardenedProfile() });
   const { events } = await drive(state, adapter);
   assert.ok(kinds(state.messages).includes("verify-nudge"));
   assert.ok(events.some((e) => e.e === "turn_discard"));
@@ -337,10 +356,11 @@ async function reminderRequests(t: TestContext, profile: ModelProfile, allDone: 
   return adapter.inputs.flatMap((turn, i) => (turn.messages.at(-1)?.kind === "todo" ? [i] : []));
 }
 
-test("待办提醒：默认每 5 个工具回合一次、只在有没做完的项时；可改间隔、可关、可在全部完成时也提醒", async (t) => {
-  const dflt = defaultProfile();
+test("待办提醒：加固档案每 5 个工具回合一次、只在有没做完的项时；可改间隔、可关、可在全部完成时也提醒；lean 默认不提醒", async (t) => {
+  const dflt = hardenedProfile();
   assert.deepEqual(await reminderRequests(t, dflt, false), [5]);
   assert.deepEqual(await reminderRequests(t, dflt, true), [], "全部完成：默认不提醒");
+  assert.deepEqual(await reminderRequests(t, defaultProfile(), false), [], "lean：不提醒");
   assert.deepEqual(await reminderRequests(t, profileWith((p) => (p.loop.todoReminderEvery = 2)), false), [2, 4, 6]);
   assert.deepEqual(await reminderRequests(t, profileWith((p) => (p.loop.todoReminderEvery = 0)), false), []);
   assert.deepEqual(
@@ -355,9 +375,9 @@ const EMPTY: StreamEvent[] = [{ e: "turn_done", stopReason: "end" }];
 const userTexts = (msgs: readonly Msg[]): string[] =>
   msgs.filter((m) => m.role === "user").flatMap((m) => m.content.flatMap((b) => (b.t === "text" ? [b.text] : [])));
 
-test("thinkingOnly 默认 nudge：只思考就要收尾——追加一句追问再问一次", async (t) => {
+test("thinkingOnly nudge（加固档案）：只思考就要收尾——追加一句追问再问一次", async (t) => {
   const adapter = scripted(t).next(thinkOnly("想了想"), say("答复"));
-  const { state } = loopState(t, adapter, { user: "问个事" });
+  const { state } = loopState(t, adapter, { user: "问个事", profile: hardenedProfile() });
   await drive(state, adapter);
   assert.ok(userTexts(adapter.inputs[1].messages).includes(ANSWER_NUDGE));
   assert.ok(kinds(state.messages).includes("answer-nudge"));

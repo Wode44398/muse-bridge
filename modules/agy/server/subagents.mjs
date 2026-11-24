@@ -16,7 +16,9 @@ import path from 'node:path';
 import { sessionBrainDir } from './background.mjs';
 import { normalizeAgyPath } from './paths.mjs';
 import { isWakePrompt } from './wake-prompt.mjs';
+import { extractUserRequestText } from './user-media.mjs';
 import { hasActiveSwarm, listSwarmMemberNodes, readSwarmSummary } from './swarm.mjs';
+import { agyProcessEpoch } from './proc-epoch.mjs';
 
 const ID_RE = /^[0-9a-f-]{8,64}$/i;
 const MAX_TRANSCRIPT_BYTES = 32 * 1024 * 1024;
@@ -26,7 +28,8 @@ const OUTPUT_CAP = 8_000;
 const TEXT_CAP = 24_000;
 const MAX_ENTRIES = 1_500;
 const ORPHAN_STALE_MS = 30 * 60_000;
-const ACTIVE_STEP_STATUSES = new Set([1, 2, 8]);
+const STEP_STATUS_WAITING = 9;
+const ACTIVE_STEP_STATUSES = new Set([1, 2, 8, STEP_STATUS_WAITING]);
 const STEP_TYPE_PLANNER = 15;
 const SUBAGENT_ID_IN_TEXT_RE = /\bconversationId['":\s=]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 const BG_TASK_RE = /background task with task id:\s*([^\s.,;]+)/i;
@@ -63,6 +66,48 @@ function readJsonSafe(file) {
   try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
 }
 
+// ── 解析结果缓存 ──
+// 监视器每 1–3 秒重读整棵多代理树；几十个子代理 × 每个都整读文字记录、开 SQLite 扫表、读全部消息 JSON，
+// 全是同步 I/O，会把 bridge 主线程一次堵住几秒到几十秒（11-21 实测 p99 19s，手机上像「网络卡」）。
+// 这些读取的结果只取决于文件内容：按 stat 的 mtime+size 记忆，文件没动就复用上次结果；
+// 返回的对象被多处共享，调用方只读不改（新增调用方也须遵守）。
+const CACHE_MAX = 4000;
+// Windows 上一次 stat 约 0.5ms（要开句柄、过 Defender），大树每拍几百次也会堵。
+// 连续 COLD_AFTER_MS 没变过的文件视为「冷」，COLD_RECHECK_MS 内复用上次指纹不再 stat；
+// 只影响早已结束的子代理，被重新唤醒最多晚 COLD_RECHECK_MS 被看见。
+const COLD_AFTER_MS = 60_000;
+const COLD_RECHECK_MS = 10_000;
+const statSeen = new Map(); // 路径 → { key, sameSince, checkedAt }
+function rawStatKey(file, emptyIsAbsent) {
+  try {
+    const st = statSync(file);
+    if (emptyIsAbsent && !st.size) return '';
+    return `${st.mtimeMs}:${st.size}`;
+  } catch { return ''; }
+}
+function seenKey(file, emptyIsAbsent = false) {
+  const now = Date.now();
+  const e = statSeen.get(file);
+  if (e && now - e.sameSince >= COLD_AFTER_MS && now - e.checkedAt < COLD_RECHECK_MS) return e.key;
+  const key = rawStatKey(file, emptyIsAbsent);
+  if (e && e.key === key) e.checkedAt = now;
+  else {
+    if (statSeen.size >= CACHE_MAX * 2) statSeen.clear();
+    statSeen.set(file, { key, sameSince: now, checkedAt: now });
+  }
+  return key;
+}
+const statKey = (file) => seenKey(file, false);
+const walKey = (file) => seenKey(file, true);
+function cacheSet(map, k, v) {
+  if (map.size >= CACHE_MAX) map.clear();
+  map.set(k, v);
+}
+const transcriptSummaryCache = new Map(); // transcript 文件 → { key, res }
+const dbActivityCache = new Map();        // db 文件 → { key, res }
+const messagesCache = new Map();          // messages 目录 → { dirKey, byName: Map<name, msg|null>, out }
+const subagentRefCache = new Map();       // subagents/<id>.json → { key, j }
+
 function clip(str, n = 200) {
   const s = String(str ?? '').trim();
   return s.length > n ? s.slice(0, n) + '…' : s;
@@ -85,14 +130,19 @@ function parseArgs(raw) {
   return {};
 }
 
+const fullTranscriptKnown = new Set(); // 已确认存在 transcript_full.jsonl 的会话目录（它是首选，出现后不会退回）
 function transcriptFileOf(dataDir, sessionId) {
   const dir = sessionBrainDir(dataDir, sessionId);
   if (!dir) return '';
-  for (const name of ['transcript_full.jsonl', 'transcript.jsonl']) {
-    const file = path.join(dir, '.system_generated', 'logs', name);
-    if (existsSync(file)) return file;
+  const full = path.join(dir, '.system_generated', 'logs', 'transcript_full.jsonl');
+  if (fullTranscriptKnown.has(dir)) return full;
+  if (existsSync(full)) {
+    if (fullTranscriptKnown.size >= CACHE_MAX) fullTranscriptKnown.clear();
+    fullTranscriptKnown.add(dir);
+    return full;
   }
-  return '';
+  const plain = path.join(dir, '.system_generated', 'logs', 'transcript.jsonl');
+  return existsSync(plain) ? plain : '';
 }
 
 function inferToolKind(name) {
@@ -113,6 +163,38 @@ function inferSubagentKind(typeName = '', role = '') {
   if (/workflow/.test(combined)) return 'workflow';
   if (/research|explor|survey|audit|review/.test(combined)) return 'research';
   return 'subagent';
+}
+
+// 后台任务（run_command 转入后台、schedule 的 Cron / Timer）在 GENERIC 步骤里的写法：
+//   Created At: …\nTool is running as a background task with task id: <会话>/task-N\nTask Description: <命令全文 | Cron: */10 * * * *, Prompt: … | Timer: 10m, Prompt: …>
+// 以前直接拿首行当标题，界面上就成了「Created At: 2026-…」。这里拆出种类、计划和一句人话标题。
+const TASK_DESC_RE = /Task Description:\s*([\s\S]*)$/i;
+const TASK_SCHED_RE = /^(Cron|Timer):\s*([^,\n]+),\s*Prompt:\s*([\s\S]*)$/i;
+const TASK_LOGS_TAIL_RE = /\s*Task logs are available at:[\s\S]*$/i;
+const firstLineOf = (str) => String(str || '').split(/\r?\n/).map((l) => l.trim()).find(Boolean) || '';
+
+/** 后台任务步骤 → { kind: command|cron|timer, schedule, title, command } */
+export function describeBackgroundTask(content = '', call = null, taskId = '') {
+  const m = TASK_DESC_RE.exec(String(content || ''));
+  const desc = m ? m[1].trim() : '';
+  const sched = TASK_SCHED_RE.exec(desc);
+  if (sched) {
+    const prompt = sched[3].replace(TASK_LOGS_TAIL_RE, '').trim();
+    return {
+      kind: sched[1].toLowerCase() === 'cron' ? 'cron' : 'timer',
+      schedule: sched[2].trim(),
+      title: clipLine(firstLineOf(prompt) || taskId, 120),
+      command: '',
+    };
+  }
+  const args = call?.args && typeof call.args === 'object' ? call.args : {};
+  const cmd = firstLineOf(desc) || firstLineOf(args.CommandLine || args.command || '');
+  return {
+    kind: 'command',
+    schedule: '',
+    title: clipLine(args.toolSummary || cmd || taskId, 120),
+    command: clipLine(cmd, 160),
+  };
 }
 
 function toolQuickSummary(name = '', args = {}) {
@@ -166,10 +248,13 @@ export function readDbActivity(dataDir, sessionId) {
     exists: false,
     totalSteps: 0,
     activeSteps: 0,
+    waitingSteps: 0,
     activeStepIdxs: new Set(),
     activeTurnStepIdxs: new Set(),
+    waitingStepIdxs: new Set(),
     hasActiveSteps: false,
     hasRunning: false,
+    hasWaiting: false,
     lastIdx: -1,
     lastStatus: 0,
     maxPlannerIdx: -1,
@@ -177,7 +262,19 @@ export function readDbActivity(dataDir, sessionId) {
   const id = String(sessionId || '').trim();
   if (!dataDir || !ID_RE.test(id)) return empty;
   const dbFile = path.join(dataDir, 'conversations', id + '.db');
-  if (!existsSync(dbFile)) return empty;
+  const dbKey = statKey(dbFile);
+  if (!dbKey) return empty;
+  // WAL 模式下写入先落 -wal，主文件不变：两者一起作指纹。
+  // 只读打开 WAL 库会顺手建一个 0 字节的 -wal（不含数据），空 WAL 视同不存在，否则第二次必然失配。
+  const key = dbKey + '|' + walKey(dbFile + '-wal');
+  const hit = dbActivityCache.get(dbFile);
+  if (hit && hit.key === key) return hit.res;
+  const res = readDbActivityUncached(dbFile, empty);
+  if (res.exists) cacheSet(dbActivityCache, dbFile, { key, res });
+  return res;
+}
+
+function readDbActivityUncached(dbFile, empty) {
   let db = null;
   try {
     db = openSqliteReadOnly(dbFile);
@@ -185,10 +282,11 @@ export function readDbActivity(dataDir, sessionId) {
     const cols = new Set(db.prepare('PRAGMA table_info(steps)').all().map((c) => c?.name));
     const hasStepType = cols.has('step_type');
     const agg = db.prepare(
-      'SELECT count(*) AS total, sum(CASE WHEN status IN (1, 2, 8) THEN 1 ELSE 0 END) AS active, max(idx) AS maxIdx FROM steps'
+      'SELECT count(*) AS total, sum(CASE WHEN status IN (1, 2, 8, 9) THEN 1 ELSE 0 END) AS active, sum(CASE WHEN status = 9 THEN 1 ELSE 0 END) AS waiting, max(idx) AS maxIdx FROM steps'
     ).get();
     const totalSteps = Number(agg?.total) || 0;
     const activeSteps = Number(agg?.active) || 0;
+    const waitingSteps = Number(agg?.waiting) || 0;
     const lastIdx = agg?.maxIdx != null ? Number(agg.maxIdx) : -1;
     let lastStatus = 0;
     if (lastIdx >= 0) {
@@ -202,35 +300,43 @@ export function readDbActivity(dataDir, sessionId) {
     }
     const activeStepIdxs = new Set();
     const activeTurnStepIdxs = new Set();
+    const waitingStepIdxs = new Set();
     if (activeSteps > 0) {
       const sql = hasStepType
-        ? 'SELECT idx, step_type FROM steps WHERE status IN (1, 2, 8)'
-        : 'SELECT idx FROM steps WHERE status IN (1, 2, 8)';
+        ? 'SELECT idx, status, step_type FROM steps WHERE status IN (1, 2, 8, 9)'
+        : 'SELECT idx, status FROM steps WHERE status IN (1, 2, 8, 9)';
       for (const row of db.prepare(sql).all()) {
         if (row?.idx == null) continue;
         const idx = Number(row.idx);
+        const st = Number(row.status) || 0;
         activeStepIdxs.add(idx);
+        if (st === STEP_STATUS_WAITING) waitingStepIdxs.add(idx);
         // 转入后台运行的工具命令（run_command / schedule）在模型已继续生成后续 PLANNER_RESPONSE 收尾后
         // 仍会在 steps 表里保留 status=2(RUNNING)，其 step_type≠15 且 idx < maxPlannerIdx。
-        // 必须把它与前台轮（模型生成中或最新 PLANNER_RESPONSE 之后的同步工具）区分开，
+        // 必须把它与前台轮（模型生成中、最新 PLANNER_RESPONSE 之后的同步工具或 status=9 待审批步骤）区分开，
         // 否则后台监视器会把它误判成「模型正在后台自动唤醒」并永久卡在空直播态。
         const isTurnStep = !hasStepType
+          || st === STEP_STATUS_WAITING
           || Number(row.step_type) === STEP_TYPE_PLANNER
           || maxPlannerIdx < 0
           || idx >= maxPlannerIdx;
         if (isTurnStep) activeTurnStepIdxs.add(idx);
       }
     }
+    const hasWaiting = waitingSteps > 0 || lastStatus === STEP_STATUS_WAITING;
     const hasActiveSteps = activeSteps > 0 || ACTIVE_STEP_STATUSES.has(lastStatus);
     const hasRunning = activeTurnStepIdxs.size > 0 || ACTIVE_STEP_STATUSES.has(lastStatus);
     return {
       exists: true,
       totalSteps,
       activeSteps,
+      waitingSteps,
       activeStepIdxs,
       activeTurnStepIdxs,
+      waitingStepIdxs,
       hasActiveSteps,
       hasRunning,
+      hasWaiting,
       lastIdx,
       lastStatus,
       maxPlannerIdx,
@@ -246,23 +352,37 @@ function readMessagesRaw(dataDir, sessionId) {
   const dir = sessionBrainDir(dataDir, sessionId);
   if (!dir) return [];
   const msgDir = path.join(dir, '.system_generated', 'messages');
+  // 消息文件写好后不再改；新增/删除会改目录 mtime。目录没动就直接复用，动了只解析新文件名。
+  const dirKey = statKey(msgDir);
+  if (!dirKey) { messagesCache.delete(msgDir); return []; }
+  const prev = messagesCache.get(msgDir);
+  if (prev && prev.dirKey === dirKey) return prev.out;
   let names = [];
   try { names = readdirSync(msgDir); } catch { return []; }
+  const byName = new Map();
+  let incomplete = false;
   const out = [];
   for (const name of names) {
     if (!name.endsWith('.json') || name === 'read.json') continue;
-    const j = readJsonSafe(path.join(msgDir, name));
-    if (!j || !j.id) continue;
-    out.push({
-      id: String(j.id),
-      sender: String(j.sender || ''),
-      recipient: String(j.recipient || ''),
-      title: String(j.renderDetails?.messageTitle || ''),
-      content: typeof j.content === 'string' ? j.content : '',
-      at: Date.parse(j.timestamp || '') || 0,
-    });
+    let msg = prev?.byName.get(name);
+    if (msg === undefined) {
+      const j = readJsonSafe(path.join(msgDir, name));
+      if (!j) { incomplete = true; continue; } // 可能正写到一半：不记缓存，下次重试
+      msg = j.id ? {
+        id: String(j.id),
+        sender: String(j.sender || ''),
+        recipient: String(j.recipient || ''),
+        title: String(j.renderDetails?.messageTitle || ''),
+        content: typeof j.content === 'string' ? j.content : '',
+        at: Date.parse(j.timestamp || '') || 0,
+      } : null;
+    }
+    byName.set(name, msg);
+    if (msg) out.push(msg);
   }
-  return out.sort((a, b) => a.at - b.at);
+  out.sort((a, b) => a.at - b.at);
+  cacheSet(messagesCache, msgDir, { dirKey: incomplete ? '' : dirKey, byName, out });
+  return out;
 }
 
 function readSubagentRefs(dataDir, sessionId) {
@@ -277,14 +397,24 @@ function readSubagentRefs(dataDir, sessionId) {
     const id = name.slice(0, -5);
     if (!ID_RE.test(id)) continue;
     const file = path.join(subDir, name);
-    const j = readJsonSafe(file) || {};
     let spawnedAt = 0;
     let mtimeMs = 0;
+    let key = '';
     try {
       const st = statSync(file);
       mtimeMs = st.mtimeMs || 0;
       spawnedAt = Math.min(st.birthtimeMs || st.mtimeMs, st.mtimeMs);
+      key = `${st.mtimeMs}:${st.size}`;
     } catch {}
+    // 登记文件只在 state 变 KILLED 时改写（mtime 跟着变）：按 stat 复用解析结果
+    const hit = key ? subagentRefCache.get(file) : null;
+    let j;
+    if (hit && hit.key === key) j = hit.j;
+    else {
+      const parsed = readJsonSafe(file);
+      j = parsed || {};
+      if (parsed && key) cacheSet(subagentRefCache, file, { key, j });
+    }
     out.push({
       id,
       typeName: String(j.subagentDescriptor?.typeName || ''),
@@ -327,9 +457,84 @@ function readLinesSafe(file, maxBytes = MAX_TRANSCRIPT_BYTES) {
   }
 }
 
+// 在跑的后台任务：agy 把它的输出实时写在 brain/<会话>/.system_generated/tasks/task-N.log。
+// 只读尾部 4KB 取最后一行非空输出与文件修改时间，给界面写「最近输出」和判断有没有动静（只对 running 的任务读，每拍几个文件）。
+const TASK_LOG_TAIL_BYTES = 4096;
+// 进度条、颜色码一类的控制字符会让最后一行变成乱码
+const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g;
+export function readTaskLogTail(dataDir, sessionId, taskId) {
+  const dir = sessionBrainDir(dataDir, sessionId);
+  const name = String(taskId || '').split('/').pop();
+  if (!dir || !/^task-\d+$/.test(name)) return { logAt: 0, logTail: '' };
+  const file = path.join(dir, '.system_generated', 'tasks', `${name}.log`);
+  let st;
+  try { st = statSync(file); } catch { return { logAt: 0, logTail: '' }; }
+  if (!st.isFile() || !st.size) return { logAt: st.mtimeMs || 0, logTail: '' };
+  const len = Math.min(st.size, TASK_LOG_TAIL_BYTES);
+  const buf = Buffer.allocUnsafe(len);
+  let fd;
+  try {
+    fd = openSync(file, 'r');
+    readSync(fd, buf, 0, len, st.size - len);
+  } catch {
+    return { logAt: st.mtimeMs, logTail: '' };
+  } finally {
+    if (fd !== undefined) { try { closeSync(fd); } catch {} }
+  }
+  const lines = buf.toString('utf8').replace(ANSI_RE, '').split(/\r?\n|\r/).map((l) => l.trim()).filter(Boolean);
+  if (len < st.size) lines.shift();
+  return { logAt: st.mtimeMs, logTail: clipLine(lines[lines.length - 1] || '', 160) };
+}
+
+/** 界面上要不要显示「后台还在跑」：有在跑 / 在等的子代理、活跃 Swarm，或主会话挂着在跑的后台任务（含定时任务） */
+export function backgroundShown(tree) {
+  if (!tree || !tree.hasActive) return false;
+  if ((Number(tree.counts?.active) || 0) > 0 || tree.swarm?.hasActive) return true;
+  return (Array.isArray(tree.parentTasks) ? tree.parentTasks : []).some((t) => t.status === 'running');
+}
+
+// 后台命令多久没有新输出就不再拦重启（挂在后台的 dev server 之类会一直「在跑」，不能让它把部署拦上 12 小时）
+const BUSY_QUIET_MS = 15 * 60 * 1000;
+
+/**
+ * 这一轮说完了、后台还有活：给 bridge 的空闲重启当「忙」用（重启会把 agy 进程连同后台命令、子代理一起杀掉）。
+ * 算忙：有在跑 / 在等的子代理或 Swarm 成员、15 分钟内还有输出的后台命令、还没到点的 Timer；
+ * 不算：只剩 Cron（周期巡检，可能挂一整天）、早就没动静的后台命令。
+ */
+export function backgroundBusy(tree, now = Date.now()) {
+  if (!tree || !tree.hasActive) return false;
+  // 子代理 / 团队：15 分钟内有过动静才算（随旧进程死掉的子代理 .db 里会一直停在 RUNNING，别让它把重启拦 12 小时）
+  if (((Number(tree.counts?.active) || 0) > 0 || tree.swarm?.hasActive)
+    && now - (Number(tree.updatedAt) || 0) < BUSY_QUIET_MS) return true;
+  for (const t of Array.isArray(tree.parentTasks) ? tree.parentTasks : []) {
+    if (t.status !== 'running') continue;
+    if (t.kind === 'timer') return true;
+    if (t.kind === 'command' && now - (Number(t.logAt) || Number(t.at) || 0) < BUSY_QUIET_MS) return true;
+  }
+  // 主会话自己有步骤停在 RUNNING 却不在任何一轮里：多半是随旧进程死掉的残留，只认最近 15 分钟还在动的
+  return Boolean(tree.parentActive) && now - (Number(tree.updatedAt) || 0) < BUSY_QUIET_MS;
+}
+
 /** 扫描一个会话/子代理的文字记录摘要（模型、tokens、工具次数、最近步骤、运行态、后台任务）。 */
 export function summarizeTranscript(dataDir, sessionId) {
   const file = transcriptFileOf(dataDir, sessionId);
+  if (!file) return summarizeTranscriptFile('');
+  const key = statKey(file);
+  if (!key) {
+    // 记住的路径已不在（会话被删）：按「没有文字记录」退化，与原先 existsSync 语义一致
+    fullTranscriptKnown.delete(path.dirname(path.dirname(path.dirname(file))));
+    transcriptSummaryCache.delete(file);
+    return summarizeTranscriptFile(existsSync(file) ? file : '');
+  }
+  const hit = transcriptSummaryCache.get(file);
+  if (hit && hit.key === key) return hit.res;
+  // 先取指纹再读：读的过程中被追加，下次 stat 必然不同、会重算，不会把旧结果当新的
+  const res = summarizeTranscriptFile(file);
+  if (key) cacheSet(transcriptSummaryCache, file, { key, res });
+  return res;
+}
+
+function summarizeTranscriptFile(file) {
   const res = {
     exists: false,
     mtimeMs: 0,
@@ -358,6 +563,8 @@ export function summarizeTranscript(dataDir, sessionId) {
   let lastToolRef = null;
   const bgMap = new Map();
   let seenPlanner = false;
+  // 最近一次模型回复发出的工具调用（按先后），后面的 GENERIC 结果步骤逐个对上，给后台任务取 toolSummary
+  let pendingCalls = [];
 
   for (const line of lines) {
     let o;
@@ -406,11 +613,13 @@ export function summarizeTranscript(dataDir, sessionId) {
       if (typeof o.content === 'string' && o.content.trim()) {
         res.lastText = clipLine(o.content, 200);
       }
+      pendingCalls = [];
       if (Array.isArray(o.tool_calls)) {
         for (const tc of o.tool_calls) {
           if (!tc || !tc.name) continue;
           res.toolCallsCount++;
           const args = parseArgs(tc.args);
+          pendingCalls.push({ name: String(tc.name), args });
           lastToolRef = {
             name: String(tc.name),
             summary: toolQuickSummary(tc.name, args),
@@ -426,13 +635,22 @@ export function summarizeTranscript(dataDir, sessionId) {
       if (o.status === 'ERROR' && o.error) res.lastError = clipLine(o.error, 200);
       const content = String(o.content || '');
       const bgMatch = BG_TASK_RE.exec(content);
+      // 结果步骤按先后对上模型发出的工具调用；后台任务优先按命令首行对（并行调用时先后不一定可靠）
+      let call = null;
+      if (pendingCalls.length) {
+        const descHead = bgMatch ? firstLineOf((TASK_DESC_RE.exec(content) || [])[1]) : '';
+        const hit = descHead
+          ? pendingCalls.findIndex((c) => firstLineOf(c.args?.CommandLine || c.args?.command || '') === descHead)
+          : -1;
+        call = pendingCalls.splice(hit >= 0 ? hit : 0, 1)[0] || null;
+      }
       if (bgMatch) {
         const taskId = bgMatch[1];
         bgMap.set(taskId, {
           id: taskId,
           stepIndex: Number.isFinite(Number(o.step_index)) ? Number(o.step_index) : res.stepsCount - 1,
           status: o.status === 'RUNNING' ? 'running' : (o.status === 'ERROR' ? 'error' : 'done'),
-          title: clipLine(content.split('\n')[0] || taskId, 120),
+          ...describeBackgroundTask(content, call, taskId),
           at,
         });
       }
@@ -527,9 +745,27 @@ export function stepsToAcpUpdates(steps = [], sessionId = '', {
 
     if (step.type === 'USER_INPUT') {
       if (!includeUser) continue;
-      const body = String(step.content || '');
-      if (!body || isWakePrompt(body)) continue;
-      pushUpdate({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: body } });
+      if (step.source && step.source !== 'USER_EXPLICIT') continue;
+      const body = extractUserRequestText(step.content).trim();
+      if (body && isWakePrompt(body)) continue;
+      const media = Array.isArray(step.media) ? step.media : [];
+      if (!body && !media.length) continue;
+      if (body) {
+        pushUpdate({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: body } });
+      }
+      for (const m of media) {
+        const uri = normalizeAgyPath(m?.uri || m?.path || '', platform);
+        if (!uri) continue;
+        pushUpdate({
+          sessionUpdate: 'user_message_chunk',
+          content: {
+            type: 'image',
+            path: uri,
+            name: path.basename(uri),
+            mimeType: String(m.mime_type || m.mimeType || 'image/png'),
+          },
+        });
+      }
       continue;
     }
     if (step.type === 'SYSTEM_MESSAGE') continue;
@@ -765,6 +1001,7 @@ function buildNode(dataDir, parentId, ref, parentMessages, depth, maxDepth, visi
     kind,
     state: ref.state,
     status,
+    waitingPermission: Boolean(db.hasWaiting),
     spawnStepIndex: ref.spawnStepIndex,
     spawnedAt: startedAt,
     updatedAt,
@@ -790,7 +1027,7 @@ function buildNode(dataDir, parentId, ref, parentMessages, depth, maxDepth, visi
 }
 
 /** 递归读取一个会话的完整多代理树与统计汇总。 */
-export function readSubagentTree(dataDir, rootSessionId, { maxDepth = 5 } = {}) {
+export function readSubagentTree(dataDir, rootSessionId, { maxDepth = 8 } = {}) {
   const id = String(rootSessionId || '').trim();
   const now = Date.now();
   const empty = {
@@ -799,6 +1036,7 @@ export function readSubagentTree(dataDir, rootSessionId, { maxDepth = 5 } = {}) 
     parentTasks: [],
     agents: [],
     flat: [],
+    waitingAgents: [],
     counts: emptyCounts(),
     modelMix: [],
     hasActive: false,
@@ -833,15 +1071,42 @@ export function readSubagentTree(dataDir, rootSessionId, { maxDepth = 5 } = {}) 
   };
   for (const a of agents) walk(a);
 
-  const parentTasks = rootDb.exists
+  // 比当前 agy 进程更早发起的后台命令已随旧进程没了，.db 里却常停在 RUNNING：记成「已中断」（lost），别当在跑
+  const epoch = agyProcessEpoch(dataDir);
+  const parentTasks = (rootDb.exists
     ? rootSummary.backgroundTasks.map((t) => (t.status === 'running' && !rootDb.activeStepIdxs?.has(t.stepIndex) ? { ...t, status: 'done' } : t))
-    : rootSummary.backgroundTasks;
+    : rootSummary.backgroundTasks
+  ).map((t) => {
+    if (t.status !== 'running') return t;
+    if (t.kind === 'command' && t.at > 0 && t.at < epoch) return { ...t, status: 'lost' };
+    return { ...t, ...readTaskLogTail(dataDir, id, t.id) };
+  });
   const parentTasksActive = parentTasks.some((t) => t.status === 'running');
   const swarm = readSwarmSummary(dataDir, id);
   const swarmActive = Boolean(swarm?.hasActive);
   if (swarm?.hasLiveWorkers && !swarm?.finished) hasAliveNonImage = true;
   if (swarm?.updatedAt && swarm.updatedAt > updatedAt) updatedAt = swarm.updatedAt;
-  const hasActive = counts.active > 0 || rootDb.hasRunning || parentTasksActive || swarmActive;
+
+  // 汇总此刻处于待审批（steps.status=9）的子代理与 Swarm 成员：供监视器立刻 session/resume 接通权限通道
+  const waitingAgents = [];
+  const waitingSeen = new Set();
+  for (const a of flat) {
+    if (a.waitingPermission && !waitingSeen.has(a.id)) {
+      waitingSeen.add(a.id);
+      waitingAgents.push({ id: a.id, role: a.role, typeName: a.typeName, depth: a.depth, kind: a.kind });
+    }
+  }
+  if (swarm && !swarm.finished) {
+    for (const m of listSwarmMemberNodes(dataDir, id)) {
+      if (m.state === 'SUBAGENT_STATE_KILLED' || waitingSeen.has(m.id)) continue;
+      if (readDbActivity(dataDir, m.id).hasWaiting) {
+        waitingSeen.add(m.id);
+        waitingAgents.push({ id: m.id, role: m.role, typeName: m.typeName, depth: m.depth, kind: m.kind });
+      }
+    }
+  }
+
+  const hasActive = counts.active > 0 || rootDb.hasRunning || parentTasksActive || swarmActive || waitingAgents.length > 0;
   const modelMix = [...modelMap.entries()]
     .map(([model, count]) => {
       const p = parseModelAndEffort(model);
@@ -849,12 +1114,12 @@ export function readSubagentTree(dataDir, rootSessionId, { maxDepth = 5 } = {}) 
     })
     .sort((a, b) => b.count - a.count || a.model.localeCompare(b.model));
 
-  // 轻量指纹：只在代理数 / 状态 / 工具次数 / 最近活动 / Swarm 变化时变动，避免总线空刷
+  // 轻量指纹：只在代理数 / 状态 / 工具次数 / 最近活动 / 待审批 / Swarm 变化时变动，避免总线空刷
   const sigParts = [
     rootDb.hasRunning ? '1' : '0',
     parentTasks.map((t) => `${t.id}:${t.status}`).join(','),
     ...(swarm?.signature ? [swarm.signature] : []),
-    ...flat.map((a) => `${a.id}:${a.status}:${a.stepsCount}:${a.toolCallsCount}:${a.reportsCount}:${a.lastTool?.name || ''}`),
+    ...flat.map((a) => `${a.id}:${a.status}:${a.waitingPermission ? 'w' : ''}:${a.stepsCount}:${a.toolCallsCount}:${a.reportsCount}:${a.lastTool?.name || ''}`),
   ];
 
   return {
@@ -863,6 +1128,7 @@ export function readSubagentTree(dataDir, rootSessionId, { maxDepth = 5 } = {}) 
     parentTasks,
     agents,
     flat,
+    waitingAgents,
     counts,
     modelMix,
     swarm,
@@ -893,7 +1159,7 @@ export function hasProtectedSubagents(dataDir, sessionId) {
 }
 
 /** 验证 targetAgentId 确实属于 rootSessionId 的子代理树或 Swarm 成员，防越权窥探别的会话。 */
-export function findSubagentInTree(dataDir, rootSessionId, targetAgentId, { maxDepth = 5 } = {}) {
+export function findSubagentInTree(dataDir, rootSessionId, targetAgentId, { maxDepth = 8 } = {}) {
   const root = String(rootSessionId || '').trim();
   const target = String(targetAgentId || '').trim();
   if (!dataDir || !ID_RE.test(root) || !ID_RE.test(target)) return null;

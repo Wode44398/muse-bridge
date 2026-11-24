@@ -14,9 +14,16 @@ import { ensureAgyUpstream, hasNonLocalAccounts } from './pool/index.mjs';
 import { accountEvents } from '@bridge/core/runtime/account-lifecycle.mjs';
 import { endTenantByKey, tenantStats } from './tenants.mjs';
 import { agyGenKey } from './presence.mjs';
-import { stopAllMonitorsForKey, stopAllSubagentMonitors } from './subagent-monitor.mjs';
+import { stopAllMonitorsForKey, stopAllSubagentMonitors, countBackgroundBusySessions } from './subagent-monitor.mjs';
 
 export { warmupAgy, restartAgy, shutdownAgy, getAgyDaemonStatus };
+
+// 空闲重启要等的「gen 表外的在跑」：这一轮已经说完、后台还在干活的会话（转入后台的命令、子代理 / 团队、没到点的 Timer）。
+// 重启会把 agy 进程连同它们一起杀掉（11-23 实遇：v8.76/v8.77 的空闲重启在 01:40 把正在后台跑的 OptiX 测试腰斩了）。
+// 在跑的轮本身已在 gen 表里，这里不重复算。
+export function busyRuns() {
+  return countBackgroundBusySessions();
+}
 
 export function adminStatus() {
   const st = getAgyDaemonStatus();

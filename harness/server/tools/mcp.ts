@@ -4,6 +4,7 @@
 //   · 直连：工具不多、schema 不大的连接器，每个工具一个 mcp__<连接器>__<工具>（定义冻结在基线里）。
 //   · 网关（E2，kimi 数据插件的办法）：工具多或 schema 大的，不逐个进工具清单，走 McpDescribe + McpCall 两个固定工具——
 //     对 8 家 provider 都通用、不靠中途改工具表，也不打断缓存；网关背后的清单现取（连接器新出的工具也用得上）。
+// resources（声明了 resources 能力的连接器）：网关的并进 McpCall 的保留工具名，直连的用 McpResources（tools/mcp-resources.ts）。
 // 权限：声明了 readOnlyHint 的按只读工具走（可并行、只读档与计划档也能用）；其余一律先问（auto 档也问，「本会话都允许」
 // 放开的是这一个工具——网关按「连接器/工具」记）。结果按「读过外部内容」记（K9：之后的记忆写入只存待确认）。
 import type { Block, JsonObjectSchema } from "../agent/turn.ts";
@@ -11,6 +12,7 @@ import { sniffImageMime } from "../image-assets.ts";
 import { callMcpTool, liveTools, readyConnectors, redact, toolCost, type McpToolInfo } from "../mcp.ts";
 import type { ApprovalPreview, PreparedCall, Tool, ToolContext, ToolRunResult } from "./types.ts";
 import { fail } from "./types.ts";
+import { gatewayResourceNote, isResourceCall, RESOURCE_LIST, RESOURCE_READ, resourcesTool, runResourceCall } from "./mcp-resources.ts";
 
 export const DIRECT_MAX_TOOLS = 12; // 一个连接器超过这么多工具就走网关
 export const DIRECT_MAX_TOKENS = 4_000; // 一个连接器全部工具定义的估算 token 超过这么多就走网关
@@ -28,6 +30,7 @@ export interface McpBaselineServer {
   mode: "direct" | "gateway";
   toolCount: number;
   tools?: McpToolInfo[]; // 直连：冻结的工具定义
+  resources?: true; // 建基线时声明了 resources 能力（老基线没有这一项 = 不出现资源相关的工具与说明）
 }
 export interface McpBaseline {
   v: 1;
@@ -60,6 +63,7 @@ export function planMcpBaseline(now = Date.now()): McpBaseline | null {
       mode: direct ? "direct" : "gateway",
       toolCount: c.tools.length,
       ...(direct ? { tools: c.tools.map((t) => ({ ...t })) } : {}),
+      ...(c.resources ? { resources: true as const } : {}),
     });
   }
   return { v: 1, at: now, servers };
@@ -239,7 +243,7 @@ function gatewayTools(servers: McpBaselineServer[]): Tool[] {
   const byKey = new Map(servers.map((s) => [s.key.toLowerCase(), s]));
   const find = (key: unknown) => byKey.get(String(key ?? "").trim().toLowerCase());
   const liveTool = (s: McpBaselineServer | undefined, tool: unknown) => (s ? liveTools(s.id)?.find((t) => t.name === String(tool ?? "")) : undefined);
-  const listing = servers.map((s) => `${s.key} ("${s.name}", ${s.toolCount} tools)${s.description ? ` — ${clip(s.description, 160)}` : ""}`).join("; ");
+  const listing = servers.map((s) => `${s.key} ("${s.name}", ${s.toolCount} tools${s.resources ? ", resources" : ""})${s.description ? ` — ${clip(s.description, 160)}` : ""}`).join("; ");
   const unknown = (key: unknown) =>
     fail("unknown connector", `No gateway connector "${String(key ?? "")}". Connectors: ${servers.map((s) => s.key).join(", ")}.`);
 
@@ -277,10 +281,11 @@ function gatewayTools(servers: McpBaselineServer[]): Tool[] {
         };
       }
       const rows = tools.slice(0, 200).map((t) => `- ${t.name}${t.readOnly ? " (read-only)" : ""} — ${clip((t.description || t.title || "").split("\n")[0], 160)}`);
+      const res = s.resources ? `\nIt also exposes resources: McpCall({server, tool:"${RESOURCE_LIST}"}) lists them, McpCall({server, tool:"${RESOURCE_READ}", arguments:{uri}}) reads one.` : "";
       return {
         ok: true,
         summary: `${s.key}: ${tools.length} tools`,
-        content: [{ t: "text", text: `Connector "${s.name}" (${s.key}) — ${tools.length} tools. McpDescribe({server, tool}) shows a tool's input schema; McpCall({server, tool, arguments}) runs it.\n${rows.join("\n")}${tools.length > 200 ? `\n…and ${tools.length - 200} more` : ""}` }],
+        content: [{ t: "text", text: `Connector "${s.name}" (${s.key}) — ${tools.length} tools. McpDescribe({server, tool}) shows a tool's input schema; McpCall({server, tool, arguments}) runs it.${res}\n${rows.join("\n")}${tools.length > 200 ? `\n…and ${tools.length - 200} more` : ""}` }],
       };
     },
   };
@@ -288,7 +293,7 @@ function gatewayTools(servers: McpBaselineServer[]): Tool[] {
   const call: Tool = {
     def: {
       name: "McpCall",
-      description: "Run a tool of an MCP connector reached through the gateway. Look the tool up with McpDescribe first and pass arguments matching its input schema.",
+      description: `Run a tool of an MCP connector reached through the gateway. Look the tool up with McpDescribe first and pass arguments matching its input schema.${gatewayResourceNote(servers)}`,
       parameters: {
         type: "object",
         properties: {
@@ -301,11 +306,12 @@ function gatewayTools(servers: McpBaselineServer[]): Tool[] {
     },
     effect: "write",
     concurrencySafe: false,
-    // 按这次要调的那个工具定：声明了只读的按只读走，其余先问
-    permissionView: (args) => (liveTool(find(args.server), args.tool)?.readOnly ? { effect: "read" } : null),
+    // 按这次要调的那个工具定：声明了只读的按只读走，其余先问；资源的列与读是只读的
+    permissionView: (args) => (isResourceCall(args.tool) && find(args.server)?.resources) || liveTool(find(args.server), args.tool)?.readOnly ? { effect: "read" } : null,
     prepare: (args) => {
       const s = find(args.server);
       if (!s) return null;
+      if (isResourceCall(args.tool) && s.resources) return null;
       return liveTool(s, args.tool)?.readOnly ? null : confirmCall(s, String(args.tool ?? ""), args.arguments);
     },
     async run(args, ctx) {
@@ -314,6 +320,7 @@ function gatewayTools(servers: McpBaselineServer[]): Tool[] {
       const tool = String(args.tool ?? "").trim();
       if (!tool) return fail("no tool", "Give the tool name (see McpDescribe).");
       const input = args.arguments && typeof args.arguments === "object" && !Array.isArray(args.arguments) ? (args.arguments as Record<string, unknown>) : {};
+      if (isResourceCall(tool) && s.resources) return runResourceCall(s, tool, input, ctx);
       return runCall(s, tool, input, ctx);
     },
   };
@@ -336,5 +343,8 @@ export function mcpTools(baseline: McpBaseline | null | undefined): Tool[] {
   }
   const gateway = baseline.servers.filter((s) => s.mode === "gateway");
   if (gateway.length) out.push(...gatewayTools(gateway));
+  // 直连连接器的资源：一个 McpResources（网关的资源走 McpCall）
+  const resources = resourcesTool(baseline.servers.filter((s) => s.mode === "direct"));
+  if (resources) out.push(resources);
   return out;
 }

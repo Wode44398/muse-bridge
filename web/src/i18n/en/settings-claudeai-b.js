@@ -135,7 +135,7 @@ export default {
   'Claude 可以打开 app、看屏幕、点按与输入，替你在手机上办事': 'Claude can open apps, see the screen, tap, and type to get things done on your phone.',
   '无障碍权限': 'Accessibility access',
   '已开启：Claude 可以读屏并代你点按输入': 'On. Claude can read the screen and tap and type for you.',
-  '未开启：到系统设置里打开「Claude Bridge」': 'Off. Turn on “Claude Bridge” in Settings.',
+  '未开启：到系统设置里打开「Bridge」': 'Off. Turn on “Bridge” in Settings.',
   '保持后台运行': 'Keep running in background',
   '已不受省电限制': 'Battery usage: Unrestricted',
   '没豁免省电时，系统会在后台把操控服务杀掉': 'Without Unrestricted battery usage, Android stops the control service in the background.',

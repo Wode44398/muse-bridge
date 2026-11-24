@@ -30,9 +30,19 @@ const view = { page: '', dock: null, files: null, preview: null };
 let timer = 0;
 let reported = false;   // 至少报成功过一次（= 已登录）才开始心跳
 const pageVisible = () => { try { return !document.hidden; } catch { return true; } };
+const pageFocused = () => { try { return typeof document.hasFocus === 'function' ? document.hasFocus() : pageVisible(); } catch { return pageVisible(); } };
+const windowPageKey = () => { try { return String(window.BridgeDesktop?.window?.pageKey || ''); } catch { return ''; } };
 function postView(beat) {
-  api.uiState({ clientId: cid, client: clientKind(), state: view, visible: pageVisible(), ...(beat ? { beat: true } : {}) })
-    .then(() => { reported = true; }, () => {});
+  const wp = windowPageKey();
+  api.uiState({
+    clientId: cid,
+    client: clientKind(),
+    state: view,
+    visible: pageVisible(),
+    focused: pageFocused(),
+    ...(wp ? { windowPage: wp } : {}),
+    ...(beat ? { beat: true } : {}),
+  }).then(() => { reported = true; }, () => {});
 }
 export function reportUi(patch) {
   Object.assign(view, patch);

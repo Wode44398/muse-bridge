@@ -28,6 +28,9 @@
   import HomeMoreSheet from '../../components/apps/HomeMoreSheet.svelte';
   import HomeEntryMenu, { homeEntryMenuItems } from '../../components/apps/HomeEntryMenu.svelte';
   import PluginHomeCards from '../../components/PluginHomeCards.svelte';
+  import { initPageWindowsWatch, pageWindowCount } from '../../lib/windowPage.svelte.js';
+
+  initPageWindowsWatch();
 
   const BASE = import.meta.env.BASE_URL;
 
@@ -240,10 +243,10 @@
   // 一律 preventDefault：图标是 <img>，不拦的话 nativeMenu 会弹系统的「复制图片」。
   // 没登录 / 转场中只拦不弹（同 openItem 的门）；「更多」那格没有菜单。
   let entryMenu = $state(null);   // { x, y, title, items }
-  function onDockCtx(ev, e) {
+  function onDockCtx(ev, e, opts = null) {
     ev.preventDefault();
     if (entryMenu || me.kind === 'none' || ui.morphing || ui.enterClaude || ui.enterStudio) return;
-    const items = homeEntryMenuItems(e);
+    const items = homeEntryMenuItems(e, opts);
     if (!items.length) return;
     entryMenu = { x: ev.clientX, y: ev.clientY, title: e.label, items };
   }
@@ -256,8 +259,9 @@
   {:else}
   {#key gpuEpoch}
   {#if curWp.dyn}
-    {#if ui.booted}
-      <iframe class="wp" bind:this={wpEl} src={BASE + 'wallpaper/drift.html?v=6'} title={t('背景')} scrolling="no" tabindex="-1" onload={onWpLoad}></iframe>
+    <!-- 开机入场时一开始就挂：门洞里看到的就是它，推镜也由它自己做（lib/boot/intro.js） -->
+    {#if ui.booted || ui.bootStage === 'gate'}
+      <iframe class="wp" bind:this={wpEl} src={BASE + 'wallpaper/drift.html?v=7'} title={t('背景')} scrolling="no" tabindex="-1" onload={onWpLoad}></iframe>
       {#if portWanted && dockRect}
         <!-- 流体壁纸：玻璃背景每帧从 iframe 里的 flux 画布同步拷取（flux 一直在画，不用向它要帧） -->
         <FigmaGlassDock bind:this={fgdLive} live rect={dockRect} edgeLines={figmaEdge} onready={(ok) => (portOn = ok)} onlost={onGpuLost} />
@@ -306,16 +310,20 @@
             {/if}
           {/if}
           {#if badge}<span class="dbadge" aria-hidden="true">{badge}</span>{/if}
+          {#if e.kind !== 'more' && pageWindowCount(e.key) > 0}<span class="drun" class:dark={lightIcons} aria-hidden="true"></span>{/if}
         </button>
       {/each}
       <span class="dsep"></span>
       <button class="ditem" data-entry="files" style:--s={scaleOf(DOCK.length + 1)} use:tooltip={t('工作空间')}
-              onpointerenter={() => (hov = DOCK.length + 1)} onclick={(ev) => openEntry('files', ev)} aria-label={t('工作空间')}>
+              onpointerenter={() => (hov = DOCK.length + 1)} onclick={(ev) => openEntry('files', ev)}
+              oncontextmenu={(ev) => onDockCtx(ev, { key: 'files', kind: 'builtin', label: t('工作空间') }, { noHide: true })}
+              aria-label={t('工作空间')}>
         <!-- 两层：带页签的后片半透 + 前片实白；前片上沿垫一道细暗边（前片上移 .9 的影）把两层分开 -->
         <svg class="dico dsvg" viewBox="0 0 44 44"><defs><linearGradient id="dkFolderG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#e6eaf1"/></linearGradient></defs>
           <path d="M5 12a3 3 0 0 1 3-3h7.2c.9 0 1.75.4 2.33 1.1l1.35 1.6c.57.7 1.43 1.1 2.33 1.1H36a3 3 0 0 1 3 3V32a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z" fill="#fff" fill-opacity=".62"/>
           <path d="M5 18.4a2.6 2.6 0 0 1 2.6-2.6h28.8a2.6 2.6 0 0 1 2.6 2.6V32a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z" transform="translate(0 -.9)" fill="#000" fill-opacity=".14"/>
           <path d="M5 18.4a2.6 2.6 0 0 1 2.6-2.6h28.8a2.6 2.6 0 0 1 2.6 2.6V32a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z" fill="url(#dkFolderG)"/></svg>
+        {#if pageWindowCount('files') > 0}<span class="drun" class:dark={lightIcons} aria-hidden="true"></span>{/if}
       </button>
       <button class="ditem" style:--s={scaleOf(DOCK.length + 2)} use:tooltip={t('设置 · Ctrl+K 搜索')}
               onpointerenter={() => (hov = DOCK.length + 2)} onclick={() => openEntry('settings')} aria-label={t('设置')}>
@@ -344,7 +352,8 @@
 </div>
 
 {#if moreOpen}
-  <HomeMoreSheet items={view.overflow} anchor={moreBtn} onpick={pickMore} onclose={() => (moreOpen = false)} />
+  <HomeMoreSheet items={view.overflow} anchor={moreBtn} onpick={pickMore} onclose={() => (moreOpen = false)}
+    onctx={(ev, it) => { moreOpen = false; onDockCtx(ev, it); }} />
 {/if}
 
 <CommandPalette onOpenAgent={(k) => openEntry(k)} />
@@ -363,6 +372,9 @@
              background: radial-gradient(125% 95% at 50% 42%, rgba(0,0,0,0) 55%, rgba(0,0,0,.34) 100%); }
 
   .dock-wrap { position: fixed; left: 0; right: 0; bottom: 22px; z-index: 6; display: flex; justify-content: center; pointer-events: none; }
+  /* 开机入场：门洞透明（流光）时，门开着的那一段藏着（Figma 玻璃画在 Dock 外面的画布上，一并藏），之后由 lib/boot/landing.js 落位 */
+  :global(html[data-boot='hide']) .dock-wrap, :global(html[data-boot='hide']) .hint,
+  :global(html[data-boot='hide'] .dh .fgd) { visibility: hidden; }
   .dock {
     pointer-events: auto;
     display: flex; align-items: center; gap: 10px;
@@ -385,6 +397,10 @@
   .dbadge { position: absolute; top: 0; right: 0; min-width: 17px; height: 17px; padding: 0 5px; box-sizing: border-box;
             border-radius: 9px; background: #ff3b30; color: #fff; font: 600 10.5px/17px var(--dsk-font, var(--sans));
             text-align: center; font-variant-numeric: tabular-nums; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); pointer-events: none; }
+  /* 独立窗口运行指示点：图标底缘居中一枚 4px 小圆点（macOS Dock 同款，极克制不抢视觉） */
+  .drun { position: absolute; left: 50%; bottom: -4px; width: 4px; height: 4px; border-radius: 50%;
+          transform: translateX(-50%); background: rgba(255, 255, 255, .86); box-shadow: 0 0 4px rgba(0, 0, 0, .35); pointer-events: none; }
+  .drun.dark { background: rgba(20, 20, 22, .72); box-shadow: 0 0 3px rgba(255, 255, 255, .45); }
   .dsep { width: 1px; height: 36px; background: rgba(255, 255, 255, .22); margin: 0 4px; flex: none; }
 
   .hint {

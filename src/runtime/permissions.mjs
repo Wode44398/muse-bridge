@@ -497,6 +497,11 @@ export function makePermissionGate({ ctx, policy = 'interactive', send, sid, cur
         const r = await pluginPolicy(name, input, opts);
         if (r && r.behavior === 'deny') return { behavior: 'deny', message: r.message };
         if (r && r.behavior === 'allow' && !needsUserApproval(name, input)) return { behavior: 'allow', updatedInput: r.updatedInput };
+        // 插件要用户本人批：直接弹卡（不走下面的宿主放行 / 自家工具免审批 / 绕过权限）；宿主策略的轮没人能批，拒
+        if (r && r.behavior === 'ask') {
+          if (hostPolicy) return { behavior: 'deny', message: "This tool requires user approval, which isn't available in this context." };
+          return permCard(name, input, opts);
+        }
       }
       if (hostPolicy) {
         // 无人值守：保持宿主放行；只有计划模式里的写请求没人能批（官方无头措辞）

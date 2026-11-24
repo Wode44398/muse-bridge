@@ -9,7 +9,29 @@ import { attLook } from './attach-look.js';
 import { walkEntries, groupByRoot, skipNote, pool } from '../dirDrop.js';
 import { nativePathForFile } from '../nativeDesktop.js';
 import { agyApi } from './api.js';
-import { agy, newAgyChat, refreshAgyProjects, refreshAgySessions, refreshHiddenSessions } from './store.svelte.js';
+import { agyPrefs } from './settings.svelte.js';
+import { askRename } from '../renamePrompt.js';
+import { agy, newAgyChat, refreshAgyProjects, refreshAgySessions, refreshHiddenSessions, cacheAgyProjectOrder, bumpAgyOrderPending } from './store.svelte.js';
+
+function sameDirPath(a = '', b = '') {
+  const na = String(a || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  const nb = String(b || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!na || !nb) return false;
+  return /^[A-Za-z]:/.test(na) ? na.toLowerCase() === nb.toLowerCase() : na === nb;
+}
+
+function sortProjectsLocal(list) {
+  return [...list].sort((a, b) => {
+    const ap = a.pinned ? 1 : 0;
+    const bp = b.pinned ? 1 : 0;
+    if (ap !== bp) return bp - ap;
+    if (ap && bp) {
+      const dt = (b.pinnedAt || b.updated || b.created || 0) - (a.pinnedAt || a.updated || a.created || 0);
+      if (dt !== 0) return dt;
+    }
+    return (b.updated || b.created || 0) - (a.updated || a.created || 0);
+  });
+}
 
 export async function selectProjectForNewChat(project) {
   if (!project) return;
@@ -21,7 +43,7 @@ export async function selectProjectForNewChat(project) {
 export function selectDirectoryForNewChat(dirPath) {
   const target = String(dirPath || '').trim();
   if (!target) return;
-  const hitProj = agy.projects.find((p) => p.path && p.path.toLowerCase() === target.toLowerCase());
+  const hitProj = agy.projects.find((p) => p.path && sameDirPath(p.path, target));
   if (hitProj) {
     selectProjectForNewChat(hitProj);
     return;
@@ -33,12 +55,165 @@ export function selectDirectoryForNewChat(dirPath) {
 
 export async function createAgyProjectAt(absPath) {
   const res = await agyApi.createProject(absPath);
-  await refreshAgyProjects();
+  await refreshAgyProjects({ preserveDefault: true });
   if (res?.project) newAgyChat({ projectId: res.project.id, cwd: res.project.path });
   agy.pickerOpen = false;
   agy.projectSheetOpen = false;
   agy.drawerOpen = false;
   return res?.project;
+}
+
+export async function pinAgyProject({ id = '', path = '', name = '', pinned = true } = {}) {
+  if (!id && !path) return false;
+  const prevProjects = agy.projects;
+  const prevRecent = agy.recentDirs;
+  const now = Date.now();
+  const hit = prevProjects.find((p) => (id && p.id === id) || (path && sameDirPath(p.path, path)));
+  if (hit) {
+    const nextList = sortProjectsLocal(prevProjects.map((p) => {
+      if (p.id !== hit.id) return p;
+      const next = { ...p, pinned: !!pinned };
+      if (pinned) next.pinnedAt = now;
+      else delete next.pinnedAt;
+      return next;
+    }));
+    agy.projects = nextList;
+    agyPrefs.projects = nextList;
+  } else if (pinned && path) {
+    const label = name || String(path).split(/[\\/]/).filter(Boolean).pop() || path;
+    const optimistic = { id: 'tmp-pin-' + now, name: label, path, created: now, updated: now, pinned: true, pinnedAt: now };
+    const nextList = sortProjectsLocal([optimistic, ...prevProjects]);
+    agy.projects = nextList;
+    agyPrefs.projects = nextList;
+    agy.recentDirs = prevRecent.filter((d) => !sameDirPath(d.path, path));
+  }
+  try {
+    const res = await agyApi.pinProject({ id: hit?.id || id, path: hit?.path || path, pinned });
+    if (Array.isArray(res?.projects)) {
+      agy.projects = res.projects;
+      agyPrefs.projects = res.projects;
+    } else {
+      await refreshAgyProjects({ preserveDefault: true });
+    }
+    if (Array.isArray(res?.order)) {
+      agy.projectOrder = res.order;
+      cacheAgyProjectOrder(res.order);
+    }
+    if (pinned && (hit?.path || path)) {
+      const target = hit?.path || path;
+      agy.recentDirs = agy.recentDirs.filter((d) => !sameDirPath(d.path, target));
+    }
+    return true;
+  } catch (err) {
+    agy.projects = prevProjects;
+    agyPrefs.projects = prevProjects;
+    agy.recentDirs = prevRecent;
+    showToast(tr(err?.body?.error || err?.message) || (pinned ? t('置顶工作空间失败') : t('取消置顶失败')), 'err');
+    return false;
+  }
+}
+
+export async function deleteAgyProject({ id = '', path = '', name = '' } = {}) {
+  if (!id && !path) return false;
+  const prevProjects = agy.projects;
+  const prevRecent = agy.recentDirs;
+  const hit = prevProjects.find((p) => (id && p.id === id) || (path && sameDirPath(p.path, path)));
+  const targetId = hit?.id || id;
+  const targetPath = hit?.path || path;
+  const label = name || hit?.name || String(targetPath || '').split(/[\\/]/).filter(Boolean).pop() || '';
+
+  const nextList = prevProjects.filter((p) => !((targetId && p.id === targetId) || (targetPath && sameDirPath(p.path, targetPath))));
+  agy.projects = nextList;
+  agyPrefs.projects = nextList;
+  if (targetPath) {
+    agy.recentDirs = prevRecent.filter((d) => !sameDirPath(d.path, targetPath));
+  }
+  const wasCurrentNewChat = !agy.sessionId && (
+    (targetId && agy.projectId === targetId)
+    || (targetPath && sameDirPath(agy.cwd, targetPath))
+  );
+  if (wasCurrentNewChat) {
+    newAgyChat({ projectId: '', cwd: '' });
+  }
+  try {
+    const res = await agyApi.deleteProject({ id: targetId, path: targetPath });
+    if (Array.isArray(res?.projects)) {
+      agy.projects = res.projects;
+      agyPrefs.projects = res.projects;
+    }
+    if (Array.isArray(res?.order)) {
+      agy.projectOrder = res.order;
+      cacheAgyProjectOrder(res.order);
+    }
+    if (targetId && agyPrefs.settings.defaultProjectId === targetId) {
+      agyPrefs.settings.defaultProjectId = '';
+    }
+    if (label) showToast(t('已移除工作空间「{name}」', { name: label }));
+    return true;
+  } catch (err) {
+    agy.projects = prevProjects;
+    agyPrefs.projects = prevProjects;
+    agy.recentDirs = prevRecent;
+    showToast(tr(err?.body?.error || err?.message) || t('移除工作空间失败'), 'err');
+    return false;
+  }
+}
+
+// 侧栏工作空间改显示名：只改名字、不动磁盘上的文件夹（会话按绝对路径绑定，改文件夹会断）。
+// 「最近用过」和只来自历史会话的分组也能改：服务端先登记成项目再记名字。
+export async function renameAgyProject({ id = '', path = '', name = '' } = {}) {
+  if (!id && !path) return false;
+  const hit = agy.projects.find((p) => (id && p.id === id) || (path && sameDirPath(p.path, path)));
+  const targetPath = hit?.path || path;
+  const folder = hit?.folderName || String(targetPath || '').split(/[\\/]/).filter(Boolean).pop() || '';
+  const current = hit?.name || name || folder;
+  const next = await askRename(current, {
+    title: t('重命名工作空间'),
+    hint: t('只改侧栏里显示的名字，磁盘上的文件夹「{folder}」不会改名。改回文件夹名即恢复默认。', { folder }),
+    isDir: true,
+  });
+  if (next == null) return false;
+  try {
+    const res = await agyApi.renameProject({ id: hit?.id || id, path: targetPath, name: next });
+    if (Array.isArray(res?.projects)) {
+      agy.projects = res.projects;
+      agyPrefs.projects = res.projects;
+    } else {
+      await refreshAgyProjects({ preserveDefault: true });
+    }
+    if (Array.isArray(res?.order)) {
+      agy.projectOrder = res.order;
+      cacheAgyProjectOrder(res.order);
+    }
+    if (targetPath) agy.recentDirs = agy.recentDirs.filter((d) => !sameDirPath(d.path, targetPath));
+    return true;
+  } catch (err) {
+    showToast(tr(err?.body?.error || err?.message) || t('重命名工作空间失败'), 'err');
+    return false;
+  }
+}
+
+export async function reorderAgyProjects(nextPaths) {
+  if (!Array.isArray(nextPaths) || !nextPaths.length) return false;
+  const prev = agy.projectOrder;
+  agy.projectOrder = nextPaths;
+  cacheAgyProjectOrder(nextPaths);
+  bumpAgyOrderPending(1);
+  try {
+    const res = await agyApi.setProjectOrder(nextPaths);
+    if (Array.isArray(res?.order)) {
+      agy.projectOrder = res.order;
+      cacheAgyProjectOrder(res.order);
+    }
+    return true;
+  } catch (err) {
+    agy.projectOrder = prev;
+    cacheAgyProjectOrder(prev);
+    showToast(tr(err?.body?.error || err?.message) || t('工作空间顺序没保存上，请重试'), 'err');
+    return false;
+  } finally {
+    bumpAgyOrderPending(-1);
+  }
 }
 
 export function locateAgyFileInWorkspace(filePath, { openFile = false } = {}) {
@@ -123,7 +298,7 @@ export async function uploadAgyFile(file) {
 // 服务端在本机（桌面壳拿得到原路径）→ 零拷贝引用原目录；否则整树传到 uploads/<文件夹>/ 再引用那份副本。
 export function pushAgyFolder(dirPath, name) {
   if (!dirPath) return false;
-  if (agy.draftAtts.some((x) => x.path === dirPath)) return true;
+  if (agy.draftAtts.some((x) => x.path && sameDirPath(x.path, dirPath))) return true;
   agy.draftAtts.push({ path: dirPath, name: name || String(dirPath).split(/[\\/]/).filter(Boolean).pop() || 'folder', kind: 'folder', url: '', pending: false });
   return true;
 }
@@ -217,6 +392,33 @@ export async function hideAgySession(sessionId) {
   } catch (err) {
     agy.sessions = prev;
     showToast(tr(err?.body?.error || err?.message) || t('隐藏对话失败'), 'err');
+  }
+}
+
+export async function hideAgyWorkspaceSessions(sessionIds, workspaceName = '') {
+  const ids = [...new Set((Array.isArray(sessionIds) ? sessionIds : []).map((x) => String(x || '').trim()).filter(Boolean))];
+  if (!ids.length) return false;
+  const idSet = new Set(ids);
+  const prevSessions = agy.sessions;
+  const prevHiddenCount = agy.hiddenCount;
+  const leavingCurrent = Boolean(agy.sessionId && idSet.has(agy.sessionId));
+  agy.sessions = prevSessions.filter((s) => !idSet.has(s.sessionId));
+  agy.hiddenCount = prevHiddenCount + ids.length;
+  if (leavingCurrent) newAgyChat();
+  try {
+    await agyApi.hideSessions(ids);
+    await Promise.all([refreshAgySessions(), agy.hiddenOpen ? refreshHiddenSessions() : null]);
+    showToast(
+      workspaceName
+        ? t('已隐藏「{name}」的 {n} 条对话', { name: workspaceName, n: ids.length })
+        : t('已隐藏 {n} 条对话', { n: ids.length })
+    );
+    return true;
+  } catch (err) {
+    agy.sessions = prevSessions;
+    agy.hiddenCount = prevHiddenCount;
+    showToast(tr(err?.body?.error || err?.message) || t('隐藏对话失败'), 'err');
+    return false;
   }
 }
 

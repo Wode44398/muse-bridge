@@ -26,7 +26,8 @@
   const task = $derived(tool.task || null);
   const F = $derived(tool.status);                                  // running | done | error
   const U = $derived(F !== 'running' && task ? task.status : undefined);   // 结果已回 → 看任务态
-  const H = $derived(!!live && (F === 'running' || taskRunning(U)));       // 逻辑上在跑
+  // 逻辑上在跑：后台 agent 的任务态不受本轮结束影响（同 WorkflowCard 判活注释）
+  const H = $derived((!!live && F === 'running') || taskRunning(U));
   // 官方 Wh(…, 650)：运行态切换稳定 650ms 后才落到显示；首帧取当前值
   let V = $state(untrack(() => H));
   $effect(() => {

@@ -1,6 +1,6 @@
 // 插话：送进正在跑的一轮、撤回、立即中断并发送。
 import { skillLoadedIn } from "../agent/injections.ts";
-import { resolveSlash, SLASH_SKILL_KIND, slashInjection } from "../commands.ts";
+import { resolveSlash, slashInjection } from "../commands.ts";
 import { fanout } from "./events.ts";
 import { runMismatch, touchSession } from "./lifecycle.ts";
 import { startRun } from "./run.ts";
@@ -27,13 +27,13 @@ export function steerSession(
   if (runMismatch(session, runId)) return { ok: false, error: "run_mismatch", currentRunId: session.runId ?? null };
   if (isAway(session)) setSessionAway(session, false); // P3：插话 = 人回来了
   // E3：插话是 /技能名——技能正文跟着插话一起进（loop 注入插话时紧跟着追加）
-  const slash = resolveSlash(clean);
-  const inj = slash ? slashInjection(slash, (name) => skillLoadedIn(session.state!.messages, name)) : null;
+  const slash = resolveSlash(clean, session.state.ctx.sandbox.root);
+  const inj = slash ? slashInjection(slash, (name) => skillLoadedIn(session.state!.messages, name), session.state.ctx.sandbox.root) : null;
   // U2（#46）：插话的身份——客户端给了就用它（本机的乐观气泡与回来的 steer_queued 按它对上号）。
   const id = session.state.queueSteer(
     clean,
     typeof steerId === "string" && STEER_ID_RE.test(steerId) ? steerId : undefined,
-    inj ? { name: inj.name, kind: SLASH_SKILL_KIND, text: inj.text, ...(inj.pkg ? { pkg: true } : {}) } : undefined,
+    inj ? { name: inj.name, kind: inj.kind, text: inj.text, ...(inj.pkg ? { pkg: true } : {}) } : undefined,
   );
   touchSession(session);
   fanout(session, { e: "steer_queued", text: clean, id });

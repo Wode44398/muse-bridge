@@ -6,10 +6,11 @@
 // （#30 那类恢复即断，在生产上也看得见）。
 import { comparePrefix, fingerprintWire, parseFingerprint, serializeFingerprint, type BreakPoint, type SerializedFingerprint, type WireFingerprint } from "../providers/wire-fingerprint.ts";
 import { injectionsIn, recallIds } from "./injections.ts";
-import type { Turn, WireShape } from "./turn.ts";
+import type { Turn, WireRewrite, WireShape } from "./turn.ts";
 
 // ephemeral-tail（瘦身 P0-2）：上一次请求末尾挂过一条不落盘的提醒，这一次在它的位置断开是预期的
-export type RewriteKind = "mode" | "access" | "micro-compaction" | "compaction" | "audit-closure" | "resume" | "heal" | "media-retire" | "ephemeral-tail" | "model";
+// replay-refused：adapter 自报——端点拒收回传的思考字段，去掉重发、之后都不带（turn.ts WireRewrite）
+export type RewriteKind = "mode" | "access" | "micro-compaction" | "compaction" | "audit-closure" | "resume" | "heal" | "media-retire" | "ephemeral-tail" | "model" | WireRewrite;
 
 export interface RequestUsage {
   input: number;
@@ -66,7 +67,13 @@ export class PrefixAudit {
     const recall = recallIds(turn.messages);
     return {
       ...turn,
-      hints: { ...turn.hints, onWire: (shape, body) => void this.observe(shape, body, attempt, injected, recall) },
+      hints: {
+        ...turn.hints,
+        onWire: (shape, body, rewrite) => {
+          if (rewrite) this.noteRewrite(rewrite); // adapter 自报的改写（端点拒收回传的思考字段）
+          void this.observe(shape, body, attempt, injected, recall);
+        },
+      },
     };
   }
 

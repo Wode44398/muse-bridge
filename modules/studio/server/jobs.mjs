@@ -18,10 +18,10 @@ import { protectedTarget } from '@bridge/core/routes/file-core.mjs';
 import { studioOwnerDir, effectiveStudioSettings } from '@bridge/core/runtime/studio-settings.mjs';
 import { GEMINI_API_KEY } from '@bridge/core/config/index.mjs';
 import { assertPublicUrl, publicDispatcher } from '@bridge/core/runtime/public-net.mjs';
-import { studioOwner, providerSecret, usableProviders, isMemberOwner, HOST_OWNER, modelKey } from './providers.mjs';
-import { resolveAny, defaultFor, etaFor } from './catalog.mjs';
-import { applySpecs } from './cards/spec.mjs';
-import { adapterFor } from './adapters/index.mjs';
+import { studioOwner, providerSecret, usableProviders, isMemberOwner, HOST_OWNER, modelKey, parseModelKey } from './providers.mjs';
+import { resolveAny, defaultFor, etaFor, BARE_HINT } from './catalog.mjs';
+import { normalizeWithOver } from './model-config/overlay.mjs';
+import { adapterForCard, withTrace } from './adapters/index.mjs';
 import { NO_BASEURL, KINDS } from './presets.mjs';
 import { assetKindOf, autoSave, publicAsset } from './assets.mjs';
 import { imageDims } from './adapters/openrouter-image.mjs';
@@ -30,6 +30,8 @@ import { markUsed, noteRejected, clearRejected } from './discovery/store.mjs';
 import { detectRejected, rejectedLine } from './cards/rejected.mjs';
 
 const bad = (msg, status = 400) => Object.assign(new Error(msg), { status });
+// 裸 id 找不到时说清怎么写完整键；键找不到照旧
+const notFound = (k) => (parseModelKey(k) ? `找不到可用的模型「${k}」（服务被停用 / 删除，或模型关掉了）` : `找不到可用的模型「${k}」：没有哪个启用的服务列了这个模型，它也不是内置模型。${BARE_HINT}`);
 const MAX_RECENT = 50;
 const MAX_ACTIVE = 8;
 const MAX_INPUTS = 16;
@@ -273,7 +275,8 @@ function companionGeminiKey(provider) {
 
 /**
  * 建任务并开跑。body = { kind, key（'<服务>/<模型>' 或裸模型 id；不给用默认）, prompt, negative?, params?, inputs?, thread?, parent? }
- * opts：{ source（studio | legacy | claude | api）, onEvent(ev)（旧接口 SSE / Claude 工具推进度）, autoSave（默认 source==='studio'）,
+ * opts：{ source（studio | legacy | claude | api | trial）, onEvent(ev)（旧接口 SSE / Claude 工具推进度）, autoSave（默认 source==='studio'）,
+ *         trace（{ entries, secrets }：记下每一步的原始请求与响应，试跑用）, resolved（{ provider, entry, card }：跳过按键解析，试跑草稿用）,
  *         turns（旧 image-chat 显式带的续改轮次 [{ userText, imageId }]）, quota（默认 true）, extraMeta（并进侧车）}
  * 回 { job: 公开形状, done: Promise<公开形状> }。参数 / 素材 / 额度不过关直接抛（带 status）。
  */
@@ -336,8 +339,9 @@ export function startJob(ctx, body, opts = {}) {
   if (live.length >= MAX_ACTIVE) throw bad(`同时进行的任务太多（上限 ${MAX_ACTIVE}），等前面的跑完`, 429);
 
   const keyIn = typeof body.key === 'string' ? body.key.trim() : '';
-  const hit = keyIn ? resolveAny(keyIn, kind, owner) : defaultFor(kind, owner);
-  if (!hit) throw bad(keyIn ? `找不到可用的模型「${keyIn}」（服务被停用 / 删除，或模型关掉了）` : '还没有能用的' + { image: '图像', video: '视频', speech: '配音', music: '音乐' }[kind] + '服务：先在 设置 › Media Studio 里加一个', keyIn ? 404 : 409);
+  // opts.resolved：试跑草稿配方时调用方自己给的 { provider, entry, card }（模型可能还没加进服务、配方还没存）
+  const hit = opts.resolved || (keyIn ? resolveAny(keyIn, kind, owner) : defaultFor(kind, owner));
+  if (!hit) throw bad(keyIn ? notFound(keyIn) : '还没有能用的' + { image: '图像', video: '视频', speech: '配音', music: '音乐' }[kind] + '服务：先在 设置 › Media Studio 里加一个', keyIn ? 404 : 409);
   const { provider, entry, card } = hit;
 
   const prompt = String(body.prompt ?? '').trim();
@@ -354,7 +358,9 @@ export function startJob(ctx, body, opts = {}) {
   const thread0 = typeof body.thread === 'string' && ID_RE.test(body.thread) ? body.thread : null;
   applyEditDefaults(card, rawParams, { inputs, thread: kind === 'image' ? thread0 : null });
   const flags = inputFlagsOf(inputs, kind === 'image' ? thread0 : null);
-  const params = card.normalize ? card.normalize(rawParams, flags) : applySpecs(card.params, rawParams, flags);
+  // warnings：这次显式给的参数里哪些没照原样生效（生成工具回给 agent；创作页不用）
+  const given = body.params && typeof body.params === 'object' ? Object.keys(body.params) : [];
+  const { params, warnings } = normalizeWithOver(card, rawParams, flags, { only: given });
   const negative = card.negative ? card.negative(body.negative) : (typeof body.negative === 'string' ? body.negative.trim().slice(0, 2000) : '');
   const thread = typeof body.thread === 'string' && ID_RE.test(body.thread) ? body.thread : null;
   const parent = typeof body.parent === 'string' && ID_RE.test(body.parent) ? body.parent : null;
@@ -379,7 +385,7 @@ export function startJob(ctx, body, opts = {}) {
   emit(job);
   const done = new Promise((resolve) => { job._resolve = resolve; });
   setImmediate(() => { execute(job, ctx, { provider, entry, card, inputs, opts }).catch(() => {}); });
-  return { job: publicJob(job), done };
+  return { job: publicJob(job), done, warnings };
 }
 
 async function execute(job, ctx, { provider, entry, card, inputs, opts }) {
@@ -410,7 +416,7 @@ async function execute(job, ctx, { provider, entry, card, inputs, opts }) {
       inputs: inputs.map((x) => ({ role: x.role, data: readFileSync(x.file), mime: mimeType(x.file, { fallback: 'application/octet-stream' }), name: x.name, asset: x.asset })),
       thread: loadThread(ctx, job.thread, opts.turns),
     };
-    const adapter = adapterFor(provider.dialect);
+    const adapter = adapterForCard(provider, card);
     const actx = {
       secret: providerSecret(provider), signal: job.ac.signal, progress: tick,
       submitted: () => { job.uncancelable = true; emit(job); },
@@ -419,7 +425,7 @@ async function execute(job, ctx, { provider, entry, card, inputs, opts }) {
     };
     let out, attempt = 0;
     for (;;) {
-      try { out = await adapter.run(req, provider, actx); break; }
+      try { out = opts.trace ? await withTrace(opts.trace, () => adapter.run(req, provider, actx)) : await adapter.run(req, provider, actx); break; }
       catch (e) {
         // 只重试「确定没被受理」的：429 限流（上游拒收、不计费）、连接都没建立（拒连 / DNS 失败）。5xx、超时、连接中途断开
         // 都可能是请求已经发出去、上游已经开跑——再发一次就是重复计费（2026-11-04 契约复核）
@@ -536,7 +542,7 @@ export function cancelJob(owner, id) {
 export async function runDirect({ kind, key, prompt = '', negative = '', params = {}, inputs = [], signal, onProgress } = {}) {
   if (!KINDS.includes(kind)) throw bad('kind 只能是 ' + KINDS.join(' / '));
   const hit = key ? resolveAny(key, kind, HOST_OWNER) : defaultFor(kind, HOST_OWNER);
-  if (!hit) throw bad(key ? `找不到可用的模型「${key}」（先在 Media Studio 里加服务，或一键导入 Vertex）` : '还没有能用的媒体服务：先在 设置 › Media Studio 里加一个', 404);
+  if (!hit) throw bad(key ? notFound(key) : '还没有能用的媒体服务：先在 设置 › Media Studio 里加一个', 404);
   const { provider, entry, card } = hit;
   const ins = (Array.isArray(inputs) ? inputs : []).map((x) => {
     if (!x || !ROLES.includes(x.role)) throw bad('素材的角色只能是 ' + ROLES.join(' / '));
@@ -550,21 +556,22 @@ export async function runDirect({ kind, key, prompt = '', negative = '', params 
   const raw = { ...(entry.defaults || {}), ...params };
   applyEditDefaults(card, raw, { inputs: ins });
   const flags = inputFlagsOf(ins);
+  const { params: norm, warnings } = normalizeWithOver(card, raw, flags, { only: Object.keys(params || {}) });
   const req = {
     kind, model: entry.id, card, prompt: String(prompt || '').trim(),
     negative: card.negative ? card.negative(negative) : String(negative || ''),
-    params: card.normalize ? card.normalize(raw, flags) : applySpecs(card.params, raw, flags),
+    params: norm,
     inputs: ins.map((x) => ({ role: x.role, data: readFileSync(x.file), mime: mimeType(x.file, { fallback: 'application/octet-stream' }), name: x.name })),
     thread: null,
   };
   const t0 = Date.now();
   const timeout = AbortSignal.timeout(20 * 60_000);
-  const out = await adapterFor(provider.dialect).run(req, provider, {
+  const out = await adapterForCard(provider, card).run(req, provider, {
     secret: providerSecret(provider), signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
     progress: () => onProgress?.(Math.round((Date.now() - t0) / 1000)), submitted: () => {},
     devKey: provider.dialect === 'vertex' ? companionGeminiKey(provider) : undefined,
   });
-  return { outputs: (out?.assets || []).map((a) => normalizeOutput(a, kind)), provider, entry };
+  return { outputs: (out?.assets || []).map((a) => normalizeOutput(a, kind)), provider, entry, warnings };
 }
 
 export function _resetJobsForTests() { jobs.clear(); recent.clear(); loaded.clear(); aliveAssets.clear(); }

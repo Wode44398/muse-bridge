@@ -13,6 +13,8 @@
 //   const c = bridge.context();                   // { sessionId, cwd, agent, app, file }：工作台标签里有会话与目录；应用分页里有 app（没有的为 null，agent 缺省 'claude'）
 //   bridge.app();                                  // 插件应用（主页图标 + 全屏分页）里：{ plugin, id }，别处 null（= context().app = info.app）
 //   bridge.on('context', (c) => …);               // 用户切了会话 / 工作目录
+//   const ws = await bridge.socket('stream', { a: 1 });   // 实时通道（插件 ctx.socket 登记的端点）：标准 WebSocket，文本 + 二进制
+//   await bridge.download('export?id=1', 'a.csv');  // 下载插件接口给的文件（嵌入时由宿主存，桌面壳 / 手机 App 走原生下载器）
 //
 // 插件自己的设置与动作（只有服务器主机能用；不用插件写接口）：
 //   const { schema, config } = await bridge.config.get();
@@ -615,7 +617,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function can(name) {
   const n = String(name || '');
   if (embedded) return caps.has(n);
-  if (n === 'kv' || n === 'chat' || n === 'files') return true;
+  if (n === 'kv' || n === 'chat' || n === 'files' || n === 'socket' || n === 'download') return true;
   return hc && HOST_CAPS.has(n);
 }
 
@@ -1194,6 +1196,30 @@ export const bridge = {
     return window.confirm([title, desc].filter(Boolean).join('\n\n'));
   },
   async blobUrl(path) { const r = await bfetch(path); if (!r.ok) throw new Error('HTTP ' + r.status); return URL.createObjectURL(await r.blob()); },
+  // 实时通道（插件 ctx.socket 登记的端点）：先经普通请求换一次性连接票，再直连 WebSocket。回标准 WebSocket（binaryType = arraybuffer）。
+  // 断了不自动重连——重连策略（退避、要不要补状态）跟业务走，页面自己再调一次 bridge.socket。
+  async socket(name, query = {}) {
+    const r = await bjson('_bridge/socket', { name: String(name || ''), query });
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + r.path);
+    ws.binaryType = 'arraybuffer';
+    return ws;
+  },
+  // 下载插件接口给的文件：嵌入时交给宿主（桌面壳 / 手机 App 走原生下载器），独立打开时自己取成 blob 存。
+  async download(path, name = '') {
+    if (embedded) {
+      if (!caps.has('download')) throw unsupported();
+      return call('download', { path: cleanPath(path), name: String(name || '') });
+    }
+    const r = await bfetch(path);
+    if (!r.ok) throw await responseError(r);
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = String(name || '') || 'download';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+    return { ok: true, native: false, size: blob.size };
+  },
   openExternal(url) {
     const u = String(url || '');
     if (!/^https?:\/\//i.test(u)) throw new Error('只能打开 http(s) 地址');

@@ -6,6 +6,7 @@ import test from "node:test";
 import { messageKind } from "./agent/injections.ts";
 import { PLAYBOOK_KIND, playbooksForCalls, playbooksForRequest } from "./agent/playbooks.ts";
 import { systemPrompt } from "./agent/prompt.ts";
+import { hardenedProfile } from "./agent/profile.ts";
 import type { Msg, Turn } from "./agent/turn.ts";
 import { say, scripted, useTool } from "./test-harness/scripted-adapter.ts";
 import { drive, loopState } from "./test-harness/trajectory.ts";
@@ -14,7 +15,15 @@ import { ok, type Tool } from "./tools/types.ts";
 const ids = (ps: { id: string }[]) => ps.map((p) => p.id).sort();
 
 test("P0-3 system：不再常驻 ## Tools 与四个专章，只留一句指路", () => {
-  const prompt = systemPrompt({ root: "C:/ws", shell: "bash", platform: "win32", provider: "local", model: "q", access: "full", webSearch: true });
+  const env = { root: "C:/ws", shell: "bash", platform: "win32", provider: "local", model: "q", access: "full", webSearch: true } as const;
+  const lean = systemPrompt(env);
+  for (const gone of ["## Tools", "## Running and verifying a web app", "## Local servers you write", "## Running and verifying a desktop app", "## Running and verifying an Android app", "## Deliverable form"]) {
+    assert.ok(!lean.includes(gone), `lean：${gone} 不常驻`);
+  }
+  assert.match(lean, /## Playbooks\n.*\[Playbook: …\]/);
+  assert.match(lean, /in the form they named/, "lean：形态对齐留一句");
+  assert.ok(lean.length < 6_000, `lean 核心提示词 ${lean.length} 字符`);
+  const prompt = systemPrompt({ ...env, profile: hardenedProfile() });
   for (const gone of ["## Tools", "## Running and verifying a web app", "## Local servers you write", "## Running and verifying a desktop app", "## Running and verifying an Android app"]) {
     assert.ok(!prompt.includes(gone), `${gone} 不再常驻`);
   }

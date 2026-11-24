@@ -25,6 +25,7 @@
   import { t } from '../lib/i18n.js';
   import PrChip from './claude/PrChip.svelte';   // 当前会话绑定了拉取请求时，分支胶囊后面接一颗「#123 ●」
   import DeviceChip from './claude/DeviceChip.svelte';
+  import SharedFolderTag from './claude/workspace/SharedFolderTag.svelte';   // 插件标成「与 Antigravity 共用」的文件夹
 
   // name = 当前项目名（真实项目里就等于文件夹名；快照对话的桶目录名是 UUID，只有项目名可读）
   // armable = 还没有会话的新对话空态——只有这时 worktree 勾选框能点
@@ -50,6 +51,7 @@
     <button class="chip" title={ws} onclick={() => openDock('files')}>
       <span class="ic" aria-hidden="true">&#xe072;</span>
       <span class="lbl">{folder}</span>
+      <SharedFolderTag {ws} />
     </button>
 
     {#if branch}

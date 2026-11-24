@@ -6,10 +6,10 @@ import {
   isGlobalMemory,
   listMemories,
   memoryDir,
-  renderGlobalMemoryForPrompt,
-  renderMemoryForPrompt,
+  isNoteFile,
   type MemoryMeta,
 } from "./memory.ts";
+import { renderGlobalMemoryForPrompt, renderMemoryForPrompt } from "./memory-index.ts";
 import { memoryUsage } from "./memory-usage.ts";
 
 // K11：记忆总览——设置里的「记忆」面板一次拿齐：全局层、每个有记忆的项目、旧快照桶里散落的记忆。
@@ -50,9 +50,10 @@ export const GLOBAL_WS = "@global";
 const MAX_HISTORY = 400;
 const WHY = new Set<HistoryWhy>(["overwrite", "delete", "retire", "superseded", "reject", "restore"]);
 
-// .history/<id>.<2026-09-21T10-22-33-123Z>.<why>.md（memory.ts archiveVersion）；id 只有 [a-z0-9-]，不含点
+// .history/<id>.<2026-09-21T10-22-33-123Z>.<why>.md（memory.ts archiveVersion）；id 是文件名（模型直接写的什么字都有，含点），
+// 靠后面的时间戳认
 export function parseHistoryName(file: string): { id: string; at: string; why: HistoryWhy } | null {
-  const m = /^([a-z0-9-]+)\.(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z\.([a-z]+)\.md$/i.exec(file);
+  const m = /^(.+?)\.(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z\.([a-z]+)\.md$/i.exec(file);
   if (!m || !WHY.has(m[7] as HistoryWhy)) return null;
   const at = `${m[2]}T${m[3]}:${m[4]}:${m[5]}.${m[6]}Z`;
   return Number.isFinite(Date.parse(at)) ? { id: m[1]!, at, why: m[7] as HistoryWhy } : null;
@@ -76,7 +77,7 @@ function hasNotes(root: string): boolean {
   const dir = memoryDir(root);
   if (!existsSync(dir)) return false;
   try {
-    return readdirSync(dir).some((f) => f.endsWith(".md") && f !== "MEMORY.md");
+    return readdirSync(dir).some((f) => isNoteFile(f) && f.toLowerCase() !== "memory.md");
   } catch {
     return false;
   }

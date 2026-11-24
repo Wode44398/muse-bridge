@@ -1,9 +1,15 @@
-import type { Block, Budget, Msg } from "./turn.ts";
+import type { Block, Msg, ThinkingLevel, Turn } from "./turn.ts";
 import type { AgentState } from "./state.ts";
-import type { ProviderAdapter } from "../providers/types.ts";
-import { archiveChunks, deterministicNotes, prepareSummary, renderSummary, sampleTranscript } from "./compaction-shape.ts";
-import { runningJobsSummary } from "../tools/bash.ts";
+import { anchorCaps, archiveChunks, deterministicNotes, prepareSummary, renderSummary } from "./compaction-shape.ts";
+import { INLINE_MIN_WINDOW, inlineInstruction, summarize, summarizeInline, summaryOutputTokens } from "./compaction-summary.ts";
+import { applyRestoredReads, applyRestoredTools, gatherRestore, renderRestore, RESTORE_KIND, trimRestore, type Restore } from "./compaction-restore.ts";
+import { messageKind } from "./injections.ts";
 import { traceLines } from "./run-trace.ts";
+import { toolArgStr } from "./tool-input.ts";
+import { preCompactHook } from "../hooks/index.ts";
+
+// 摘要怎么写（inline / sidecar、预算、指令）在 compaction-summary.ts；这几个名字老调用方与测试从这里取
+export { COMPACTION_SYSTEM, SUMMARY_BUDGET, SUMMARY_INSTRUCTION, summarize, type SummaryProfile } from "./compaction-summary.ts";
 
 // 瘦身 P0-1：整段压缩前给 run 之后的记忆沉淀留的轨迹，最多这么多行（多的从最早的丢）
 const COMPACTED_TRACE_MAX = 200;
@@ -52,10 +58,26 @@ export function estimateTokens(system: string | Block[], messages: Msg[]): numbe
 function blocksTokens(blocks: Block[]): number {
   let n = 0;
   for (const b of blocks) {
-    if (b.t === "text" || b.t === "thinking") n += textTokens(b.text);
+    if (b.t === "text") n += textTokens(b.text);
+    else if (b.t === "thinking") n += textTokens(b.text) + opaqueThinkingChars(b) / 4;
     else if (b.t === "tool_call") n += textTokens(JSON.stringify(b.args)) + b.name.length / 4;
     else if (b.t === "tool_result") n += blocksTokens(b.content);
     else n += blocksChars([b]) / 4; // 图片 / 视频 / 音频：沿用按字符折算的固定估值
+  }
+  return n;
+}
+
+// 思考块里不在 text 里、却照样随请求回传的部分：Anthropic redacted_thinking 的加密原文、OpenRouter reasoning_details 里的
+// 加密 data / 签名。按字符数折算（base64 之类的密文近似 4 字符一个 token）。明文条目（reasoning.text 的 text、
+// reasoning.summary 的 summary）流里收到时就拼进了 b.text（openai.ts reasoningText），已经算过；只有 b.text 为空时才按它们算
+function opaqueThinkingChars(b: Extract<Block, { t: "thinking" }>): number {
+  let n = b.redacted?.length ?? 0;
+  const plainCounted = b.text.length > 0;
+  for (const d of b.details ?? []) {
+    for (const k of plainCounted ? (["data", "signature"] as const) : (["data", "summary", "text", "signature"] as const)) {
+      const v = d[k];
+      if (typeof v === "string") n += v.length;
+    }
   }
   return n;
 }
@@ -87,7 +109,8 @@ export function compactionWindow(state: AgentState): number {
 function blocksChars(blocks: Block[]): number {
   let n = 0;
   for (const b of blocks) {
-    if (b.t === "text" || b.t === "thinking") n += b.text.length;
+    if (b.t === "text") n += b.text.length;
+    else if (b.t === "thinking") n += b.text.length + opaqueThinkingChars(b);
     else if (b.t === "tool_call") n += JSON.stringify(b.args).length + b.name.length;
     else if (b.t === "tool_result") n += blocksChars(b.content);
     else if (b.t === "image") n += 2000; // rough cost of an image
@@ -135,26 +158,32 @@ export async function ensureContextFits(state: AgentState, signal?: AbortSignal)
     if (!micro && microCompact(state) > 0) noteMicro();
   };
 
-  if (microCompact(state, MICRO_MIN_RECLAIM_TOKENS) > 0) {
-    noteMicro();
+  // 微压缩先空跑：腾完能回到线下才真改写。腾完仍要整段压缩的话就不改写——就地改写会让前缀从第一处改写断开，紧接着的
+  // inline 摘要请求（整段历史）就吃不到上一轮写下的缓存；整段压缩这次做不成时由 smallMicro 照旧兜底。
+  const fullBlocked = state.compactionFailures >= MAX_FAILURES || state.messages.length <= KEEP_HEAD + 2;
+  // Full compaction is lossy. Give the agent one turn to persist durable facts
+  // before summarizing the middle of its transcript. Micro-compaction is
+  // recoverable (tool calls survive), so it does not need this gate.
+  const auditGate = state.memoryAuditRequired && !state.preCompactAuditPassed;
+  const reclaim = microCompact(state, MICRO_MIN_RECLAIM_TOKENS, true);
+  if (reclaim > 0 && (fullBlocked || auditGate || usedAfterMicro(state, estimate, reclaim) < limit - BUFFER_TOKENS)) {
+    if (microCompact(state, MICRO_MIN_RECLAIM_TOKENS) > 0) noteMicro();
     if (used < limit - BUFFER_TOKENS) return { used, limit, compacted: true };
   }
 
-  if (state.compactionFailures >= MAX_FAILURES || state.messages.length <= KEEP_HEAD + 2) {
+  if (fullBlocked) {
     smallMicro();
     return { used, limit, compacted: micro };
   }
 
-  // Full compaction is lossy. Give the agent one turn to persist durable facts
-  // before summarizing the middle of its transcript. Micro-compaction above is
-  // recoverable (tool calls survive), so it does not need this gate.
-  if (state.memoryAuditRequired && !state.preCompactAuditPassed) {
+  if (auditGate) {
     return { used, limit, compacted: micro, auditRequired: true };
   }
 
   try {
-    await compact(state, limit, signal);
-    const newEstimate = afterCompaction(state);
+    await preCompactHook(state, "auto", signal);
+    const done = await compact(state, limit, signal);
+    const newEstimate = afterCompaction(state, done.todosShown);
     return { used: newEstimate, limit, compacted: true };
   } catch {
     // 用户点了停止：不算失败（连停三次不该把压缩熔断掉），也不再动转录
@@ -165,8 +194,16 @@ export async function ensureContextFits(state: AgentState, signal?: AbortSignal)
   }
 }
 
+// 微压缩腾出 freed 之后的用量（与 ensureContextFits 里 noteMicro 的算法一致：实测下限按同一比例缩）
+function usedAfterMicro(state: AgentState, estimate: number, freed: number): number {
+  const after = Math.max(0, estimate - freed);
+  const measured = state.lastContextTokens > 0 && estimate > 0 ? Math.round((state.lastContextTokens * after) / estimate) : state.lastContextTokens;
+  return Math.max(after, measured);
+}
+
 // 整段压缩成功之后的账（主动压缩与 compactNow 共用）；返回压完的估算用量。
-function afterCompaction(state: AgentState): number {
+// todosShown = 回填里已经带了待办清单（下一次请求不必再挂一份提醒）
+function afterCompaction(state: AgentState, todosShown: boolean): number {
   state.preCompactAuditPassed = false;
   state.preCompactAuditPrompted = false;
   // The pre-compaction checkpoint protected facts learned so far. Work after
@@ -174,8 +211,8 @@ function afterCompaction(state: AgentState): number {
   state.memoryAuditCompleted = !state.memoryAuditRequired || state.memoryAuditAutoSkipped;
   state.memoryAuditNudges = 0;
   state.compactionFailures = 0;
-  // The plan context was just lossy-compressed; make the loop re-show todos.
-  state.turnsSinceTodoSeen = 999;
+  // 计划上下文刚被有损压缩：回填里没带待办清单，就让 loop 在下一次请求末尾带一份
+  state.turnsSinceTodoSeen = todosShown ? 0 : 999;
   const newEstimate = estimateTokens(state.system, state.messages);
   state.lastContextTokens = newEstimate;
   return newEstimate;
@@ -195,8 +232,10 @@ export async function compactNow(state: AgentState, signal?: AbortSignal): Promi
   if (freed > 0) state.noteRewrite("micro-compaction");
   if (state.messages.length > KEEP_HEAD + 2) {
     try {
-      await compact(state, limit, signal);
-      afterCompaction(state);
+      // reactive：整段历史本身就发不出去，摘要只能走 sidecar
+      await preCompactHook(state, "auto", signal);
+      const done = await compact(state, limit, signal, true);
+      afterCompaction(state, done.todosShown);
       return true;
     } catch {
       state.compactionFailures++;
@@ -208,29 +247,24 @@ export async function compactNow(state: AgentState, signal?: AbortSignal): Promi
 
 // C8（X42、A3）：用户手动「立即压缩」。不看阈值、也不像 compactNow 那样把现在的大小记成「provider 拒过的窗口」；按现在的
 // 用量切（尾部留它的 40%），所以用量不高时也压得下去。压不了（历史太短、压完没变短）就抛错，由调用方如实报。
-export async function compactManually(state: AgentState, signal?: AbortSignal): Promise<{ before: number; after: number }> {
+// trigger 报给 PreCompact hook：用户点的「立即压缩」是 manual，空闲压缩是 auto
+export async function compactManually(state: AgentState, signal?: AbortSignal, trigger: "manual" | "auto" = "manual"): Promise<{ before: number; after: number }> {
   const before = contextTokens(state);
   if (state.messages.length <= KEEP_HEAD + 2) throw new Error("nothing to compact yet");
-  await compact(state, Math.min(state.adapter.capabilities.contextWindow, before), signal);
-  return { before, after: afterCompaction(state) };
+  await preCompactHook(state, trigger, signal);
+  const done = await compact(state, Math.min(state.adapter.capabilities.contextWindow, before), signal);
+  return { before, after: afterCompaction(state, done.todosShown) };
 }
 
 // C8：「带摘要开新会话」的开头——把整段对话（不留尾部）压成一条摘要，和压缩摘要同一个形状（用户原话 + 笔记 + 锚点
-// 索引），前面说明接续自哪个会话。摘要写不出来就换成确定性的笔记（同压缩）。
+// 索引），前面说明接续自哪个会话。笔记与压缩走同一套（先 inline、写不成退回 sidecar、再不行确定性笔记）。
 export const HANDOFF_KIND = "handoff-summary";
 export async function handoffSummary(state: AgentState, fromTitle: string, signal?: AbortSignal): Promise<Msg> {
   const all = state.messages;
   if (!all.length) throw new Error("nothing to summarize yet");
-  const limit = state.adapter.capabilities.contextWindow;
-  const userBudget = Math.min(20_000, Math.floor(limit * 0.08), Math.floor(estimateTokens("", all) * 0.5));
-  const prepared = prepareSummary(all, userBudget);
-  let notes: string;
-  try {
-    notes = await summarize(state.adapter, state.materializeMessages(all), signal, (u) => state.recordSideUsage("compaction", u), state.profile.side.summary);
-  } catch (e) {
-    if (signal?.aborted) throw e;
-    notes = deterministicNotes((e as Error).message);
-  }
+  const limit = compactionWindow(state);
+  const prepared = prepareSummary(all, userWordsBudget(limit, all), anchorCaps(limit));
+  const notes = await writeNotes(state, { replaced: all, tail: [], limit, signal, handoff: true });
   const from = fromTitle.trim() ? ` ("${fromTitle.trim().slice(0, 80)}")` : "";
   return {
     role: "user",
@@ -249,7 +283,8 @@ export async function handoffSummary(state: AgentState, fromTitle: string, signa
 // can re-run anything it still needs). Protects the head, the newest messages,
 // and the latest Read of each file (the model may be mid-edit against it).
 // R11：先算能腾出多少（token），不到 minReclaim 就一处也不改（返回 0）；返回值是腾出的 token 数。
-function microCompact(state: AgentState, minReclaim = 0): number {
+// dryRun = 只算能腾多少，不改写、不存档
+function microCompact(state: AgentState, minReclaim = 0, dryRun = false): number {
   const msgs = state.messages;
 
   const protectedIds = new Set<string>();
@@ -259,9 +294,9 @@ function microCompact(state: AgentState, minReclaim = 0): number {
     if (m.role !== "assistant") continue;
     for (const b of m.content) {
       if (b.t === "tool_call") toolNames.set(b.id, b.name);
-      if (b.t === "tool_call" && b.name === "Read" && typeof b.args?.path === "string") {
-        lastReadByPath.set(b.args.path, b.id);
-      }
+      // 转录里是模型的原话：file_path 这类别名也认（tool-input.ts toolArgStr）
+      const readPath = b.t === "tool_call" && b.name === "Read" ? toolArgStr("Read", b.args, "path") : undefined;
+      if (b.t === "tool_call" && readPath) lastReadByPath.set(readPath, b.id);
     }
   }
   for (const id of lastReadByPath.values()) protectedIds.add(id);
@@ -283,6 +318,7 @@ function microCompact(state: AgentState, minReclaim = 0): number {
     }
   }
   if (freed <= 0 || freed < minReclaim) return 0;
+  if (dryRun) return Math.ceil(freed);
   // R13：清掉之前先把这批旧输出存成一个文件（每条一个「### [tool_result <id>]」头），占位里给路径和头——要看就 Grep / Read，
   // 不用重跑工具（重跑可能有副作用、结果也可能变了）。没接存储（子 agent、测试、eval）或写不成就用老的占位。
   const results = picks.map(({ m, j }) => m.content[j] as Extract<Block, { t: "tool_result" }>);
@@ -368,52 +404,123 @@ export const summaryMessage = (notes: string): Msg => ({
   content: [{ t: "text", text: renderSummary({ notes, userWords: [], omitted: 0, omittedAt: -1, anchors: { files: [], commands: [], errors: [], ids: [] }, archives: [] }) }],
 });
 
-// R10（一）：摘要消息 = 被压掉那段里的用户原话（原样）+ LLM 笔记 + 机械锚点索引（形状见 compaction-shape.ts）。
-// 摘要写不出来（两次都没写、超时、出错）就换成确定性的笔记照样压；用户点了停止就不压。压完没变短就不提交。
-// R10（二）：再加 Context Recovery——原文归档成纯文本，摘要末尾写明在哪、怎么读。
-async function compact(state: AgentState, limit: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) throw new Error("compaction aborted");
-  // 尾部按「窗口扣掉 system」的 40% 留——system 也占窗口。按整个窗口算的话，system 大、窗口小（本机 64K 模型 +
-  // 1.6 万 token 的 system）时压完就贴着触发线，几轮一压（压缩召回 eval 的棘轮嫌疑：一个长会话 27 → 33 次、每次只腾出
-  // 16–31%；扣掉之后 19 次、29–42%，召回不变）。大窗口模型上 system 占比小，几乎没差别。
-  const { head, middle, tail } = planCompaction(state.messages, Math.max(0, limit - estimateTokens(state.system, [])));
-  if (middle.length === 0) throw new Error("nothing to compact");
+// 用户原话的预算：4 万 token、窗口的 8%、被压掉那段的一半，取最小——原样保留不能反过来让压缩压不下去。
+// （15% 时压缩召回 eval 在一个用户消息很多的长会话上报了棘轮嫌疑：每次只腾出 12–16%；kimi / Codex 约 7–8%。所以比例不动，
+// 只把绝对上限从 2 万放到 4 万：只在压缩窗口超过 25 万 token 时才起作用。）
+const userWordsBudget = (limit: number, replaced: Msg[]): number =>
+  Math.min(40_000, Math.floor(limit * 0.08), Math.floor(estimateTokens("", replaced) * 0.5));
 
-  // 用户原话的预算：2 万 token、窗口的 8%、被压掉那段的一半，取最小——原样保留不能反过来让压缩压不下去。
-  // （15% 时压缩召回 eval 在一个用户消息很多的长会话上报了棘轮嫌疑：每次只腾出 12–16%；kimi / Codex 约 7–8%。）
-  const userBudget = Math.min(20_000, Math.floor(limit * 0.08), Math.floor(estimateTokens("", middle) * 0.5));
-  const prepared = prepareSummary(middle, userBudget);
-  // 刚换到窗口更小的型号：摘要交给换之前的那个写（装得下这段、缓存也还热）；它写不出来再退回现在的型号
-  const summarizers = state.switchSummarizer ? [state.switchSummarizer, state.adapter] : [state.adapter];
-  let notes = "";
+// 压完的总量（system + 头 + 摘要 + 回填 + 尾部）超过压缩窗口的这个比例，就按优先级裁回填——回填不能让压缩只腾出一点
+// （另有「压完没变短就不提交」兜底）
+const RESTORE_CEILING = 0.6;
+const INLINE_MARGIN = 1_000; // inline 请求算剩余空间时给估算误差留的余量
+const INLINE_MIN_OUTPUT = 2_048; // inline 能给的输出上限低于这个（或型号上限）就不走 inline
+
+interface NotesJob {
+  replaced: Msg[]; // 摘要要替换掉的那部分（压缩 = 中段；带摘要开新会话 = 全部）
+  tail: Msg[]; // 原样留下的尾部
+  limit: number; // 这次压缩按的窗口
+  handoff?: boolean;
+  reactive?: boolean; // provider 刚报超窗（compactNow）：整段历史本身就发不出去，不走 inline
+  signal?: AbortSignal;
+}
+
+// inline 摘要请求的形状：主请求（前缀与上一轮相同）+ 指令；装不下就返回 null（走 sidecar）
+function inlineRequest(state: AgentState, job: NotesJob, instruction: string): { turn: Turn; budget: { maxOutputTokens: number; thinking?: ThinkingLevel } } | null {
+  const side = state.profile.side.summary;
+  if (side.mode !== "inline" || job.reactive || state.switchSummarizer || effectiveWindow(state) < INLINE_MIN_WINDOW) return null;
+  const caps = state.adapter.capabilities;
+  const cap = caps.maxOutputTokens > 0 ? caps.maxOutputTokens : Infinity;
+  const room = effectiveWindow(state) - contextTokens(state) - Math.ceil(textTokens(instruction)) - INLINE_MARGIN;
+  const turn = state.toTurn();
+  const thinking = side.thinking === "inherit" ? turn.budget.thinking : side.thinking;
+  // 开着思考时思考 token 也算在输出上限里：上限至少给到主请求的那么大（改 max_tokens 不影响缓存），免得思考挤掉后几节正文
+  const thinks = Boolean(thinking && thinking !== "off");
+  const base = Math.max(summaryOutputTokens(side.maxOutputTokens, job.limit), thinks ? turn.budget.maxOutputTokens : 0);
+  const out = Math.min(base, cap, room);
+  if (out < Math.min(INLINE_MIN_OUTPUT, cap)) return null;
+  return { turn, budget: { maxOutputTokens: Math.floor(out), ...(thinking ? { thinking } : {}) } };
+}
+
+// 摘要笔记：先 inline（主模型接着原对话写），写不成退回 sidecar（刚换到窗口更小的型号时先交给换之前的那个写），都写不出来
+// 换成确定性的笔记；用户点了停止就抛出去（不压）。
+async function writeNotes(state: AgentState, job: NotesJob): Promise<string> {
   let lastError = "";
-  for (const by of summarizers) {
-    // 摘要旁路的思考 / 输出上限按写摘要的那个型号的档案取
-    const side = (by === state.adapter ? state.profile : state.switchSummarizerProfile ?? state.profile).side.summary;
+  const instruction = inlineInstruction({ tail: job.tail, handoff: job.handoff });
+  const inline = inlineRequest(state, job, instruction);
+  if (inline) {
     try {
-      notes = await summarize(by, state.materializeMessages(middle), signal, (u) => state.recordSideUsage("compaction", u, by), side);
-      break;
+      const replacedChars = job.replaced.reduce((n, m) => n + blocksChars(m.content), 0);
+      return await summarizeInline(state.adapter, inline.turn, instruction, inline.budget, replacedChars, job.signal, (u) => state.recordSideUsage("compaction", u));
     } catch (e) {
-      if (signal?.aborted) throw e;
+      if (job.signal?.aborted) throw e;
       lastError = (e as Error).message;
     }
   }
-  if (!notes) notes = deterministicNotes(lastError);
+  const summarizers = state.switchSummarizer ? [state.switchSummarizer, state.adapter] : [state.adapter];
+  for (const by of summarizers) {
+    // 摘要旁路的思考 / 输出上限按写摘要的那个型号的档案取；转录预算按它能收多大的请求
+    const side = (by === state.adapter ? state.profile : state.switchSummarizerProfile ?? state.profile).side.summary;
+    const window = by === state.adapter ? effectiveWindow(state) : by.capabilities.contextWindow;
+    try {
+      return await summarize(by, state.materializeMessages(job.replaced), job.signal, (u) => state.recordSideUsage("compaction", u, by), side, { window, scope: job.limit });
+    } catch (e) {
+      if (job.signal?.aborted) throw e;
+      lastError = (e as Error).message;
+    }
+  }
+  return deterministicNotes(lastError);
+}
+
+// R10（一）：摘要消息 = 被压掉那段里的用户原话（原样）+ LLM 笔记 + 机械锚点索引（形状见 compaction-shape.ts）。
+// 摘要写不出来（两次都没写、超时、出错）就换成确定性的笔记照样压；用户点了停止就不压。压完没变短就不提交。
+// R10（二）：再加 Context Recovery——原文归档成纯文本，摘要末尾写明在哪、怎么读。
+// 摘要之后紧跟一条回填的工作现场（compaction-restore.ts）；回填过的文件记成已读。返回这次回填里有没有待办清单。
+async function compact(state: AgentState, limit: number, signal?: AbortSignal, reactive = false): Promise<{ todosShown: boolean }> {
+  if (signal?.aborted) throw new Error("compaction aborted");
+  const all = state.messages;
+  // 尾部按「窗口扣掉 system」的 40% 留——system 也占窗口。按整个窗口算的话，system 大、窗口小（本机 64K 模型 +
+  // 1.6 万 token 的 system）时压完就贴着触发线，几轮一压（压缩召回 eval 的棘轮嫌疑：一个长会话 27 → 33 次、每次只腾出
+  // 16–31%；扣掉之后 19 次、29–42%，召回不变）。大窗口模型上 system 占比小，几乎没差别。
+  const { head, middle, tail } = planCompaction(all, Math.max(0, limit - estimateTokens(state.system, [])));
+  if (middle.length === 0) throw new Error("nothing to compact");
+
+  const prepared = prepareSummary(middle, userWordsBudget(limit, middle), anchorCaps(limit));
+  // 回填的现场在摘要请求之前收集（这期间不跑工具，磁盘不会变）；上一次压缩回填的那条若还在尾部里就拿掉，免得一次次叠上去
+  // 回填的预算与上限按真实的压缩窗口算：手动 / 空闲压缩的 limit 是此刻的用量（尾部按它切），按它算的话窗口还空着一大半，
+  // 回填的文件却被裁光。上限 = 窗口与 limit 取大的 60%，且不超过触发线（压完不能一进门就又要压）。
+  const window = compactionWindow(state);
+  const ceiling = Math.min(window - BUFFER_TOKENS, Math.floor(Math.max(limit, window) * RESTORE_CEILING));
+  let restore: Restore | null = await gatherRestore(state, all, all.length - tail.length, window);
+  const keptTail = tail.filter((m) => messageKind(m) !== RESTORE_KIND);
+  const notes = await writeNotes(state, { replaced: middle, tail: keptTail, limit, signal, reactive });
   // R10（二）：被压掉那段的原文归档，摘要末尾列出文件与读法。归档写不成就不列这次的（照样压，只是少一个回查点）。
   const chunks = state.compactionArchive ? archiveChunks(middle) : [];
   const files = chunks.length ? state.compactionArchive!.plan(chunks.length) : [];
-  // O6（K63）：还在跑的后台 job 写在摘要末尾——锚点索引收不到 job id，压完模型就不知道自己有什么在跑
-  const running = state.ctx.ownerId ? runningJobsSummary(state.ctx.ownerId) : "";
-  const jobsNote = running
-    ? `\n\nBackground jobs still running for this session: ${running}. Bash(wait:"<id>") waits for one to finish; Bash(poll:"<id>") reads its output now.`
-    : "";
-  const withSummary = (archives: string[]): Msg[] => [
-    ...head,
-    { role: "user", content: [{ t: "text", text: renderSummary({ ...prepared, notes, archives }) + jobsNote }], origin: "harness", kind: "compaction-summary" },
-    ...tail,
-  ];
-  let next = withSummary([...prepared.archives, ...files]);
-  if (estimateTokens(state.system, next) >= estimateTokens(state.system, state.messages)) {
+  const build = (archives: string[]): Msg[] => {
+    const restored = restore ? renderRestore(restore) : null;
+    return [
+      ...head,
+      { role: "user", content: [{ t: "text", text: renderSummary({ ...prepared, notes, archives }) }], origin: "harness", kind: "compaction-summary" },
+      ...(restored ? [restored] : []),
+      ...keptTail,
+    ];
+  };
+  let archives = [...prepared.archives, ...files];
+  let next = build(archives);
+  const before = estimateTokens(state.system, all);
+  // 超过上限、或回填让压完反而不比压前短（用量本来就不高时的手动压缩）：按优先级裁回填
+  const tooBig = (msgs: Msg[]) => {
+    const n = estimateTokens(state.system, msgs);
+    return n > ceiling || n >= before;
+  };
+  while (restore && tooBig(next)) {
+    const trimmed = trimRestore(restore);
+    if (!trimmed) break;
+    restore = trimmed;
+    next = build(archives);
+  }
+  if (estimateTokens(state.system, next) >= before) {
     throw new Error("compaction would not shrink the context");
   }
   if (files.length) {
@@ -421,7 +528,8 @@ async function compact(state: AgentState, limit: number, signal?: AbortSignal): 
       await state.compactionArchive!.write(files.map((path, i) => ({ path, text: chunks[i] })));
     } catch (e) {
       console.error(`[compaction] context-recovery archive not written: ${(e as Error).message}`);
-      next = withSummary(prepared.archives);
+      archives = prepared.archives;
+      next = build(archives);
     }
   }
   // 空闲压缩（idle-compact.ts）：摘要与归档都是 await 出来的，这期间用户可能发了话（startRun 会先掐掉它）。提交前最后看一眼：
@@ -435,82 +543,14 @@ async function compact(state: AgentState, limit: number, signal?: AbortSignal): 
   state.noteRewrite("compaction"); // Q4：压缩边界是唯一合法的全量重建点
   // C4（N09 第 3 步）：借这次全量重建把 system 也按当前的模式、GUIDE、项目知识……重建一遍（会话挂了 rebuildSystem 才做）
   state.rebuildSystemAfterCompaction();
-  // Compaction is lossy for file state; force fresh Reads before future Edits.
-  state.ctx.readFileState.clear();
+  // 压缩对文件的了解是有损的：已读状态只留回填过的文件（按回填的范围），其余的改之前要重新 Read
+  applyRestoredReads(state.ctx.readFileState, restore);
+  // 已加载的延迟工具：压完的上下文里还看得到说明的（尾部里的、回填里的）才算加载（compaction-restore.ts 文件头）
+  applyRestoredTools(state, restore);
+  return { todosShown: Boolean(restore?.todos) };
 }
 
 function stripThinking(m: Msg): Msg {
   if (!m.content.some((b) => b.t === "thinking")) return m;
   return { ...m, content: m.content.filter((b) => b.t !== "thinking") };
-}
-
-// 压缩摘要是主线之外的一次旁路请求；Q2 的分窗器按这个 system 认出它（认身份，不认措辞）。
-export const COMPACTION_SYSTEM =
-  "You compress an agent transcript. Preserve concrete facts the agent will need to keep working: " +
-  "files read and their key contents, decisions made, commands run and their results, current progress, " +
-  "and remaining work. Be specific (names, paths, values). Prefer 'read X, found Y' over quoting. " +
-  "Keep what is finished apart from what is not: end with a 'Done (do not redo)' list — edits already applied, files created, " +
-  "commands that succeeded, commits, pushes, messages sent — and a 'Remaining' list of what is still open. " +
-  "Only list an action as done when its result appears in the transcript.";
-
-// #83：用户消息里以前只有转录本身、没有一句指令，关着思考的模型常把它当成待续写的数据——本机 Qwen 连跑 5 次有 2 次
-// 只回「.」或几十个字，压缩于是悄悄清空了上下文。现在转录包进 <transcript>、后面明说「现在写摘要」；输出短得离谱就
-// 重试一次，还不行就按压缩失败处理（失败计数、满 3 次熔断）——宁可报错，也不悄悄丢上下文。
-export const SUMMARY_INSTRUCTION = "Write the summary of the transcript above now, following your instructions.";
-const DEGENERATE_SUMMARY_CHARS = 200; // 输入超过 2000 字符时，摘要短于这个数就算没写
-const SUMMARY_ATTEMPTS = 2;
-const SUMMARY_INPUT_CHARS = 60_000; // 交给摘要器的转录上限；超了按条均匀采样
-// 摘要请求的思考与输出上限（模型档案 side.summary 的默认值）
-export const SUMMARY_BUDGET: Readonly<Required<Budget>> = Object.freeze({ maxOutputTokens: 1500, thinking: "off" });
-// R10：摘要请求的时限（到点就走确定性笔记）；DIMENSIO_SUMMARY_TIMEOUT_MS 给测试调短
-const summaryTimeoutMs = (): number => Number(process.env.DIMENSIO_SUMMARY_TIMEOUT_MS) || 180_000;
-
-// signal：run 的停止信号——用户点了停止，摘要请求不再发（#31）；另有自己的时限。
-// O8：onUsage = 这次摘要请求（每次尝试）的用量，给用量账本记一笔（任务 compaction）
-// side = 这次摘要的思考 / 输出上限（调用方从模型档案 side.summary 取；不给 = SUMMARY_BUDGET）
-export async function summarize(
-  adapter: ProviderAdapter,
-  middle: Msg[],
-  signal?: AbortSignal,
-  onUsage?: (u: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }) => void,
-  side: Required<Budget> = SUMMARY_BUDGET,
-): Promise<string> {
-  const transcript = sampleTranscript(middle.map(renderMsg), SUMMARY_INPUT_CHARS);
-  for (let attempt = 1; ; attempt++) {
-    if (signal?.aborted) throw new Error("summary aborted");
-    const bounded = signal ? AbortSignal.any([signal, AbortSignal.timeout(summaryTimeoutMs())]) : AbortSignal.timeout(summaryTimeoutMs());
-    let out = "";
-    const stream = adapter.stream(
-      {
-        system: COMPACTION_SYSTEM,
-        messages: [{ role: "user", content: [{ t: "text", text: `<transcript>\n${transcript}\n</transcript>\n\n${SUMMARY_INSTRUCTION}` }] }],
-        tools: [],
-        budget: { maxOutputTokens: side.maxOutputTokens, thinking: side.thinking },
-      },
-      bounded,
-    );
-    for await (const ev of stream) {
-      if (ev.e === "text_delta") out += ev.text;
-      else if (ev.e === "usage") onUsage?.(ev);
-      else if (ev.e === "error") throw new Error(ev.kind);
-    }
-    if (bounded.aborted) throw new Error(signal?.aborted ? "summary aborted" : "summary timed out");
-    const degenerate = !out.trim() || (transcript.length > 2000 && out.trim().length < DEGENERATE_SUMMARY_CHARS);
-    if (!degenerate) return out;
-    if (attempt >= SUMMARY_ATTEMPTS) throw new Error(`degenerate summary (${out.trim().length} chars for ${transcript.length} chars of transcript)`);
-  }
-}
-
-function renderMsg(m: Msg): string {
-  const parts = m.content.map((b) => {
-    if (b.t === "text") return b.text;
-    if (b.t === "thinking") return "";
-    if (b.t === "tool_call") return `[tool ${b.name} ${JSON.stringify(b.args).slice(0, 500)}]`;
-    if (b.t === "tool_result") {
-      const txt = b.content.map((c) => (c.t === "text" ? c.text : "")).join("");
-      return `[result ${b.ok ? "ok" : "err"}: ${txt.slice(0, 1500)}]`;
-    }
-    return "";
-  });
-  return `${m.role.toUpperCase()}: ${parts.filter(Boolean).join("\n")}`;
 }

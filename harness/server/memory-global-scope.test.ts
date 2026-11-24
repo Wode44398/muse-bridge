@@ -20,9 +20,8 @@ import {
   memoryDirKey,
   memoryRoot,
   promoteMemory,
-  renderAllMemoryForPrompt,
-  renderGlobalMemoryForPrompt,
 } from "./memory.ts";
+import { renderAllMemoryForPrompt, renderGlobalMemoryForPrompt } from "./memory-index.ts";
 import { buildMemoryOverview, GLOBAL_WS } from "./memory-overview.ts";
 import { memoryUsage, noteRecalledDocs } from "./memory-usage.ts";
 import { Sandbox } from "./sandbox.ts";
@@ -110,14 +109,14 @@ test("开关开着：两个工作区的全局层各一份，Remember / Recall / 
   const ctxB = ctxFor(wsB);
   const saved = await rememberTool.run({ ...note("Commit messages in Chinese", "user.commit-language", "Write git commit messages in Chinese."), layer: "global" }, ctxA);
   assert.equal(saved.ok, true, text(saved));
-  assert.match(text(saved), /global notes apply in every workspace/, "全局层的治理规则照旧（待确认）");
+  assert.ok(text(saved).includes(memoryDir(gA)), "结果里给的是 A 自己那份全局层的目录");
   assert.ok(fs.existsSync(path.join(memoryDir(gA), "commit-messages-in-chinese.md")));
   assert.equal(fs.existsSync(memoryDir(GLOBAL_MEMORY)), false, "不碰共用的那份");
   assert.equal(fs.existsSync(memoryDir(gB)), false);
   assert.equal(fs.existsSync(memoryDir(wsA)), false, "没写进工作区层");
 
   // Recall：A 看得到，B 列表 / 按 id / layer:global 都看不到
-  assert.match(text(await recallTool.run({ id: "global:commit-messages-in-chinese" }, ctxA)), /layer: global/);
+  assert.match(text(await recallTool.run({ id: "global:commit-messages-in-chinese" }, ctxA)), /global: applies in every workspace/);
   assert.match(text(await recallTool.run({}, ctxA)), /\[global:commit-messages-in-chinese\]/);
   assert.match(text(await recallTool.run({}, ctxB)), /memory is empty/);
   assert.match(text(await recallTool.run({ id: "commit-messages-in-chinese" }, ctxB)), /No memory "commit-messages-in-chinese"/);
@@ -129,10 +128,10 @@ test("开关开着：两个工作区的全局层各一份，Remember / Recall / 
   assert.ok(fromA.results.some((r) => r.document.id === "memory:global:commit-messages-in-chinese"), JSON.stringify(fromA.results.map((r) => r.document.id)));
   assert.ok(!fromB.results.some((r) => r.document.id.startsWith("memory:global:")), JSON.stringify(fromB.results.map((r) => r.document.id)));
 
-  // 确认后只进 A 的提示词
+  // 只进 A 的提示词（记忆放宽：模型写的全局条目默认生效，不用先确认）
   promoteMemory(gA, "commit-messages-in-chinese");
-  assert.match(renderAllMemoryForPrompt(wsA)!, /^Global notes[\s\S]*Commit messages in Chinese/);
-  assert.equal(renderAllMemoryForPrompt(wsB), undefined);
+  assert.match(renderAllMemoryForPrompt(wsA), /Global — [^\n]*\n- Commit messages in Chinese/);
+  assert.doesNotMatch(renderAllMemoryForPrompt(wsB), /Commit messages in Chinese/);
   assert.equal(renderGlobalMemoryForPrompt(gB), undefined);
 
   // 自动召回记用量：记在 A 自己那份

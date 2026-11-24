@@ -1,5 +1,6 @@
 // Bash 工具本体：参数分派、前台执行与转后台。
 import { spawn } from "node:child_process";
+import path from "node:path";
 import type { Tool, ToolContext, ToolRunResult } from "../types.ts";
 import { fail, lenientVerify, verifyIgnored } from "../types.ts";
 import { parseShell } from "../shell-words.ts";
@@ -11,10 +12,26 @@ import { type BashJob, BG_DEFAULT_TIMEOUT_MS, BG_MAX_TIMEOUT_MS, BOOT_TAG, foreg
 import { closeSpill, killTree, type OutBuf, renderOut, spillFor, streamPump, whenFinished } from "./output.ts";
 import { commandPolicyViolation, outsideReadDirs, shellDialect } from "./policy.ts";
 import { commandCanVerify, unattributableFail, unattributableVerify, VERIFY_ERREXIT, verifyOutcome } from "./verify.ts";
+import { commitCwd, CWD_ARG, cwdFile, cwdTrap, dropCwdFile, startDir, takeCwd } from "./cwd.ts";
+import { ARG_ALIASES } from "../arg-aliases.ts";
+
+// 派发时带来的当前目录（loop 只在它不是工作区根时写进 CWD_ARG）：权限视图里的相对路径按它补成绝对路径
+const viewCwd = (args: Record<string, unknown>): string | null => (typeof args[CWD_ARG] === "string" && args[CWD_ARG] ? (args[CWD_ARG] as string) : null);
+const absolutize = (cwd: string | null, words: string[]): string[] =>
+  cwd ? words.map((w) => (!w || w.startsWith("-") || path.isAbsolute(w) || /^~|[$`]|^[a-z][a-z0-9+.-]*:\/\//i.test(w) ? w : path.resolve(cwd, w))) : words;
 
 export const bashTool: Tool = {
   effect: "exec",
   concurrencySafe: false,
+  aliases: ARG_ALIASES.Bash,
+  shellCwd: true,
+  // 只读命令（与权限判定的只读降级同一个判法）和别的只读工具一样进并行批；并行批里的 cd 不带回会话
+  concurrentFor(args) {
+    const command = typeof args.command === "string" ? args.command.trim() : "";
+    if (!command || args.background === true || args.verify === true || args.jobs === true) return false;
+    if ([args.poll, args.wait, args.kill].some((v) => typeof v === "string" && v.trim())) return false;
+    return readOnlyCommand(parseShell(command, shellDialect()), viewCwd(args) !== null);
+  },
   // P4：按子命令给规则判定（A5）、纯读命令降为 read（C9）、分析不了的高危命令转问（K5）。硬拒仍在 run() 里。
   // P5：顺带给「本会话按前缀允许」的候选前缀。P12：检查点兜不住的操作也转问——这两类都只给字面规则、不给前缀。
   permissionView(args) {
@@ -25,10 +42,15 @@ export const bashTool: Tool = {
     const parsed = parseShell(command, shellDialect());
     const risk = assessParsed(parsed, command);
     const prefixes = stablePrefixes(parsed);
-    const touches = shellTouches(parsed);
-    const destructive = destructiveView(parsed, command);
+    // 当前目录不在工作区根上：写目标 / 提到的路径按它补成绝对路径（路径规则、拒绝台账、改动记账都按落点判）；
+    // 而且等于「先 cd 过去再跑」——git 读命令会读那里的仓库配置，不再降为只读（与同一条命令里带 cd 同一道阀）
+    const cwd = viewCwd(args);
+    const elsewhere = cwd !== null;
+    const touched = shellTouches(parsed, elsewhere);
+    const touches = { writes: absolutize(cwd, touched.writes), edits: absolutize(cwd, touched.edits), mentions: absolutize(cwd, touched.mentions) };
+    const destructive = destructiveView(parsed, command, elsewhere);
     return {
-      ...(readOnlyCommand(parsed) && args.background !== true ? { effect: "read" as const } : {}),
+      ...(readOnlyCommand(parsed, elsewhere) && args.background !== true ? { effect: "read" as const } : {}),
       subjects: ruleSubjects(parsed),
       ...(parsed.unanalyzable ? { partial: true } : {}),
       ...(!risk.deny && risk.ask ? { ask: risk.ask } : {}),
@@ -49,20 +71,24 @@ export const bashTool: Tool = {
     const command = typeof args.command === "string" ? args.command.trim() : "";
     if (!command) return null;
     const readRoots = ctx.sandbox.grantedReadRoots();
-    const policy = commandPolicyViolation(command, ctx.sandbox.root, ctx.sandbox.access, readRoots);
+    const cwd = startDir(args, ctx).dir;
+    const policy = commandPolicyViolation(command, ctx.sandbox.root, ctx.sandbox.access, readRoots, cwd);
     if (!policy) return null;
     // P13：只差「读工作区外」的不在这里否决——run() 报出结构化的越界，loop 问人要不要放行这次读
-    if (outsideReadDirs(command, ctx.sandbox.root, ctx.sandbox.access, readRoots)) return null;
+    if (outsideReadDirs(command, ctx.sandbox.root, ctx.sandbox.access, readRoots, cwd)) return null;
     return { veto: { summary: "blocked", content: policy } };
   },
   def: {
     name: "Bash",
     description:
-      `Run a shell command in the sandbox working directory using ${shell.kind}. ` +
+      `Run a shell command with ${shell.kind}. ` +
       (shell.kind === "powershell"
         ? "Use PowerShell syntax. "
         : "Use POSIX sh syntax — this is NOT PowerShell (no `&` call operator, no `@'...'@` here-strings), even on Windows. ") +
-      "State (env, cwd changes) does NOT persist between calls. Quote paths with spaces. " +
+      // 保留目录靠 POSIX 的 EXIT trap：PowerShell 下每次都从工作区根起跑（run() 里 cwdOut 恒为 null），说明跟着分开
+      (shell.kind === "powershell"
+        ? "Every call starts in the workspace root: state (working directory, environment variables) does NOT persist between calls. "
+        : "The first call starts in the workspace root and the working directory persists between calls (a cd carries over); environment variables do not. ") +
       (shell.kind === "bash" && process.platform === "win32"
         ? "Scratch files: this bash resolves /tmp through its own MSYS mount, which native Windows " +
           "programs do NOT share — python/java read \"/tmp/x\" against the current drive instead. " + // guard: tmp-literal ok — 给模型的说明文字，正是在提醒别这么写
@@ -74,10 +100,8 @@ export const bashTool: Tool = {
         : "HOME/USERPROFILE/APPDATA/LOCALAPPDATA point to an isolated scratch home, NOT the user's — to look for installed " +
           "programs or user config use $REAL_USERPROFILE / $REAL_LOCALAPPDATA / $REAL_APPDATA, and when launching a GUI app " +
           "that must run as the real user, export those back as USERPROFILE/LOCALAPPDATA/APPDATA for that command. ") +
-      "Use for builds, tests, git, package managers. Prefer Read/Edit/Grep/Glob over cat/sed/grep/find. " +
-      "For commands longer than ~2 minutes (full test suites, long builds) pass background:true — " +
-      "you get a job id immediately and can keep working; read output with poll, wait for it to finish with wait, stop with kill. " +
-      "Never run a SERVER this way — use the Preview tool for servers.",
+      "For commands longer than ~2 minutes pass background:true: you get a job id at once, then poll / wait / kill it. " +
+      "Servers belong in the Preview tool, not Bash.",
     parameters: {
       type: "object",
       properties: {
@@ -155,10 +179,13 @@ export const bashTool: Tool = {
     }
 
     const readRoots = ctx.sandbox.grantedReadRoots();
-    const policy = commandPolicyViolation(command, ctx.sandbox.root, ctx.sandbox.access, readRoots);
+    const start = startDir(args, ctx);
+    // 记着的目录已经用不了（删了、档位收紧了）：会话的当前目录回到工作区根
+    if (start.note && ctx.shell && ctx.callId && !ctx.parallel) ctx.shell.cwd = undefined;
+    const policy = commandPolicyViolation(command, ctx.sandbox.root, ctx.sandbox.access, readRoots, start.dir);
     if (policy) {
       // P13（X18）：只差「读工作区外」——带上要放行的目录，有人在场时 loop 会问一句、批了就重跑
-      const dirs = outsideReadDirs(command, ctx.sandbox.root, ctx.sandbox.access, readRoots);
+      const dirs = outsideReadDirs(command, ctx.sandbox.root, ctx.sandbox.access, readRoots, start.dir);
       return { ...fail("blocked", policy), ...(dirs ? { outsideRead: { dirs } } : {}) };
     }
 
@@ -176,14 +203,14 @@ export const bashTool: Tool = {
         BG_MAX_TIMEOUT_MS,
         Math.max(1000, Number(args.timeout ?? BG_DEFAULT_TIMEOUT_MS)),
       );
-      return startJob(command, bgTimeout, ctx.sandbox.root, args.verify === true, owner, watch ?? undefined);
+      return withNote(await startJob(command, bgTimeout, start.dir, args.verify === true, owner, watch ?? undefined), start.note);
     }
 
     const asked = Number(args.timeout ?? ctx.limits.bashTimeoutMs);
     const requested = Number.isFinite(asked) ? asked : ctx.limits.bashTimeoutMs;
     // R14（N32）：要的时限超过前台上限，就直接交给后台 job——以前先在前台跑满上限再杀，白等 10 分钟还丢了结果。
     if (requested > ctx.limits.bashMaxTimeoutMs) {
-      const started = await startJob(command, Math.min(BG_MAX_TIMEOUT_MS, requested), ctx.sandbox.root, args.verify === true, owner);
+      const started = await startJob(command, Math.min(BG_MAX_TIMEOUT_MS, requested), start.dir, args.verify === true, owner);
       return prependNote(
         started,
         `(The requested timeout of ${requested} ms is above the ${ctx.limits.bashMaxTimeoutMs} ms foreground limit, so this runs as a background job.)`,
@@ -191,11 +218,14 @@ export const bashTool: Tool = {
     }
     const timeout = Math.min(ctx.limits.bashMaxTimeoutMs, Math.max(1000, requested));
 
-    const runCmd = args.verify === true && shell.kind === "bash" ? VERIFY_ERREXIT + command : command;
+    const verifyMode = args.verify === true && shell.kind === "bash";
+    // 跨调用保留当前目录：loop 派发的、不在并行批里的前台命令才带走 cd（PowerShell 不支持，始终从起跑目录开始）
+    const cwdOut = ctx.shell && ctx.callId && !ctx.parallel && shell.kind !== "powershell" ? cwdFile() : null;
+    const runCmd = (cwdOut ? cwdTrap(cwdOut) : "") + (verifyMode ? VERIFY_ERREXIT : "") + command;
     return await new Promise<ToolRunResult>((resolve) => {
       const startedAt = Date.now();
       const child = spawn(shell.path, shell.argsFor(runCmd), {
-        cwd: ctx.sandbox.root,
+        cwd: start.dir,
         windowsHide: true,
         env: childEnv(),
       });
@@ -239,7 +269,7 @@ export const bashTool: Tool = {
         const id = `job${++jobState.jobSeq}-${BOOT_TAG}`;
         const job: BashJob = {
           id, command, child, out, done: false, exitCode: null, timedOut: false, startedAt, owner,
-          markKilled: finished.markKilled, verifyMode: runCmd !== command, waiters: new Set(),
+          markKilled: finished.markKilled, verifyMode, waiters: new Set(),
         };
         jobState.jobs.set(id, job);
         trackJob(job);
@@ -292,8 +322,9 @@ export const bashTool: Tool = {
         stopTicker();
         ctx.signal?.removeEventListener("abort", abort);
         if (moved) {
-          // 已经转了后台：这次调用早就交回了，这里只给 job 收尾
+          // 已经转了后台：这次调用早就交回了，这里只给 job 收尾（它里面的 cd 不带回会话）
           if (bgTimer) clearTimeout(bgTimer);
+          if (cwdOut) dropCwdFile(cwdOut);
           await closeSpill(out);
           moved.done = true;
           moved.exitCode = code;
@@ -313,6 +344,14 @@ export const bashTool: Tool = {
         if (aborted) body += "\n…[已中止 — 进程树已 kill]";
         const status = timedOut ? "timeout" : aborted ? "aborted" : `exit ${code}`;
         const header = `$ ${command}\n`;
+        // 目录变了说一句（核不过的复位也说）；被中止 / 超时杀掉的不带走目录
+        let cwdNote = "";
+        if (cwdOut && (timedOut || aborted)) dropCwdFile(cwdOut);
+        else if (cwdOut) cwdNote = commitCwd(ctx, start.dir, takeCwd(cwdOut));
+        const parallelCd = ctx.parallel && ctx.shell && /(?:^|[\s;&|(])(?:cd|pushd)(?:\s|$)/.test(command)
+          ? "[This ran in a parallel batch, so its cd does not carry over to later calls.]"
+          : "";
+        const notes = [start.note, cwdNote, parallelCd].filter(Boolean).join("\n");
         // U8（K36）：工具行第二行只说结果
         const outLines = body.split("\n").filter((l) => l.trim()).length;
         const outcome = timedOut
@@ -324,7 +363,7 @@ export const bashTool: Tool = {
           ok: !timedOut && !aborted && code === 0,
           summary: `bash: ${command.slice(0, 60)}${command.length > 60 ? "…" : ""} (${status})`,
           outcome,
-          content: [{ t: "text", text: header + (body || "(no output)") + `\n[${status}]` }],
+          content: [{ t: "text", text: header + (body || "(no output)") + `\n[${status}]` + (notes ? `\n${notes}` : "") }],
           ...(args.verify === true
             ? { verification: verifyOutcome(command, status, !timedOut && !aborted && code === 0, body) }
             : {}),
@@ -343,6 +382,7 @@ export const bashTool: Tool = {
 
       child.on("error", (e) => {
         settled = true;
+        if (cwdOut) dropCwdFile(cwdOut);
         if (fgKey) jobState.foreground.delete(fgKey);
         if (timer) clearTimeout(timer);
         stopTicker();
@@ -352,3 +392,9 @@ export const bashTool: Tool = {
     });
   },
 };
+
+// 起跑目录用不了、回到了工作区根：结果里说一句
+function withNote(res: ToolRunResult, note?: string): ToolRunResult {
+  if (!note) return res;
+  return prependNote(res, note);
+}

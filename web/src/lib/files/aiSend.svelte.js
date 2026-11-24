@@ -9,6 +9,7 @@ import { openSession, newConversation } from '../chat.svelte.js';
 import { ensureModule, mods } from '../../modules/services.svelte.js';
 import { t, tr } from '../i18n.js';
 import { fileAiCapabilities, filterAiSessions, loadAiSessions, sendFileToAi } from '../files-business.js';
+import { WINDOW_PAGE, isPageWindow, hasDesktopPageWindows, routeToPageWindow } from '../windowPage.svelte.js';
 
 export class AiSend {
   item = $state(null);       // 要发送的那一项；null＝弹层没开
@@ -69,13 +70,28 @@ export class AiSend {
   });
 
   async send(item, target, slot, sess) {
-    const agyMod = target === 'agy' ? await ensureModule('agy') : null;
+    const destScreen = target === 'claude' ? 'claude' : target === 'agy' ? 'agy' : 'studio';
+    const crossWin = isPageWindow() && WINDOW_PAGE !== destScreen && hasDesktopPageWindows();
+    const agyMod = !crossWin && target === 'agy' ? await ensureModule('agy') : null;
     await sendFileToAi(item, target, slot, sess, {
       kindOf: this.#o.kindOf,
       material: this.#o.material,
       readText: this.#o.readText,
       toast: this.#o.toast,
-      chats: {
+      chats: crossWin ? {
+        claude: {
+          current: () => null,
+          newChat: () => {},
+          load: async () => {},
+          attach: (attachment) => { void routeToPageWindow({ key: 'claude', action: 'claude-attach', sessionId: sess || '__keep__', attachment }); },
+        },
+        agy: {
+          current: () => null,
+          newChat: () => {},
+          load: async () => {},
+          attach: (attachment) => { void routeToPageWindow({ key: 'agy', action: 'agy-attach', sessionId: sess || '__keep__', attachment }); },
+        },
+      } : {
         claude: {
           current: () => session.id,
           newChat: newConversation,
@@ -84,8 +100,10 @@ export class AiSend {
         },
         ...(agyMod?.agyFileTarget ? { agy: agyMod.agyFileTarget } : {}),
       },
-      studio: { push: (it) => studioInbox.items.push(it) },
-      navigate: (screen) => { ui.screen = screen; },
+      studio: crossWin
+        ? { push: (it) => { void routeToPageWindow({ key: 'studio', action: 'studio-inbox', item: it }); } }
+        : { push: (it) => studioInbox.items.push(it) },
+      navigate: (screen) => { if (!crossWin) ui.screen = screen; },
     });
   }
 }

@@ -18,8 +18,9 @@ export const MODULE_ENTRIES = {
   studio: ['src/components/studio/StudioPage.svelte', 'src/components/studio/settings/StudioSettings.svelte', 'src/components/studio/settings/MediaProviderManager.svelte'],
   codex: ['src/components/ChatGPTPage.svelte'],
   // store：lib/agentUi.js 点通知回跳与 agy 的 ui_open 经它懒加载（只在 agy 分页开着时才走到）
+  // antigravity-logo：Claude 页插件工作区外观里的 agy 标志（components/claude/workspace/AgentTile）懒加载引擎，agy 开着才取
   agy: ['src/components/agy/AgyPage.svelte', 'src/desktop/settings/AgySection.svelte', 'src/components/settings/ios/agy/AgySettingsPages.svelte', 'src/lib/agy/file-target.js',
-    'src/lib/agy/store.svelte.js'],
+    'src/lib/agy/store.svelte.js', 'src/lib/agy/antigravity-logo.js'],
   dimensio: ['src/components/HarnessPage.svelte', '../harness/web/src/i18n/en/index.ts', 'src/components/dock/DimensioMemoryNote.svelte'],
 };
 

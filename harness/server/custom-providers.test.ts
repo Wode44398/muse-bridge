@@ -315,7 +315,7 @@ test("协议分派：Anthropic 端点走 anthropic 适配器——地址不拼�
     const m = provider.models[0];
     assert.deepEqual(m.efforts.map((t) => t.id), ["off", "on"]);
     const adapter = createAdapter({ provider: provider.id, apiKey: GOOD_KEY, model: "mimo-v2.6-pro" });
-    assert.equal(adapter.capabilities.cache, false, "第三方 Anthropic 端点默认不发 cache_control");
+    assert.equal(adapter.capabilities.cache, true, "Anthropic 协议没声明提示缓存时默认发 cache_control（不按主机名判）");
     seen.length = 0;
     const events = await drain(adapter, "off");
     const req = seen.at(-1)!;
@@ -514,10 +514,18 @@ test("胶囊「模型自带思考」按这一档真发不发东西判断，不�
   }
 });
 
-test("新建草稿没动提示缓存开关：服务端按地址定（只有官方端点默认开）", () => {
+test("新建草稿没动提示缓存开关：Anthropic 协议默认开（官方、第三方、网关一样），声明了照声明", () => {
   assert.equal(draftConn({ baseUrl: "https://api.anthropic.com", protocol: "anthropic", apiKey: "x" }).conn.promptCaching, true);
-  assert.equal(draftConn({ baseUrl: "https://relay.example.com/v1", protocol: "anthropic", apiKey: "x" }).conn.promptCaching, false);
+  assert.equal(draftConn({ baseUrl: "https://relay.example.com/v1", protocol: "anthropic", apiKey: "x" }).conn.promptCaching, true);
+  assert.equal(draftConn({ baseUrl: "http://127.0.0.1:8787/x/h/anthropic", protocol: "anthropic", apiKey: "x" }).conn.promptCaching, true);
+  assert.equal(draftConn({ baseUrl: "https://relay.example.com/v1", protocol: "anthropic", apiKey: "x", promptCaching: false }).conn.promptCaching, false);
   assert.equal(draftConn({ baseUrl: "https://api.anthropic.com", protocol: "anthropic", apiKey: "x", promptCaching: false }).conn.promptCaching, false);
+});
+
+test("回传思考是三态：没声明就不写这个键（自动），明确开 / 关照声明", () => {
+  assert.equal("replayReasoning" in draftConn({ baseUrl: "https://relay.example.com/v1", apiKey: "x" }).conn, false);
+  assert.equal(draftConn({ baseUrl: "https://relay.example.com/v1", apiKey: "x", replayReasoning: false }).conn.replayReasoning, false);
+  assert.equal(draftConn({ baseUrl: "https://relay.example.com/v1", apiKey: "x", replayReasoning: true }).conn.replayReasoning, true);
 });
 
 test("报错说人话：自定义服务的 404（地址 / 协议不对）、语音模型 400、401 各说各的", () => {

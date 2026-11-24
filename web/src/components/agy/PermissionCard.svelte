@@ -20,6 +20,9 @@
 
   const displayCommand = $derived(stripWorkspaceCdPrefix(perm.command || '', effectiveCwd));
   const displayTitle = $derived(stripWorkspaceCdPrefix(perm.title || '', effectiveCwd));
+  const subagentLabel = $derived(
+    perm.subagent ? (perm.subagent.role || perm.subagent.typeName || String(perm.subagent.id || '').slice(0, 8)) : ''
+  );
 
   const targetPaths = $derived.by(() => {
     const locs = Array.isArray(perm.locations) ? perm.locations : [];
@@ -91,6 +94,9 @@
   <div class="agy-perm-head">
     <span class="msr4 agy-perm-ico">shield</span>
     <span class="agy-perm-type">{toolMeta.verb}</span>
+    {#if subagentLabel}
+      <span class="agy-perm-subagent" title={perm.subagent?.id || undefined}>{t('子代理')} · {subagentLabel}</span>
+    {/if}
     {#if perm.toolName && !toolMeta.bridge}
       <span class="agy-perm-tool">{perm.toolName}</span>
     {/if}
@@ -188,6 +194,19 @@
     background: var(--ag-surface-1);
     border: 1px solid var(--ag-border);
     color: var(--ag-on-sub);
+  }
+  .agy-perm-subagent {
+    font-size: 11px;
+    font-weight: 520;
+    padding: 1.5px 7px;
+    border-radius: 5px;
+    background: var(--ag-surface-1);
+    border: 1px solid var(--ag-border-strong);
+    color: var(--ag-on-sub);
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .agy-perm-unsandboxed {
     font-size: 11px;

@@ -40,3 +40,26 @@ test('正文搜索：片段按关键词不分大小写切段；只取正文命�
   assert.equal(contentQueryOf(' a '), '');
   assert.equal(contentQueryOf('  迁移  脚本 '), '迁移 脚本');
 });
+
+test('已置顶工作空间排在侧栏项目组最前，且不会被挤进「其它文件夹」', () => {
+  const now = Date.parse('2026-11-20T12:00:00Z');
+  const sessions = [
+    { sessionId: 's1', cwd: 'E:\\ws1', title: '一', updatedMs: now - 1000 },
+    { sessionId: 's2', cwd: 'E:\\ws2', title: '二', updatedMs: now - 2000 },
+    { sessionId: 's3', cwd: 'E:\\ws3', title: '三', updatedMs: now - 3000 },
+    { sessionId: 's4', cwd: 'E:\\ws4', title: '四', updatedMs: now - 4000 },
+    { sessionId: 's5', cwd: 'E:\\ws5', title: '五', updatedMs: now - 5000 },
+    { sessionId: 's6', cwd: 'E:\\ws6', title: '六', updatedMs: now - 6000 },
+    { sessionId: 's7', cwd: 'E:\\ws7', title: '七', updatedMs: now - 7000 },
+  ];
+  const projects = [
+    { id: 'p6', name: 'ws6', path: 'E:\\ws6', pinned: true, pinnedAt: 200 },
+    { id: 'p7', name: 'ws7', path: 'E:\\ws7', pinned: true, pinnedAt: 500 },
+  ];
+  const g = groupSessionsByProjectAndTime(sessions, projects, '', now, { primaryLimit: 5 });
+  assert.deepEqual(g.primaryProjects.map((p) => p.name), ['ws7', 'ws6', 'ws1', 'ws2', 'ws3']);
+  assert.equal(g.primaryProjects[0].pinned, true);
+  assert.equal(g.primaryProjects[1].pinned, true);
+  assert.equal(g.primaryProjects[2].pinned, false);
+  assert.deepEqual(g.moreProjects.map((p) => p.name), ['ws4', 'ws5']);
+});

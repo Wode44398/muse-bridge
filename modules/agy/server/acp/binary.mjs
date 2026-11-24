@@ -3,6 +3,7 @@
 // 必须按进程树（taskkill /T /F）整棵清理。
 
 import { spawn, execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
@@ -194,6 +195,77 @@ export function unlockDaemonDir(dir) {
       chmodSync(dir, 0o755);
     }
   } catch {}
+}
+
+// 守护进程占位目录必须落在 os.tmpdir() 下、远离仓库与数据根：
+// agy 会把进程 cwd 固定为首个 Active Workspace 并沿父目录查找 git 根与 AGENTS.md；
+// 若放在 <DATA_ROOT>/agy/daemon-cwd（仓库内），所有会话都会被注入仓库的 AGENTS.md。
+// 按 scope（数据根）哈希 + slot 分槽，避免同机正式服、测试服、桌面存储、成员进程互相解锁冲突。
+export function defaultDaemonCwd(slot = 'main', scope = '') {
+  const scopeKey = scope ? path.resolve(String(scope)) : 'default';
+  const rootHash = createHash('sha1').update(scopeKey).digest('hex').slice(0, 10);
+  const safeSlot = String(slot || 'main').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) || 'main';
+  return path.join(os.tmpdir(), 'claude-bridge-agy', `${rootHash}-${safeSlot}`, 'daemon-cwd');
+}
+
+const WORKER_STARTED_RE = /front:\s*started worker (\d+) \(pid (\d+)\)/g;
+
+// --process-per-session 模式下，front 日志只记录派生的 worker PID，
+// language server 端口与账号认证日志落在同目录的 `<logFile>.<workerPid>`。
+// worker 1 负责 session/list 且整个 front 生命周期常驻（不随 session/close 退出），优先排在最前。
+export function listWorkerLogFiles(frontLogFile) {
+  if (!frontLogFile) return [];
+  const resolved = path.resolve(frontLogFile);
+  const out = [];
+  const seen = new Set();
+  const pushIfExists = (file) => {
+    if (!file || seen.has(file)) return;
+    seen.add(file);
+    try {
+      if (existsSync(file) && statSync(file).isFile()) out.push(file);
+    } catch {}
+  };
+
+  try {
+    if (existsSync(resolved)) {
+      const txt = readFileSync(resolved, 'utf8');
+      const workers = [];
+      for (const m of txt.matchAll(WORKER_STARTED_RE)) {
+        workers.push({ num: Number(m[1]), pid: String(m[2]) });
+      }
+      // worker 1 优先（常驻控制面），其余按启动顺序倒序
+      for (const w of workers) {
+        if (w.num === 1) pushIfExists(`${resolved}.${w.pid}`);
+      }
+      for (let i = workers.length - 1; i >= 0; i--) {
+        if (workers[i].num !== 1) pushIfExists(`${resolved}.${workers[i].pid}`);
+      }
+    }
+  } catch {}
+
+  return out;
+}
+
+// 启动新 front 进程前清理上一轮残留的 `<logBase>.<数字pid>` 碎片日志，防止长期运行后日志堆积。
+export function cleanupWorkerLogFiles(frontLogFile) {
+  if (!frontLogFile) return 0;
+  const resolved = path.resolve(frontLogFile);
+  const dir = path.dirname(resolved);
+  const base = path.basename(resolved);
+  const prefix = `${base}.`;
+  let removed = 0;
+  let entries;
+  try { entries = readdirSync(dir); } catch { return 0; }
+  for (const name of entries) {
+    if (!name.startsWith(prefix)) continue;
+    const suffix = name.slice(prefix.length);
+    if (!/^\d+$/.test(suffix)) continue;
+    try {
+      rmSync(path.join(dir, name), { force: true });
+      removed++;
+    } catch {}
+  }
+  return removed;
 }
 
 // 将常驻守护进程 cwd 保持为空目录并收紧为只读/仅遍历（禁止在目录内新建文件或子目录），

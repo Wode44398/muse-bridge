@@ -350,6 +350,8 @@ interface AgentOpts {
   label?: string;
   phase?: string;
   tools: "research" | "coder";
+  // tools 写的不是内置两档：按自定义子 agent 类型的名字交给 runSubAgent（agent/subagent/definitions.ts）
+  type?: string;
   schema?: ReturnType<typeof normalizeObjectSchema>;
   model?: string;
   effort?: ThinkingLevel;
@@ -361,7 +363,9 @@ const EFFORTS: ThinkingLevel[] = EFFORT_ORDER;
 
 function parseAgentOpts(raw: unknown): AgentOpts | { error: string } {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  const out: AgentOpts = { tools: o.tools === "coder" ? "coder" : "research" };
+  const tools = typeof o.tools === "string" ? o.tools.trim() : "";
+  const out: AgentOpts = { tools: tools === "coder" ? "coder" : "research" };
+  if (tools && tools !== "coder" && tools !== "research") out.type = tools.slice(0, 64);
   if (o.label !== undefined) out.label = String(o.label).slice(0, 80);
   if (o.phase !== undefined) out.phase = String(o.phase).slice(0, 120);
   if (o.schema !== undefined && o.schema !== null) {
@@ -735,7 +739,7 @@ export function makeWorkflowRunner(deps: WorkflowRunnerDeps): (req: WorkflowRequ
       const key = `${baseKey}#${nth}`;
 
       const cached = cache.get(key);
-      const blocked = cached ? replayBlocker(cached, opts.tools === "coder", liveWrites) : null;
+      const blocked = cached ? replayBlocker(cached, opts.tools === "coder" || Boolean(opts.type), liveWrites) : null;
       if (cached && blocked) log(`agent "${label}": not replayed from the journal — ${blocked}; running it again`);
       const hit = blocked ? undefined : cached;
       if (hit) {
@@ -789,6 +793,7 @@ export function makeWorkflowRunner(deps: WorkflowRunnerDeps): (req: WorkflowRequ
         r = await deps.runSubAgent({
           prompt,
           tier: opts.tools,
+          ...(opts.type ? { type: opts.type } : {}),
           label,
           phase,
           model: opts.model,
@@ -846,7 +851,7 @@ export function makeWorkflowRunner(deps: WorkflowRunnerDeps): (req: WorkflowRequ
       const value = opts.schema ? r.result : r.text;
       journal.entries.push({
         key, label, phase, value, inputTokens: r.inputTokens, outputTokens: r.outputTokens, at: Date.now(),
-        ...(opts.tools === "coder" ? { edited: r.editedFiles.map((p) => ({ path: p, hash: fileHash(p) })) } : {}),
+        ...(opts.tools === "coder" || r.tier === "coder" ? { edited: r.editedFiles.map((p) => ({ path: p, hash: fileHash(p) })) } : {}),
         ...(r.externalContent ? { external: true as const } : {}),
       });
       persist();

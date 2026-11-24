@@ -76,3 +76,31 @@ test('links carry their url: same-origin as a path, others in full; javascript: 
   ] });
   assert.match((await snapshotAccessibility(bare, new Map())).text, /link "A" \[ref1\] → https:\/\/github\.com\/a$/m);
 });
+
+test('分层（11-22 agy 反馈）：看不见的抽屉折成一行、可见弹窗列在最前；带 query 时不分层', async () => {
+  const send = async () => ({
+    nodes: [
+      { nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'P' }, childIds: ['2', '5', '7'] },
+      { nodeId: '2', parentId: '1', role: { value: 'generic' }, name: { value: '' }, backendDOMNodeId: 20, childIds: ['3', '4'] },
+      { nodeId: '3', parentId: '2', role: { value: 'button' }, name: { value: '加入收藏' }, backendDOMNodeId: 21 },
+      { nodeId: '4', parentId: '2', role: { value: 'button' }, name: { value: '加入收藏' }, backendDOMNodeId: 22 },
+      { nodeId: '5', parentId: '1', role: { value: 'main' }, name: { value: '' }, backendDOMNodeId: 50, childIds: ['6'] },
+      { nodeId: '6', parentId: '5', role: { value: 'button' }, name: { value: '创建 Bucket' }, backendDOMNodeId: 51 },
+      { nodeId: '7', parentId: '1', role: { value: 'dialog' }, name: { value: '创建' }, backendDOMNodeId: 70, childIds: ['8'] },
+      { nodeId: '8', parentId: '7', role: { value: 'textbox' }, name: { value: '名称' }, backendDOMNodeId: 71 },
+    ],
+  });
+  const layers = { junk: [20], dialogs: [70] };
+  const r = await snapshotAccessibility(send, new Map(), { filter: 'interactive', layers });
+  const lines = r.text.split('\n');
+  assert.equal(lines[0], '- 【当前弹窗】');
+  assert.match(lines[1], /textbox "名称" \[ref1\]/);
+  assert.match(r.text, /已折叠：里面 2 个可交互元素/);
+  assert.doesNotMatch(r.text, /加入收藏/);
+  assert.match(r.text, /button "创建 Bucket" \[ref2\]/);
+  assert.match(r.text, /另有 1 处看不见的菜单/);
+  const q = await snapshotAccessibility(send, new Map(), { query: '加入收藏', layers });
+  assert.equal(q.text.split('\n').filter((l) => /加入收藏/.test(l)).length, 2);
+  const none = await snapshotAccessibility(send, new Map(), { filter: 'interactive' });
+  assert.match(none.text.split('\n')[0], /加入收藏/);
+});

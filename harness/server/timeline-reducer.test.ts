@@ -12,6 +12,7 @@ import { loopState } from "./test-harness/trajectory.ts";
 import { fail, ok, type Tool } from "./tools/types.ts";
 import { pushItem, reduceTimeline, type TimelineEffects, type TimelineModel } from "../web/src/lib/timeline-reducer.ts";
 import type { Item } from "../web/src/lib/timeline-types.ts";
+import { hardenedProfile } from "./agent/profile.ts";
 
 const RAW = { serializers: [(v: unknown) => String(v)] };
 const schema = { type: "object" as const, properties: {} };
@@ -143,7 +144,7 @@ test("Q11 时间线：验证门禁撤回那一版答复时，这一轮里插进�
     useTool("v1", "Bash", { command: "npm test", verify: true, pass: true }),
     say("验证通过，改成蓝色了"),
   );
-  const { state } = loopState(t, adapter, { tools: [edit, bash], user: "把 a.ts 改一下" });
+  const { state } = loopState(t, adapter, { tools: [edit, bash], user: "把 a.ts 改一下", profile: hardenedProfile() }); // 撤回答复是加固档案的门禁
   const m = newModel();
   let sent = false;
   const fx = effects();

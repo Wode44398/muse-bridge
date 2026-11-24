@@ -150,6 +150,8 @@ export function rawPathViolation(p: string): string | null {
   const s = p.trim();
   const last = s.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
   if (RESERVED_DEVICE_RE.test(last)) return `Blocked: "${last}" is a Windows device name, not a file`;
+  // NTFS 备用数据流（settings.json::$DATA、x.md:stream）：写进去的就是那个文件（或藏在它旁边），按名字的判定却认不出它
+  if (process.platform === "win32" && s.replace(/^[A-Za-z]:/, "").includes(":")) return `Blocked: "${s}" names an NTFS data stream, not a plain file path`;
   return null;
 }
 
@@ -312,10 +314,30 @@ export class Sandbox {
     if (!dirs.length) return this;
     const view = new Sandbox(this.root, this.access);
     view.extraRead = this.extraRead;
+    view.ownState = this.ownState;
     view.realRootCache = this.realRootCache;
     const base = this.readGrants;
     view.readGrants = () => [...base(), ...dirs.map((d) => path.resolve(d))];
     return view;
+  }
+
+  // 这个会话自己的状态目录（它的记忆目录：工作区层 + 全局层）：工作区之外也能读能写，凭据判定按它当根（只按名字判）。
+  // fence = 这些目录所在的整个状态根（记忆根）：根里不属于本会话的部分（别的工作区的记忆）读写都拒，工作区套着它也一样。
+  // 写哪些文件、Bash 能不能写，由权限判定（memory-files.ts）再管一层。管理员 bypass 不受这一项限制。
+  private ownState: { dirs: string[]; fence: string[] } = { dirs: [], fence: [] };
+  setOwnStateDirs(dirs: string[], fence: string | null): void {
+    // 目录本身在链接后面（或临时目录的 8.3 短名）时真实落点也算：resolve 会按真实落点再判一次
+    const withReal = (d: string): string[] => {
+      const abs = path.resolve(d);
+      const real = realOrNearest(abs);
+      return real && fold(real) !== fold(abs) ? [abs, real] : [abs];
+    };
+    this.ownState = { dirs: dirs.flatMap(withReal), fence: fence ? withReal(fence) : [] };
+  }
+  private ownStateDir(abs: string): string | null | undefined {
+    const own = this.ownState.dirs.find((d) => isInside(d, abs));
+    if (own) return own;
+    return this.ownState.fence.some((d) => isInside(d, abs)) ? null : undefined;
   }
 
   private realRootCache: string | null = null;
@@ -346,6 +368,14 @@ export class Sandbox {
     const alias = via && UNC_RE.test(root) ? null : rawPathViolation(abs);
     if (alias) throw new SandboxError(`${alias}: ${p}${via}`);
     const bypass = this.bypassing; // 管理员 bypass：跳过边界 / 密钥守卫 / .git 写保护；租户锁与会话库写保护照旧
+    const own = bypass ? undefined : this.ownStateDir(abs);
+    if (own === null) throw new SandboxError(`Blocked: ${p}${via} belongs to another workspace's memory (or dimensio's own bookkeeping)`);
+    if (own) {
+      const verdict = readVerdict(abs, own);
+      if (verdict) throw new SandboxError(`${verdict}: ${p}${via}`);
+      if (opts.forWrite && PROTECTED_WRITE_RE.test(abs)) throw new SandboxError(`Refusing to write inside a protected path: ${p}${via}`);
+      return;
+    }
     const rel = path.relative(root, abs);
     const outside =
       rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel);

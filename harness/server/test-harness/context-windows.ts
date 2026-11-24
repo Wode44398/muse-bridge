@@ -5,7 +5,7 @@
 // 用法纪律：测试只断言「开了几个窗、为什么开」，不钉措辞；renderWindows 只给人看（断言失败时附在消息里）。
 import { createHash } from "node:crypto";
 import { COMPACTION_SYSTEM } from "../agent/context.ts";
-import { injectionKind } from "../agent/injections.ts";
+import { injectionKind, messageKind } from "../agent/injections.ts";
 import type { Block, Msg, Turn } from "../agent/turn.ts";
 
 export type WindowReason = "settings" | "diverged" | "truncated";
@@ -24,7 +24,12 @@ export interface WindowOptions {
   side?: (turn: Turn, index: number) => boolean;
 }
 
-export const isCompactionRequest = (turn: Turn): boolean => turn.system === COMPACTION_SYSTEM;
+// 压缩摘要请求：sidecar 认 system；inline（主请求的形状 + 末尾一条摘要指令）认最后那条的来源
+export const isCompactionRequest = (turn: Turn): boolean => turn.system === COMPACTION_SYSTEM || isInlineCompactionRequest(turn);
+export const isInlineCompactionRequest = (turn: Turn): boolean => {
+  const last = turn.messages.at(-1);
+  return Boolean(last) && messageKind(last!) === "compaction-request";
+};
 
 // provider 只消费 role + content（turn.ts 的约定）；displayText、internal 这些 UI 字段不算前缀。
 const itemOf = (m: Msg): string => JSON.stringify({ role: m.role, content: m.content });

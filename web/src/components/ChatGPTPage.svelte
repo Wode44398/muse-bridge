@@ -10,9 +10,11 @@
   import { mediaFallbackUrl } from '../lib/server.js';
   import { ui, me, caps } from '../lib/state.svelte.js';
   import { closePage } from '../lib/pageMorph.js';
+  import { isPageWindow, focusMainWindow } from '../lib/windowPage.svelte.js';
   import { codexCapabilities } from '../lib/caps.js';
   import { codexDock, openCodexDock, closeCodexDock, setCodexDockWs, setCodexDockSession, noteCodexAgentBrowser } from '../lib/dock.svelte.js';
   import { noteFsChange } from '../lib/fsSync.svelte.js';
+  import { attachSelectionDoc } from '../lib/selection.js';
   import CodexWorkspace from './dock/CodexWorkspace.svelte';
   import ProjectPicker from './ProjectPicker.svelte';
   import { hasNativePickDirectory, nativePickDirectory } from '../lib/nativeDesktop.js';
@@ -457,6 +459,8 @@
       if (ev.source !== frame?.contentWindow || ev.data?.channel !== 'bridge-chatgpt') return;
       const d = ev.data;
       if (d.type === 'ready') {
+        // 克隆页里的正文同样画墨、右键开 bridge 的菜单（同源 iframe，直接把那份文档接进来；菜单开在本页上）
+        try { attachSelectionDoc(frame.contentDocument, { skin: 'codex', frame }); } catch {}
         post('init', {
           codex: JSON.parse(JSON.stringify(codexCapabilities(caps.data))),
           theme: ui.theme,
@@ -476,7 +480,8 @@
       } else if (d.type === 'usage-refresh') {
         pushUsage();
       } else if (d.type === 'back') {
-        closePage('chatgpt');   // 收回主页上的入口（与其它分页同一套返回）
+        if (isPageWindow()) focusMainWindow();
+        else closePage('chatgpt');   // 收回主页上的入口（与其它分页同一套返回）
       } else if (d.type === 'workspace-toggle') {
         if (codexDock.open) closeCodexDock(); else openCodexDock();
       } else if (d.type === 'workspace-open') {

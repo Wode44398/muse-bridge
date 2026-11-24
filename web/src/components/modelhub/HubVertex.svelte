@@ -77,6 +77,8 @@
   }
   const when = (at) => new Date(at).toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   const extra = $derived(models.filter((id) => !known.some((k) => k.id === id)));
+  // Codex 这一侧接不上模型中心时不出这个勾（已经勾着的照样存着）
+  const vxAgents = $derived([['claude', 'Claude'], ['dimensio', 'dimensio'], ...(hub.codexHub ? [['codex', 'Codex']] : [])]);
   const toggleAgent = (a) => { agents = agents.includes(a) ? agents.filter((x) => x !== a) : [...agents, a]; };
   const toggleModel = (id) => { models = models.includes(id) ? models.filter((x) => x !== id) : [...models, id]; };
   function addModel() {
@@ -141,7 +143,7 @@
   <section>
     <div class="fl">{t('提供给')}</div>
     <div class="checks">
-      {#each [['claude', 'Claude'], ['dimensio', 'dimensio']] as [a, name] (a)}
+      {#each vxAgents as [a, name] (a)}
         <!-- 与服务浮层操作条的去向片（HsBar .dest）同一个概念、同一副长相：勾选框 + agent 标 + 名字 -->
         <button type="button" class="chk" class:on={agents.includes(a)} aria-pressed={agents.includes(a)} onclick={() => toggleAgent(a)}>
           <span class="box"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>

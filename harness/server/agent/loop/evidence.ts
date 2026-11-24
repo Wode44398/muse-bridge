@@ -93,22 +93,24 @@ export function verificationFootnote(state: AgentState): string | null {
     const more = state.failedEdits.size > 5 ? ` 等 ${state.failedEdits.size} 处` : "";
     lines.push(`⚠️ 这些编辑没有落地：${items.join("、")}${more}`);
   }
+  // 验证那几行归档案的 verifyFootnote 管（lean 不附）
+  const verifyLines = state.profile.loop.verifyFootnote === "on";
   // V2：追问用尽放行、或预算用完收场时，代码改动仍没有通过的验证——服务端写明，模型去不掉。
-  if (touchesCode(state.editedFiles) && state.dirtySinceVerify && !state.verificationAuditCompleted) {
+  if (verifyLines && touchesCode(state.editedFiles) && state.dirtySinceVerify && !state.verificationAuditCompleted) {
     lines.push(
       `⚠️ 未验证：这一轮改了 ${state.editedFiles.size} 个文件，但没有通过的验证证据` +
         (state.verificationGateGaveUp ? `（门禁追问 ${MAX_VERIFICATION_AUDIT_NUDGES} 次后放行）` : "") +
         "，以上结论请自行核对。",
     );
   }
-  const last = state.runEvidence.at(-1);
+  const last = verifyLines ? state.runEvidence.at(-1) : undefined;
   if (last && !last.passed) lines.push(`最后一次检查没通过：❌ \`${clipDetail(last.detail)}\``);
-  if (state.runAudit) lines.push(`没有可跑的验证（${state.runAudit.decision}）：${state.runAudit.reason}`);
+  if (verifyLines && state.runAudit) lines.push(`没有可跑的验证（${state.runAudit.decision}）：${state.runAudit.reason}`);
   // K6（G4）：记忆审计门禁追问用尽放行——服务端写明，模型去不掉
   if (state.memoryAuditGaveUp) lines.push(`⚠️ 记忆审计：追问 ${MAX_MEMORY_AUDIT_NUDGES} 次仍没交，已放行——这一轮值得记住的事可能没记下来`);
   // 10-07（维护者）：验收顺利就不打扰——通过的回执只在上面有问题时作为对照一起给，全绿不附尾注
   if (!lines.length) return null;
-  const passed = [...new Set(state.runEvidence.filter((e) => e.passed).map((e) => clipDetail(e.detail)))].slice(-3);
+  const passed = !verifyLines ? [] : [...new Set(state.runEvidence.filter((e) => e.passed).map((e) => clipDetail(e.detail)))].slice(-3);
   if (passed.length) lines.push(`通过的检查：${passed.map((d) => `✅ \`${d}\``).join(" · ")}`);
   return `\n\n> ${lines.join("\n>\n> ")}`;
 }
@@ -142,7 +144,7 @@ export function attachPlaybooks(state: AgentState, picks: Playbook[], why: "requ
   for (const p of picks) {
     if (p.needsBrowser && !state.browser) continue;
     if (playbookLoadedIn(state.messages, p)) continue;
-    state.appendUserBlocks([{ t: "text", text: playbookMessage(p, why, state.browser) }], false, { origin: "harness", kind: PLAYBOOK_KIND });
+    state.appendUserBlocks([{ t: "text", text: playbookMessage(p, why, state.browser, state.profile.tools.verifyTools === "off") }], false, { origin: "harness", kind: PLAYBOOK_KIND });
   }
 }
 

@@ -313,6 +313,8 @@ html[data-theme="light"]{
   --text:#ededed; --serif:#c2c2c2; --muted:#959595;
   --avatar-bg:#4a4a4a; --hover:rgba(255,255,255,.075);
   --q-card:rgba(44,44,44,.97);
+  /* 插件工作区外观（components/claude/workspace）：共用项目块的底与描边、连接器方块、深色说明 */
+  --cc-box:rgba(255,255,255,.028); --cc-box-bd:rgba(255,255,255,.075); --cc-tile:#2b2b2b; --cc-ring:rgba(255,255,255,.1); --cc-tip:#3a3a3a;
 }
 html[data-theme="light"] .cc-tone{
   --bg:#ffffff; --side-bg:#fafafa; --card:#ffffff;
@@ -321,6 +323,7 @@ html[data-theme="light"] .cc-tone{
   /* 暗色 .cc-tone 改过的变量亮色都要改回：--q-card 不改浮层变黑；--hover 不改就是白色 7.5%，
      贴在白侧栏上看不见——侧栏行悬停 / 聚焦的底色全没了，刚点的那行没反应，上一行反倒闪一下（11-19） */
   --q-card:rgba(255,255,255,.98); --hover:rgba(0,0,0,.05);
+  --cc-box:#fff; --cc-box-bd:rgba(11,11,11,.09); --cc-tile:#fff; --cc-ring:rgba(11,11,11,.1); --cc-tip:#1f1f1f;
 }
 
 /* Anthropicons 动态图标（claude.ai 同款）：字体自带 ANIM/ANM2 变体轴（0–100 字形形变，

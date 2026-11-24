@@ -1,8 +1,12 @@
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { configFile, globalGuideFile, memoryRoot, sessionsDir } from "../paths.ts";
+import { agentConfigKind } from "../agent-dirs.ts";
+import { configFile, globalGuideFile, hookTrustFile, memoryRoot, sessionsDir } from "../paths.ts";
 import { IMDS_REASON, mentionsImds, type Reason } from "../tools/shell-policy.ts";
+import { memoryWriteBlock } from "../memory-files.ts";
+import { PROJECT_DOC_NAMES } from "../project-docs/top.ts";
+import { realOrNearest } from "../sandbox.ts";
 import type { PermissionView, Tool } from "../tools/types.ts";
 
 // Permission model: a coarse MODE, plus per-call RULES on top of the always-on
@@ -410,49 +414,95 @@ export interface DecideContext {
 
 // ── S12（N28、HT8）：控制面文件写保护 ─────────────────────────────────────────────
 // 指令与控制面文件：写进去的东西会进之后每一次（或所有）会话的 system prompt、改掉运行配置与权限规则、改写会话记录。
-// agent 要写它们，每次都问、只能「允许这一次」（任何 allow 规则、「本会话都允许」都不算数），没人在场就拒；记忆目录
-// 直接拒写——记忆只走 Remember（它有敏感信息拒存和治理字段）。刻意只列这几样，不长成一张越来越长的硬拒名单
+// agent 要写它们，每次都问、只能「允许这一次」（任何 allow 规则、「本会话都允许」都不算数），没人在场就拒；记忆目录：本会话自己
+// 的记忆目录里的笔记文件可以直接 Write / Edit（不弹卡），内部文件、别的工作区的、Write / Edit 之外的工具写都拒（memory-files.ts）。刻意只列这几样，不长成一张越来越长的硬拒名单
 // （hermes #45947 的教训）。整个 ~/.dimensio 不算：快照对话的工作区就在 ~/.dimensio/quick 下。
 export const CONTROL_PLANE_RULE = "内置·控制面文件";
-const INSTRUCTION_FILES = new Set(["guide.md", "agents.md", "claude.md"]);
+// 指令文件：GUIDE.md 与项目指令文件认的那几个名字（project-docs.ts，含 AGENTS.override.md——它替代同层的 AGENTS.md）
+const INSTRUCTION_FILES = new Set(["guide.md", ...PROJECT_DOC_NAMES.map((n) => n.toLowerCase())]);
+const AGENT_DEFINITION_DIR = /(?:^|\/)\.(?:claude|dimensio)\/agents(?:\/|$)/i;
 
-function controlPlaneHit(raw: string, root?: string): { kind: "memory" | "control"; label: string } | null {
+type ControlHit = { kind: "memory" | "control" | "hooks"; label: string };
+
+// 一个比较键（resourceKey 的形状）的真实落点：8.3 短名（CLAUDE~1）换回长名、junction / 符号链接换成它指向的地方
+function realKey(key: string): string | null {
+  const real = realOrNearest(key);
+  return real ? resourceKey(real) : null;
+}
+
+// hooks / 技能 / 命令的配置（Claude Code 同格式的 .claude、.dimensio 目录）也算：hooks 会在本机执行命令，技能与命令改的是
+// agent 之后的行为——模型不能自己装上再触发。
+// 字面路径与真实落点各判一次（两边命中的都算）：CLAUDE~1/settings.json 这种短名写法、指向 .claude 的链接，字面上看不出来
+function controlPlaneHits(raw: string, root?: string): ControlHit[] {
   const key = resourceKey(raw, root);
-  if (!key) return null;
-  const at = (resolve: () => string) => {
+  if (!key) return [];
+  const real = realKey(key);
+  const keys = real && real !== key ? [key, real] : [key];
+  return keys.map((k) => controlPlaneHitFor(k, raw)).filter((h): h is ControlHit => h !== null);
+}
+
+function controlPlaneHitFor(key: string, raw: string): ControlHit | null {
+  const agentConfig = agentConfigKind(key);
+  if (agentConfig) return { kind: agentConfig === "hooks" ? "hooks" : "control", label: raw };
+  // 比较的锚点同样取字面与真实落点两种写法
+  const at = (resolve: () => string): string[] => {
     try {
-      return resourceKey(resolve());
+      const k = resourceKey(resolve());
+      if (!k) return [];
+      const r = realKey(k);
+      return r && r !== k ? [k, r] : [k];
     } catch {
-      return null; // 测试进程里解析到临时目录之外会抛：这一项就不比
+      return []; // 测试进程里解析到临时目录之外会抛：这一项就不比
     }
   };
-  const inside = (dir: string | null) => Boolean(dir) && (key === dir || key.startsWith(`${dir}/`));
+  const inside = (dirs: string[]) => dirs.some((dir) => key === dir || key.startsWith(`${dir}/`));
+  const is = (files: string[]) => files.includes(key);
   if (inside(at(memoryRoot))) return { kind: "memory", label: raw };
+  // 项目级 hooks 的信任记录：伪造一条就等于替用户确认了一份陌生配置，按 hooks 配置同级对待（每次问、bypass 也问）
+  if (is(at(hookTrustFile))) return { kind: "hooks", label: raw };
   if (INSTRUCTION_FILES.has(key.slice(key.lastIndexOf("/") + 1).toLowerCase())) return { kind: "control", label: raw };
-  if (key === at(configFile) || key === at(globalGuideFile) || inside(at(sessionsDir))) return { kind: "control", label: raw };
+  // 自定义子 agent 的定义（工作区与用户级的 .claude/agents、.dimensio/agents）：正文就是那个子 agent 的系统提示词
+  if (AGENT_DEFINITION_DIR.test(key)) return { kind: "control", label: raw };
+  if (is(at(configFile)) || is(at(globalGuideFile)) || inside(at(sessionsDir))) return { kind: "control", label: raw };
   return null;
 }
 
 function controlPlaneDecision(toolName: string, args: Record<string, unknown>, view: PermissionView | null, root?: string): Decision | null {
   const p = pathArg(toolName, args);
   const targets = [...(p?.access === "write" ? [p.path] : []), ...(view?.writes ?? [])];
-  const hits = targets.map((t) => controlPlaneHit(t, root)).filter((h): h is NonNullable<typeof h> => h !== null);
-  const memory = hits.find((h) => h.kind === "memory");
-  if (memory) {
-    return {
-      effect: "deny",
-      reason: `${memory.label} is in the memory directory, which is written only through the Remember tool (it screens sensitive content and records provenance) — use Remember instead of editing files there`,
-      rule: CONTROL_PLANE_RULE,
-    };
-  }
-  if (hits.length) {
+  const hits = targets.flatMap((t) => controlPlaneHits(t, root));
+  const memory = hits.filter((h) => h.kind === "memory").map((h) => memoryWriteBlock(toolName, h.label, root)).find((r): r is string => Boolean(r));
+  if (memory) return { effect: "deny", reason: memory, rule: CONTROL_PLANE_RULE };
+  const hooks = hits.find((h) => h.kind === "hooks");
+  if (hooks) return hookSettingsAsk(hooks.label);
+  const control = hits.filter((h) => h.kind === "control");
+  if (control.length) {
     return {
       effect: "ask",
-      reason: `${hits[0].label} is a control-plane file (instructions that reach future sessions, the runtime config or session records), so every write needs the user's approval`,
+      reason: `${control[0].label} is a control-plane file (instructions that reach future sessions, the runtime config or session records), so every write needs the user's approval`,
       rule: CONTROL_PLANE_RULE,
       noSession: true,
-      why: `要改控制面文件（${hits[0].label}）：写进去的指令会带进之后的会话，或改掉运行配置 / 会话记录`,
+      why: `要改控制面文件（${control[0].label}）：写进去的指令会带进之后的会话，或改掉运行配置 / 会话记录`,
     };
+  }
+  return null;
+}
+
+function hookSettingsAsk(label: string): Decision {
+  return {
+    effect: "ask",
+    reason: `${label} is part of the hooks setup (commands that run on this machine), so every write needs the user's approval`,
+    rule: CONTROL_PLANE_RULE,
+    noSession: true,
+    why: `要改 hooks 相关文件（${label}）：hooks 配置、hook 脚本或信任记录，改了会影响本机自动执行的命令`,
+  };
+}
+
+// bypass 档也不放过 hooks 配置：放行一切的档位不能变成「模型给自己装一个 hook 再触发」
+function bypassHookSettingsDecision(toolName: string, args: Record<string, unknown>, view: PermissionView | null, root?: string): Decision | null {
+  const p = pathArg(toolName, args);
+  for (const target of [...(p?.access === "write" ? [p.path] : []), ...(view?.writes ?? [])]) {
+    if (controlPlaneHits(target, root).some((h) => h.kind === "hooks")) return { ...hookSettingsAsk(target), source: "control-plane" };
   }
   return null;
 }
@@ -510,7 +560,7 @@ export function decide(
   // 控制面文件保护、本 run 的拒绝台账。沙箱那层（整机 + 跳过密钥守卫）由会话把 permissionMode=bypass
   // 映射成 sandbox.access="bypass" 达成；这里只管工具调用判定。租户/成员实例永远进不到这一档
   // （config.ts resolveConfig 与 session.ts setSessionMode 都拒），所以 bypass 不会被用来越过租户隔离。
-  if (mode === "bypass") return { effect: "allow", reason: "", source: "bypass" };
+  if (mode === "bypass") return bypassHookSettingsDecision(toolName, args, tool.permissionView?.(args) ?? null, ctx.root) ?? { effect: "allow", reason: "", source: "bypass" };
   const subject = callSubject(toolName, args);
   const view = tool.permissionView?.(args) ?? null;
   const writes = view?.writes ?? [];

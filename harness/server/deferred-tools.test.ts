@@ -1,12 +1,15 @@
 // 工具延迟加载（agent/deferred-tools.ts，对齐 Claude Code 的 tool search）。
 // 修前：每次请求都带全部工具的完整说明——全开时约 8.6 万字符，其中 Browser 一个 2 万、操作电脑六件约 1.9 万，绝大多数对话一次都用不上。
+// 再修前：没先 ToolSearch 就调推迟的工具必被拦下、白费一轮；「加载过」只从转录现推，整段压缩之后又得重来一遍。
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test, { after } from "node:test";
 import { ensureContextFits } from "./agent/context.ts";
-import { deferredLoaded, deferToolDefs, notLoadedResult, stubDef, toolSearchTool, TOOL_SEARCH } from "./agent/deferred-tools.ts";
+import { deferredGate, deferredLoaded, deferToolDefs, notLoadedResult, stubDef, toolSearchTool, TOOL_SEARCH } from "./agent/deferred-tools.ts";
+import { restoreFromRecord } from "./session/build-state.ts";
+import { sessionRecord } from "./session.ts";
 import type { Msg, ToolDef } from "./agent/turn.ts";
 import { dropSession, startRun, type Session } from "./session.ts";
 import { say, scripted, useTool } from "./test-harness/scripted-adapter.ts";
@@ -35,10 +38,13 @@ test("瘦身：推迟的工具只留第一句 + 怎么取说明；顶层参数�
   const { defs: out, deferred } = deferToolDefs(defs);
   assert.equal(out.length, defs.length, "工具表一项不增不减（缓存前缀稳定）");
   assert.deepEqual(out.map((d) => d.name), defs.map((d) => d.name), "顺序不变");
-  for (const name of ["Browser", "ReadPage", "Eval", "Network", "DeviceAct", "BridgeCall", "PullRequest", "Workspace", "Terminal"]) {
+  for (const name of [
+    "Browser", "ReadPage", "Eval", "Network", "DeviceAct", "BridgeCall", "PullRequest", "Workspace", "Terminal",
+    "Workflow", "StartSession", "SendMessage", "ListSessions", "ReadSession", "Preview", "WidgetGuide", "ShowWidget", "ProjectKnowledge",
+  ]) {
     assert.ok(deferred.has(name), `${name} 推迟`);
   }
-  for (const name of ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "Agent", "AskUserQuestion", "WebFetch", "Skill"]) {
+  for (const name of ["Read", "Edit", "Write", "Bash", "Grep", "Glob", "Agent", "AskUserQuestion", "WebFetch", "WebSearch", "Skill", "TodoWrite", "Remember", "Recall"]) {
     assert.ok(!deferred.has(name), `${name} 是常用工具，不推迟`);
   }
   const full = deferred.get("Browser")!;
@@ -75,6 +81,8 @@ test("ToolSearch：按名字加载整族（Browser 带上 ReadPage / Eval / Netw
   assert.match(text, /Parameters \(JSON schema\)/);
   const q = await toolSearchTool.run({ query: "pull request" }, ctxWith(deferred));
   assert.ok((q.meta?.loadedTools as string[]).includes("PullRequest"));
+  const sel = await toolSearchTool.run({ query: "select:Preview,PullRequest" }, ctxWith(deferred));
+  assert.deepEqual(sel.meta?.loadedTools, ["Preview", "PullRequest"], "select:A,B 按名字点");
   const bad = await toolSearchTool.run({ names: ["Read"] }, ctxWith(deferred));
   assert.equal(bad.ok, false);
   assert.match(bad.content.map((b) => (b.t === "text" ? b.text : "")).join(""), /Not deferred tools: Read/);
@@ -89,36 +97,84 @@ test("「加载过没有」从对话里现推：有说明结果、或调用过�
   assert.equal(deferredLoaded(viaSearch, "Network"), false);
 });
 
-test("没加载说明就调了推迟的工具：这次不执行、回完整说明并记为已加载；照着重发的第二次照常执行", async (t) => {
+const WORKSPACE_DEF: ToolDef = {
+  name: "Workspace",
+  description: "Look at the user's workspace view. It has many details the model must read first.",
+  parameters: { type: "object", properties: { action: { type: "string", enum: ["view"], description: "What to do." } }, required: ["action"] },
+};
+
+test("没加载说明就调：参数过得了完整 schema 就直接执行，结果后附完整说明、记进会话状态；之后再调不再附", async (t) => {
   let runs = 0;
-  const fakeDef: ToolDef = {
-    name: "Workspace",
-    description: "Look at the user's workspace view. It has many details the model must read first.",
-    parameters: { type: "object", properties: { action: { type: "string", enum: ["view"], description: "What to do." } } },
-  };
-  const fake: Tool = { effect: "read", concurrencySafe: true, def: fakeDef, run: async () => (runs++, ok("viewed", "the view")) };
-  const adapter = scripted(t).next(
-    useTool("w1", "Workspace", { action: "view" }),
-    (turn) => {
-      const last = JSON.stringify(turn.messages.at(-1));
-      assert.match(last, /deferred tool and its full instructions had not been loaded/);
-      assert.match(last, /It has many details the model must read first/);
-      return useTool("w2", "Workspace", { action: "view" });
-    },
-    say("看过了"),
-  );
+  const fake: Tool = { effect: "read", concurrencySafe: true, def: WORKSPACE_DEF, run: async () => (runs++, ok("viewed", "the view")) };
+  const adapter = scripted(t).next(useTool("w1", "Workspace", { action: "view" }), useTool("w2", "Workspace", { action: "view" }), say("看过了"));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "defer-"));
   roots.push(root);
   const session = attachSession(adapter, root, { tools: [fake, toolSearchTool] });
   sessions.push(session);
-  session.state!.ctx.deferredTools = new Map([["Workspace", fakeDef]]);
-  session.state!.tools = [stubDef(fakeDef), toolSearchTool.def];
+  session.state!.ctx.deferredTools = new Map([["Workspace", WORKSPACE_DEF]]);
+  session.state!.tools = [stubDef(WORKSPACE_DEF), toolSearchTool.def];
   await startRun(session, "看看我的工作区").done;
-  assert.equal(runs, 1, "第一次被拦下、第二次才执行");
-  const intercepted = session.state!.messages.flatMap((m) => m.content).find((b) => b.t === "tool_result" && b.id === "w1");
-  assert.ok(intercepted && intercepted.t === "tool_result");
-  assert.deepEqual(intercepted.meta?.loadedTools, ["Workspace"]);
-  assert.equal(notLoadedResult("Workspace", new Map([["Workspace", fakeDef]])).ok, false);
+  assert.equal(runs, 2, "两次都执行了，没有白费一轮");
+  const first = JSON.stringify(adapter.inputs[1].messages.at(-1));
+  assert.match(first, /the view/);
+  assert.match(first, /deferred tool instructions, now loaded/);
+  assert.match(first, /It has many details the model must read first/);
+  const second = JSON.stringify(adapter.inputs[2].messages.at(-1));
+  assert.match(second, /the view/);
+  assert.doesNotMatch(second, /deferred tool instructions/, "加载过就不再附");
+  const r1 = session.state!.messages.flatMap((m) => m.content).find((b) => b.t === "tool_result" && b.id === "w1");
+  assert.ok(r1 && r1.t === "tool_result" && r1.ok);
+  assert.deepEqual(r1.meta?.loadedTools, ["Workspace"], "微压缩据此不清掉说明");
+  assert.ok(session.state!.loadedTools.has("Workspace"));
+});
+
+test("不能直接执行的：参数过不了完整 schema、或是不看说明写不对的工具（Workflow / Browser）——不执行、回完整说明并记为已加载", () => {
+  const deferred = new Map([
+    ["Workspace", WORKSPACE_DEF],
+    ["Workflow", { ...WORKSPACE_DEF, name: "Workflow", description: "Run a workflow script. Script API details." }],
+  ]);
+  const bad = deferredGate("Workspace", { action: "bogus" }, deferred);
+  assert.equal(bad.run, false);
+  if (!bad.run) {
+    const text = bad.res.content.map((b) => (b.t === "text" ? b.text : "")).join("");
+    assert.match(text, /arguments do not match its parameters/);
+    assert.match(text, /\$\.action: must be one of "view"/);
+    assert.match(text, /was NOT run/);
+    assert.deepEqual(bad.res.meta?.loadedTools, ["Workspace"]);
+  }
+  const missing = deferredGate("Workspace", {}, deferred);
+  assert.equal(missing.run, false, "缺必填同样回说明");
+  const wf = deferredGate("Workflow", { action: "view" }, deferred);
+  assert.equal(wf.run, false, "Workflow 参数对得上也先看说明");
+  assert.equal(deferredGate("Workspace", { action: "view" }, deferred).run, true);
+  assert.equal(notLoadedResult("Workspace", deferred).ok, false);
+  assert.match(stubDef(WORKSPACE_DEF).description, /also runs directly/);
+  assert.match(stubDef(deferred.get("Workflow")!).description, /before the first use/);
+});
+
+test("加载过记在会话状态、随会话落盘：转录被整段压缩掉之后也不再附说明，恢复出来的会话照样认", async (t) => {
+  let runs = 0;
+  const fake: Tool = { effect: "read", concurrencySafe: true, def: WORKSPACE_DEF, run: async () => (runs++, ok("viewed", "the view")) };
+  const adapter = scripted(t).next(useTool("w1", "Workspace", { action: "view" }), say("一"), useTool("w2", "Workspace", { action: "view" }), say("二"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "defer-persist-"));
+  roots.push(root);
+  const session = attachSession(adapter, root, { tools: [fake, toolSearchTool] });
+  sessions.push(session);
+  const state = session.state!;
+  state.ctx.deferredTools = new Map([["Workspace", WORKSPACE_DEF]]);
+  state.tools = [stubDef(WORKSPACE_DEF), toolSearchTool.def];
+  await startRun(session, "看一下").done;
+  // 整段压缩：之前的调用与说明都不在转录里了
+  state.messages = [{ role: "user", content: [{ t: "text", text: "[summary] 之前看过工作区" }] }, { role: "assistant", content: [{ t: "text", text: "好" }] }];
+  await startRun(session, "再看一下").done;
+  assert.equal(runs, 2);
+  assert.doesNotMatch(JSON.stringify(adapter.inputs[3].messages.at(-1)), /deferred tool instructions/, "压缩后仍算加载过");
+  const rec = sessionRecord(session)!;
+  assert.deepEqual(rec.tools?.loaded, ["Workspace"]);
+  const other = attachSession(scripted(t), root, { tools: [fake] });
+  sessions.push(other);
+  restoreFromRecord(other.state!, rec);
+  assert.ok(other.state!.loadedTools.has("Workspace"), "恢复出来的会话照样认");
 });
 
 test("微压缩不清推迟工具的说明（清了模型会照着骨架瞎填参数，还当自己加载过）", async (t) => {

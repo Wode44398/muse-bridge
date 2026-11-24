@@ -60,6 +60,8 @@ export interface AgentRun {
   // 子 agent 面板：coder 档改过的文件（绝对路径）；没做完的原因（预算用尽 / 被限流到截止 / provider 出错……，做完了不带）
   editedFiles?: string[];
   stopReason?: string;
+  // 后台子 agent：发起它的那次 Agent 调用早已返回，「在跑」不看工具行与这一轮是否还在跑
+  background?: boolean;
 }
 export interface WorkflowRun {
   id: string;

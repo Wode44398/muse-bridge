@@ -164,6 +164,7 @@ function harness(ctx, extra = {}) {
     turnOrigin: extra.turnOrigin ? () => extra.turnOrigin : undefined,
     unattended: extra.unattended ? () => true : undefined,
     planFrom: extra.planFrom ? () => extra.planFrom : undefined,
+    pluginPolicy: extra.pluginPolicy || undefined,
   });
   return { gate, events, interrupted: () => interrupted, activity: () => activity };
 }
@@ -656,4 +657,38 @@ test('无人值守的轮（会话间 / Auto-fix / 自动续跑）：审批卡等
   ac.abort();   // 收掉，别把待回答留给后面的用例
   assert.equal((await p2).interrupt, false);
   t.mock.timers.reset();
+});
+
+test('插件审批策略回 ask：绕过权限、bridge 自家只读工具都不越过它，照样弹卡；宿主策略（无人值守）直接拒', async () => {
+  S._resetClaudeSettingsCache();
+  S.setClaudeSettings(admin, { allowBypass: true });
+  Q.sessionQuestions.clear();
+  const asked = [];
+  const ask = async (name, input) => { asked.push(name); return { behavior: 'ask', message: '先问我' }; };
+  // 绕过权限下：本来一张卡都不弹，插件要用户本人批 → 发卡，答了「允许一次」才放行
+  const a = harness(admin, { sid: 'sess-ask1', mode: 'bypassPermissions', pluginPolicy: ask });
+  const p1 = a.gate.canUseTool('mcp__bridge__call', { op: 'chat.send', args: { agent: 'agy', message: 'hi' } }, optsFor());
+  await flush();
+  const req = a.events.find((e) => e.type === 'perm_request');
+  assert.ok(req, '绕过权限下也发了审批卡');
+  answer(req.qid, { decision: 'once' });
+  assert.equal((await p1).behavior, 'allow');
+  // bridge 自家只读操作本来免审批：插件说 ask 也弹卡
+  const b = harness(admin, { sid: 'sess-ask2', mode: 'default', pluginPolicy: ask });
+  const p2 = b.gate.canUseTool('mcp__bridge__call', { op: 'sessions.list', args: {} }, optsFor());
+  await flush();
+  const req2 = b.events.find((e) => e.type === 'perm_request');
+  assert.ok(req2);
+  answer(req2.qid, { decision: 'deny' });
+  assert.equal((await p2).behavior, 'deny');
+  // 不表态：照旧（绕过权限直接放行）
+  const c = harness(admin, { sid: 'sess-ask3', mode: 'bypassPermissions', pluginPolicy: async () => null });
+  assert.equal((await c.gate.canUseTool('mcp__bridge__call', { op: 'chat.send', args: {} }, optsFor())).behavior, 'allow');
+  assert.equal(c.events.length, 0);
+  // 宿主策略：没人能批 → 拒
+  const d = harness(admin, { sid: 'sess-ask4', policy: 'host', pluginPolicy: ask });
+  const r4 = await d.gate.canUseTool('mcp__bridge__call', { op: 'chat.send', args: {} }, optsFor());
+  assert.equal(r4.behavior, 'deny');
+  assert.equal(d.events.length, 0);
+  assert.equal(asked.length, 3);
 });

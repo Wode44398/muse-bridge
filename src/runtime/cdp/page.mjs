@@ -1,5 +1,6 @@
 // CdpSession 的页面方法（方法体原样，由 cdp.mjs 装回 CdpSession.prototype）：求值、导航与等待、截图、刷新、无障碍快照与 ref、正文。
 import { snapshotAccessibility } from '../cdp-ax.mjs';
+import { pageLayerIds } from '../page-layers.mjs';
 import { foldRepeatedLines, PAGE_TEXT_LINKS_MAX, pageTextExpression } from '../cdp-page-text.mjs';
 import { scalePng } from '../png-scale.mjs';
 import { delay, LONG_LIVED, MUTATION_KEY, pngSize, SHOT_MAX_PX } from './shared.mjs';
@@ -283,8 +284,11 @@ export class CdpPageMethods {
   }
 
   // ── a11y 快照：页面读成缩进树，可交互节点带 [refN]，refs 到下次快照/导航前有效 ──
+  // 看整页（不带 query / ref）时先分层：看不见的抽屉折叠、可见弹窗排最前（page-layers.mjs）
   async axSnapshot(opts = {}) {
-    return snapshotAccessibility(this.send.bind(this), this.refs, opts);
+    const send = this.send.bind(this);
+    const layers = opts.layers !== false && !opts.query && opts.rootBackendId == null ? await pageLayerIds(send) : null;
+    return snapshotAccessibility(send, this.refs, layers ? { ...opts, layers } : opts);
   }
 
   refInfo(ref) {

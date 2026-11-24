@@ -215,7 +215,7 @@ export interface LoopStateOptions {
   ctx?: Partial<ToolContext>;
   compactionArchive?: CompactionArchive; // R10（二）：压缩归档（测试给内存版）
   browser?: boolean; // D5：这台机器有没有浏览器（false = playbook 走无浏览器版）；不给 = 有
-  profile?: ModelProfile; // 模型档案；不给 = 现状档案
+  profile?: ModelProfile; // 模型档案；不给 = 默认档案（lean）；测加固行为时给 hardenedProfile()
 }
 
 // P11：把工作区里的这些文件记成「已经 Read 过」——Edit / Write 的规划阶段会在弹卡之前否决没读过的改动。拿 Edit 当

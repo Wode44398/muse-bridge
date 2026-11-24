@@ -22,6 +22,8 @@ import {
   noteSessionOwner,
 } from './subagent-monitor.mjs';
 import { extractRecentSessionDirs } from './recent-dirs.mjs';
+import { resolveEffectiveContextUsage, getAgyContextLimits } from './context-limits.mjs';
+import { applyUserMedia } from './user-media.mjs';
 
 export { extractRecentSessionDirs };
 
@@ -149,6 +151,19 @@ export function noteSessionMeta(agyDir, sessionId, patch = {}) {
       at: patch.appendInterruptedTurn.at || new Date().toISOString(),
     }].slice(-40)
     : prevInterrupted;
+  const prevUserMedia = Array.isArray(prev.userMedia) ? prev.userMedia : [];
+  const nextUserMedia = patch.appendUserMedia && Array.isArray(patch.appendUserMedia.images) && patch.appendUserMedia.images.length
+    ? [...prevUserMedia, {
+      prompt: String(patch.appendUserMedia.prompt || '').trim().slice(0, 400),
+      images: patch.appendUserMedia.images.slice(0, 20).map((img) => ({
+        path: String(img.path || '').slice(0, 1000),
+        name: String(img.name || '').slice(0, 200),
+        ...(img.mimeType ? { mimeType: String(img.mimeType).slice(0, 80) } : {}),
+        ...(Number.isFinite(Number(img.size)) ? { size: Number(img.size) } : {}),
+      })).filter((img) => img.path),
+      at: patch.appendUserMedia.at || new Date().toISOString(),
+    }].filter((item) => item.images.length > 0).slice(-40)
+    : prevUserMedia;
   const next = {
     ...prev,
     ...(cleanCwd ? { cwd: cleanCwd } : {}),
@@ -164,6 +179,7 @@ export function noteSessionMeta(agyDir, sessionId, patch = {}) {
       ? { toolApprovals: { ...(prev.toolApprovals || {}), ...patch.toolApprovals } }
       : {}),
     ...(nextInterrupted.length ? { interruptedTurns: nextInterrupted } : {}),
+    ...(nextUserMedia.length ? { userMedia: nextUserMedia } : {}),
     ...(patch.lastTurnStatus ? { lastTurnStatus: patch.lastTurnStatus } : {}),
     ...(patch.lastTurnStats && typeof patch.lastTurnStats === 'object' ? { lastTurnStats: patch.lastTurnStats } : {}),
     updatedAt: patch.updatedAt || new Date().toISOString(),
@@ -187,6 +203,34 @@ export function hideSession(agyDir, sessionId) {
   if (!sessionId) return false;
   noteSessionMeta(agyDir, sessionId, { hidden: true });
   return true;
+}
+
+// 批量隐藏一批会话：一次落盘、跳过已彻底删除的墓碑，保留原 updatedAt 以便恢复后顺序不乱。
+export function hideSessions(agyDir, sessionIds) {
+  if (!agyDir || !Array.isArray(sessionIds)) return [];
+  const seen = new Set();
+  const ids = [];
+  for (const raw of sessionIds) {
+    const id = String(raw || '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  if (!ids.length) return [];
+  const store = readMetaStore(agyDir);
+  const now = new Date().toISOString();
+  const hidden = [];
+  for (const id of ids) {
+    const prev = store.sessions[id] || {};
+    if (prev.deleted) continue;
+    store.sessions[id] = { ...prev, hidden: true, updatedAt: prev.updatedAt || now };
+    hidden.push(id);
+  }
+  if (hidden.length > 0) {
+    writeMetaStore(agyDir, store);
+    invalidateSessionsCache();
+  }
+  return hidden;
 }
 
 export function restoreSession(agyDir, sessionId) {
@@ -460,6 +504,30 @@ function hasTrailingUnfinishedTool(msg) {
   return false;
 }
 
+const ATTACHED_HEAD = '本轮附加文件路径：';
+
+// 剥掉服务端在用户消息前拼的「本轮附加文件路径」清单，避免带图 / 带文件发送时
+// 裸 prompt（lastTurnStats / interruptedTurns）与回放里的 user.text 对不上。
+function stripAttachedPathsPrefix(raw) {
+  const s = String(raw ?? '');
+  if (!s.startsWith(ATTACHED_HEAD)) return s;
+  const lines = s.slice(ATTACHED_HEAD.length).split('\n');
+  if (lines[0].trim() !== '') return s;
+  let i = 1;
+  for (; i < lines.length; i++) {
+    const line = lines[i].replace(/\r$/, '');
+    if (!line.startsWith('- ') || !line.slice(2).trim()) break;
+  }
+  if (i === 1) return s;
+  return lines.slice(i).join('\n').replace(/^\n+/, '');
+}
+
+function userTextMatchesPrompt(rawMsgText, wantPrompt) {
+  const full = String(rawMsgText || '').trim();
+  if (full === wantPrompt) return true;
+  return stripAttachedPathsPrefix(rawMsgText).trim() === wantPrompt;
+}
+
 // ACP 的 session/load 只回放消息与工具块，不下发 stopReason=cancelled；结合本地记录补齐中断标记与未完结工具的取消态
 export function applyInterruptedMeta(messages = [], meta = {}) {
   const out = Array.isArray(messages) ? messages : [];
@@ -473,7 +541,7 @@ export function applyInterruptedMeta(messages = [], meta = {}) {
 
     // 优先精确匹配（用户提问 + 已落盘的部分回复文本一致）
     for (let i = out.length - 1; i >= 0; i--) {
-      if (out[i]?.role !== 'user' || String(out[i].text || '').trim() !== prompt) continue;
+      if (out[i]?.role !== 'user' || !userTextMatchesPrompt(out[i].text, prompt)) continue;
       const next = out[i + 1];
       if (next?.role === 'assistant' && !matchedAssistants.has(next)) {
         if (!partial || String(next.text || '').trim() === partial) {
@@ -502,7 +570,7 @@ export function applyInterruptedMeta(messages = [], meta = {}) {
     // 部分回复在停止瞬间尚未刷盘导致文本略短于侧车记录时，匹配最近一轮同提问消息
     if (!hit && prompt) {
       for (let i = out.length - 1; i >= 0; i--) {
-        if (out[i]?.role !== 'user' || String(out[i].text || '').trim() !== prompt) continue;
+        if (out[i]?.role !== 'user' || !userTextMatchesPrompt(out[i].text, prompt)) continue;
         const next = out[i + 1];
         if (next?.role === 'assistant' && !matchedAssistants.has(next) && partial.startsWith(String(next.text || '').trim())) {
           next.status = 'interrupted';
@@ -530,7 +598,7 @@ export function applyInterruptedMeta(messages = [], meta = {}) {
       const lastIt = turns[turns.length - 1];
       const p = String(lastIt?.prompt || '').trim();
       const partial = String(lastIt?.partialText || '').trim();
-      if (lastMsg?.role !== 'user' || String(lastMsg.text || '').trim() !== p) {
+      if (lastMsg?.role !== 'user' || !userTextMatchesPrompt(lastMsg.text, p)) {
         if (p) out.push({ role: 'user', text: p, images: [], blocks: [{ type: 'text', text: p }] });
       }
       out.push({
@@ -557,8 +625,10 @@ export function applyLastTurnStatsMeta(messages = [], meta = {}) {
   if (last?.role !== 'assistant' || prev?.role !== 'user') return messages;
   const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
   const want = norm(st.prompt);
-  const got = norm(prev.text);
-  if (!want || !got || !(got.startsWith(want) || want.startsWith(got.slice(0, 200)))) return messages;
+  const gotFull = norm(prev.text);
+  const gotStripped = norm(stripAttachedPathsPrefix(prev.text));
+  const matches = (got) => Boolean(want && got && (got.startsWith(want) || want.startsWith(got.slice(0, 200))));
+  if (!matches(gotFull) && !matches(gotStripped)) return messages;
   last.stats = {
     ms: Number.isFinite(st.ms) ? st.ms : null,
     tokens: Number.isFinite(st.tokens) ? st.tokens : 0,
@@ -610,6 +680,13 @@ export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
     }
     const history = reconstructHistoryMessages(before || []);
     applyInterruptedMeta(history.messages, { ...meta, lastTurnStatus: '' });
+    applyUserMedia(history.messages, {
+      dataDir: client.dataDir,
+      sessionId: id,
+      meta,
+      allowedRoots: [ctx?.uploads, meta.cwd || '', ...(Array.isArray(meta.additionalDirectories) ? meta.additionalDirectories : [])].filter(Boolean),
+      live: true,
+    });
     applyToolApprovalsMeta(history.messages, meta);
     applyToolOutputs(history.messages, readToolOutputs(ctx?.agyDir, id));
     // 前几轮交付的成品附件卡照样要有（以前只有下面「不在跑」那条路挂，正在跑的会话重开后前几轮的附件卡全没了）
@@ -620,6 +697,13 @@ export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
       artifactDir: sessionBrainDir(client.dataDir, id),
     });
     const snap = client.getMountedSnapshot?.(id) || null;
+    const liveCfg = extractConfigSummary(snap?.configOptions || [], snap?.modes, snap?.models);
+    const liveLimits = await getAgyContextLimits(client, { timeoutMs: 400 }).catch(() => null);
+    const resolvedUsage = resolveEffectiveContextUsage(snap?.rawUsage || snap?.usage || history.usage, {
+      model: liveCfg.model || meta.config?.model || '',
+      thoughtLevel: liveCfg.thoughtLevel || meta.config?.thought_level || '',
+      liveLimits,
+    }) || snap?.usage || history.usage || null;
     return {
       sessionId: id,
       live: true,
@@ -630,13 +714,13 @@ export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
       title: meta.customTitle || meta.title || history.title || snap?.title || '新对话',
       customTitle: meta.customTitle || '',
       messages: history.messages,
-      usage: snap?.usage || history.usage || null,
+      usage: resolvedUsage,
       commands: snap?.commands?.length ? snap.commands : history.commands,
       configOptions: snap?.configOptions || [],
       modes: snap?.modes || null,
       models: snap?.models || null,
       tier: snap?.tier || null,
-      ...extractConfigSummary(snap?.configOptions || [], snap?.modes, snap?.models),
+      ...liveCfg,
     };
   }
 
@@ -662,7 +746,7 @@ export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
     ctx, settings, cwd: effectiveWorkDir, additionalDirectories: extraDirs,
   });
 
-  const { snapshot, updates } = await client.loadSessionWithReplay(id, {
+  const { snapshot, updates, preservedAlive } = await client.loadSessionWithReplay(id, {
     cwd: verifiedCwd,
     fallbackCwd: rpcCwd,
     forceCwd: !!verifiedCwd,
@@ -675,6 +759,13 @@ export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
 
   const history = reconstructHistoryMessages(updates);
   applyInterruptedMeta(history.messages, meta);
+  applyUserMedia(history.messages, {
+    dataDir: client.dataDir,
+    sessionId: id,
+    meta,
+    allowedRoots: [ctx?.uploads, effectiveWorkDir, ...extraDirs].filter(Boolean),
+    live: false,
+  });
   applyToolApprovalsMeta(history.messages, meta);
   applyToolOutputs(history.messages, readToolOutputs(ctx?.agyDir, id));
   applyLastTurnStatsMeta(history.messages, meta);
@@ -691,11 +782,21 @@ export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
   }
 
   const cfgSummary = extractConfigSummary(snapshot?.configOptions || [], snapshot?.modes, snapshot?.models);
+  const liveLimits = await getAgyContextLimits(client, { timeoutMs: 400 }).catch(() => null);
+  const resolvedUsage = resolveEffectiveContextUsage(history.usage || snapshot?.rawUsage || snapshot?.usage, {
+    model: cfgSummary.model || meta.config?.model || '',
+    thoughtLevel: cfgSummary.thoughtLevel || meta.config?.thought_level || '',
+    liveLimits,
+  }) || snapshot?.usage || history.usage || null;
 
-  // 历史载入完毕后对齐监视器基线；若该会话磁盘上仍有活着或运行中的子代理（如重启后重开），自动恢复后台监视
-  markSessionTranscriptSynced(ctx?.key, client, id);
+  // 仅当真正走了 session/load 全量回放时才对齐监视器基线；走 hasAliveBackground 短路时
+  // syncDiskTail 已经把 syncedStep 对齐到 updates 实际含有的最后一步，不能再覆盖成最新磁盘步号，
+  // 否则 applyDesiredConfig 期间刚落盘的后台唤醒步骤会被吞掉。
+  if (!preservedAlive) {
+    markSessionTranscriptSynced(ctx?.key, client, id);
+  }
   if (hasProtectedSubagents(client.dataDir, id)) {
-    armSubagentMonitor(ctx, client, id);
+    armSubagentMonitor(ctx, client, id, { pollNow: true });
   }
 
   return {
@@ -705,7 +806,7 @@ export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
     title,
     customTitle: meta.customTitle || '',
     messages: history.messages,
-    usage: history.usage || snapshot?.usage || null,
+    usage: resolvedUsage,
     commands: history.commands.length ? history.commands : (snapshot?.commands || []),
     configOptions: snapshot?.configOptions || [],
     modes: snapshot?.modes || null,

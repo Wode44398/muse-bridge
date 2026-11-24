@@ -19,6 +19,8 @@
 //   canvas#canvas          宿主直接读这块画布
 // 构造前先从 parent.__fluxProps() 取参数，第一帧就是对的。
 // 单独调试：drift.html?colormode=Plasma&turbulence=1；?t=秒 定格在某一刻（无头截图用），window.__freeze(t) 同理。
+// 开机入场（web/src/lib/boot/intro.js）：父页挂着 __bootIntro 且 active 时，每帧照它的 cam 推镜、不「从黑浮现」、不限帧，
+// 画出第一帧把 ready 置 true。
 
 const canvas = document.getElementById('canvas');
 
@@ -74,6 +76,8 @@ uniform float uLen, uWid, uGlow, uBright, uFade;
 uniform int uMode;
 uniform vec3 uPal[4];
 uniform vec3 uL;              // 光的方向（屏幕坐标，y 向下，z 朝向观者）
+uniform vec4 uCam;            // 开机推镜：门心 x、y（css px）、进度 e（1 = 落定）、推进距离 Z；Z = 0 时不动
+uniform float uSoft;          // 开机推镜时的失焦：点边缘柔化宽度（设备像素）
 out vec2 vLocal;              // 相对点中心：x 沿运动方向、y 横向（设备像素）
 flat out float vHalf, vRad, vGlowR;
 flat out vec4 vCol;
@@ -121,6 +125,12 @@ void main() {
   // uWid = 浪脊上最大的点径；波谷约为它的 12%（片元里亚像素的点按覆盖面积自然变淡，不另调亮度）
   float rad = 0.5 * uWid * uDpr * mix(0.12, 1.0, sz);
 
+  // 开机推镜：同一台相机，浪峰比浪谷离镜头近一点，推近时多放大一点
+  float Dd = 2.4 - 0.35 * clamp(hl, -1.5, 2.0);
+  float zs = Dd / (Dd + uCam.w * (1.0 - uCam.z));
+  p = uCam.xy + (p - uCam.xy) * zs;
+  rad *= zs;
+
   // 拖尾（默认 0 = 纯圆点）：最近 uLen×0.045 秒在屏幕上划过的轨迹，头在当前位置
   vec2 delta = vel * (uLen * 0.045) * uDpr;
   float L = length(delta);
@@ -129,7 +139,7 @@ void main() {
   vec2 cen = p * uDpr - dir * half_;
 
   float gr = uGlow * (1.0 + uWid) * 1.5 * uDpr;
-  float ex = half_ + rad + gr + 1.0, ey = rad + gr + 1.0;
+  float ex = half_ + rad + gr + 1.0 + uSoft, ey = rad + gr + 1.0 + uSoft;
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
   vec2 local = corner * vec2(ex, ey);
   vec2 pos = cen + dir * local.x + vec2(-dir.y, dir.x) * local.y;
@@ -145,6 +155,7 @@ in vec2 vLocal;
 flat in float vHalf, vRad, vGlowR;
 flat in vec4 vCol;
 uniform float uGlowAmt;
+uniform highp float uSoft;   // 顶点着色器里是 highp：两边精度不一致会链接失败
 out vec4 o;
 void main() {
   float ax = clamp(vLocal.x, -vHalf, vHalf);
@@ -154,6 +165,7 @@ void main() {
   float r = vRad * mix(1.0, mix(0.3, 1.0, u * u * (3.0 - 2.0 * u)), tk);
   float d = length(vec2(vLocal.x - ax, vLocal.y));
   float core = clamp(r + 0.5 - d, 0.0, 1.0);             // 锐边：只留 1 个设备像素的抗锯齿
+  if (uSoft > 0.01) core = smoothstep(r + 0.5 + uSoft, r - 0.5 - uSoft * 0.6, d) * r * r / ((r + uSoft * 0.5) * (r + uSoft * 0.5));
   float e = max(d - r, 0.0) / vGlowR;
   float halo = uGlowAmt * 0.2 * exp(-e * e * 3.0);
   float a = (core + halo * (1.0 - core)) * vCol.a * mix(1.0, mix(0.25, 1.0, u), tk);
@@ -205,7 +217,7 @@ function init() {
   gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, premultipliedAlpha: true, preserveDrawingBuffer: false, powerPreference: 'low-power' });
   if (!gl) return false;
   prog = link(VS, FS, ['uRes', 'uDpr', 'uSpacing', 'uCols', 'uOrigin', 'uWa', 'uWb', 'uSigma', 'uLamP',
-    'uLen', 'uWid', 'uGlow', 'uBright', 'uFade', 'uMode', 'uPal', 'uL', 'uGlowAmt'], U);
+    'uLen', 'uWid', 'uGlow', 'uBright', 'uFade', 'uMode', 'uPal', 'uL', 'uGlowAmt', 'uCam', 'uSoft'], U);
   bg = link(BG_VS, BG_FS, ['uRes', 'uDeep', 'uFade', 'uSeed'], BU);
   gl.bindVertexArray(gl.createVertexArray());       // 空 VAO：全部由 gl_VertexID / gl_InstanceID 推
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -280,6 +292,10 @@ function buildWaves() {
   for (const w of waves) w.Q = steep / qk;
 }
 
+// 开机入场的推镜：父页（web/src/lib/boot/intro.js）的共享对象，没有就是 null
+const intro = (() => { try { return parent !== window && parent.__bootIntro ? parent.__bootIntro : null; } catch { return null; } })();
+const introCam = () => (intro && intro.active ? intro.cam : null);
+
 // 光从左上方斜照
 const LIGHT = (() => { const v = [-0.45, -0.5, 0.74]; const n = Math.hypot(...v); return v.map((x) => x / n); })();
 
@@ -323,8 +339,12 @@ function draw(now) {
   gl.uniform1i(U.uMode, P.colormode === 'Original' ? 1 : 0);
   gl.uniform3fv(U.uPal, pal.flat());
   gl.uniform3fv(U.uL, LIGHT);
+  const cam = introCam();
+  gl.uniform4f(U.uCam, cam ? cam.cx : 0, cam ? cam.cy : 0, cam ? cam.e : 1, cam ? cam.Z : 0);
+  gl.uniform1f(U.uSoft, cam ? cam.soft * dpr : 0);
   gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, cols * rows);
   try { window.__fluxFrame && window.__fluxFrame(); } catch {}
+  if (intro && intro.active) intro.ready = true;
 }
 
 // 推进时间：相位按双精度累加（ω 随「浪速」缩放，改速度不跳）
@@ -336,8 +356,8 @@ function advance(dt) {
 function frame(now) {
   raf = requestAnimationFrame(frame);
   const fps = Math.min(P.maxfps, hostFps);
-  // 允许 ±半帧的抖动，否则 60Hz 屏上 30 帧会落成 20 帧
-  if (now - lastDraw < 1000 / fps - 4) return;
+  // 允许 ±半帧的抖动，否则 60Hz 屏上 30 帧会落成 20 帧；开机推镜时每帧都画，和上面那层门同步
+  if (!introCam() && now - lastDraw < 1000 / fps - 4) return;
   const dt = Math.min(0.1, (now - (lastNow || now)) / 1000);
   lastNow = now; lastDraw = now;
   if (dirty && W) { layout(); buildWaves(); dirty = false; }
@@ -370,6 +390,7 @@ window.__freeze = (t) => {
 function start() {
   if (!init()) { document.body.style.background = '#05070d'; return; }
   born = performance.now();
+  if (intro && intro.active) born = -1e9;   // 开机入场：门洞里第一眼就该是这片海，不从黑浮现
   shown = measure();
   if (shown) { layout(); buildWaves(); dirty = false; }
   if (freezeT != null) { window.__freeze(freezeT); return; }

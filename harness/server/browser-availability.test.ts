@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { after, type TestContext } from "node:test";
 import { systemPrompt } from "./agent/prompt.ts";
+import { defaultProfile, hardenedProfile } from "./agent/profile.ts";
 import { setConfig } from "./config.ts";
 import {
   browserBackendsFrom,
@@ -102,7 +103,7 @@ test("D5 注册表：本机有 Chromium 系浏览器时（开发机）不设开�
 });
 
 test("D5 system：有浏览器与不给开关逐字相同；没有浏览器时不提 Browser / Eval / Network、桌面与安卓", () => {
-  const base = { root: "/ws", shell: "bash", platform: "linux", provider: "openai", model: "m", access: "full", webSearch: true } as const;
+  const base = { root: "/ws", shell: "bash", platform: "linux", provider: "openai", model: "m", access: "full", webSearch: true, profile: hardenedProfile() } as const;
   const dflt = systemPrompt(base);
   assert.equal(systemPrompt({ ...base, browser: true }), dflt);
   assert.match(dflt, /verifiable end-to-end via Browser\(attach\)/);
@@ -117,6 +118,16 @@ test("D5 system：有浏览器与不给开关逐字相同；没有浏览器时�
   assert.match(nob, /through its endpoints with curl, confirm from the server side with Preview\(action:"logs"\), and fix and re-run/);
   assert.doesNotMatch(nob, /Browser\(|Browser\/ReadPage|Eval\/Network|Android app/);
   assert.doesNotMatch(nob, /\$\{/);
+  // lean 正文（默认）：同一个开关，同样只在有浏览器时提浏览器、桌面与安卓
+  const lean = { ...base, profile: defaultProfile() };
+  const leanOn = systemPrompt(lean);
+  assert.equal(systemPrompt({ ...lean, browser: true }), leanOn);
+  assert.match(leanOn, /drive web or desktop UIs through the browser tools/);
+  assert.match(leanOn, /a desktop \(Electron\) app or an Android app/);
+  const leanOff = systemPrompt({ ...lean, browser: false });
+  assert.match(leanOff, /## Playbooks\nStep-by-step playbooks — running and verifying a web app, and the safety rules/);
+  assert.doesNotMatch(leanOff, /Browser\(|browser tools|Eval|Network|Android app|Electron/);
+  assert.doesNotMatch(leanOff, /\$\{/);
 });
 
 // 生产路径建会话（假 key 只为建得起来，模型换成脚本）。状态在 startRun 里按此刻的环境建

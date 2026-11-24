@@ -20,6 +20,7 @@ import { ui, studioInbox, screenOn, rootScreen } from './state.svelte.js';
 import { showToast } from './toast.svelte.js';
 import { t, tr } from './i18n.js';
 import { handleWsx, uiClientId, uiAck, startUiBeat } from './uiReport.js';
+import { WINDOW_PAGE, isPageWindow, hasDesktopPageWindows, routeToPageWindow } from './windowPage.svelte.js';
 
 const seen = new Set();
 const MAX_AGE = 60_000;
@@ -49,13 +50,17 @@ const SCREEN_LABEL = { home: () => t('主页'), files: () => t('文件'), claude
 export async function askClaudeAboutError(text) {
   if (!screenOn('claude')) return false;
   const where = ui.settingsOpen ? t('设置') : (SCREEN_LABEL[ui.screen]?.() || String(ui.screen || ''));
+  const msg = t('我刚在「{where}」看到这个报错：「{err}」。帮我看看是不是 bridge 出 bug 了；是的话跟我确认后上报。', { where, err: String(text || '').slice(0, 500) });
+  if (isPageWindow() && WINDOW_PAGE !== 'claude' && hasDesktopPageWindows()) {
+    await routeToPageWindow({ key: 'claude', action: 'claude-prefill', text: msg });
+    return true;
+  }
   await gotoScreen('claude');
   ui.taskDone = false;
   // Claude 页挂着就按它「新对话」的落点规则开；还没挂上时开在默认工作空间（同 App 里桌面快捷键的处理）
   const handled = !window.dispatchEvent(new CustomEvent('bridge:newchat', { cancelable: true }));
   if (!handled) { const { newConversation } = await import('./chat.svelte.js'); newConversation(); }
   const { prefillComposer } = await import('./composerBridge.svelte.js');
-  const msg = t('我刚在「{where}」看到这个报错：「{err}」。帮我看看是不是 bridge 出 bug 了；是的话跟我确认后上报。', { where, err: String(text || '').slice(0, 500) });
   // 等新对话的输入栏换好草稿再填，别被「换成新对话那份草稿」冲掉
   setTimeout(() => prefillComposer(msg), 80);
   return true;
@@ -177,6 +182,32 @@ export async function handleUiCmd(ev) {
     seen.add(key);
     if (seen.size > 300) { const it = seen.values(); for (let i = 0; i < 100; i++) seen.delete(it.next().value); }
     if (ev.at && Math.abs(Date.now() - ev.at) > MAX_AGE) return;
+    // 独立分页窗口收到未点名 client 的广播指令：
+    //   · toast 只在当前聚焦时弹出（免得每个并排窗口齐刷刷弹一遍）；
+    //   · open 只响应属于本窗口分页的指令，其它交由主窗或匹配窗接手，不抢回执。
+    if (!ev.client && isPageWindow()) {
+      const focused = typeof document !== 'undefined' && typeof document.hasFocus === 'function' ? document.hasFocus() : !document.hidden;
+      if (ev.op === 'toast') {
+        if (!focused) return;
+      } else if (ev.op === 'open' && ev.target && typeof ev.target === 'object') {
+        const tg0 = ev.target;
+        const from0 = ev.from && typeof ev.from === 'object' ? ev.from : null;
+        let match = false;
+        if (tg0.session) match = WINDOW_PAGE === 'claude';
+        else if (from0?.agent === 'agy' && (tg0.file || (tg0.folder != null && tg0.folder !== false))) match = WINDOW_PAGE === 'agy' || WINDOW_PAGE === 'files';
+        else if (tg0.file) match = focused;
+        else if (tg0.folder != null && tg0.folder !== false) match = WINDOW_PAGE === 'files';
+        else if (tg0.app) {
+          const spec = tg0.app;
+          const appKey = typeof spec === 'string' ? 'app:' + spec.trim() : (spec?.plugin && spec?.id ? `app:${spec.plugin}:${spec.id}` : '');
+          match = Boolean(appKey && appKey === WINDOW_PAGE);
+        } else if (tg0.page) {
+          const p0 = String(tg0.page || '').toLowerCase();
+          match = p0 === 'settings' ? focused : p0 === 'routines' ? WINDOW_PAGE === 'claude' : PAGE_SCREEN[p0] === WINDOW_PAGE;
+        }
+        if (!match) return;
+      }
+    }
     if (ev.id && (ev.client || !document.hidden)) ack = { ok: false };
     if (ev.op === 'toast') {
       if (ev.text) showToast(tr(String(ev.text)));

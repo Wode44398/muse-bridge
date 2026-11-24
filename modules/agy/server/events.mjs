@@ -342,9 +342,17 @@ export function reconstructHistoryMessages(notifications = [], platform = proces
           else m.text = c.text;
           m.blocks.push({ type: 'text', text: c.text });
         } else if (c.type === 'image') {
-          const img = { mimeType: String(c.mimeType || 'image/png'), data: String(c.data || '') };
-          m.images.push(img);
-          m.blocks.push({ type: 'image', ...img });
+          const img = {
+            mimeType: String(c.mimeType || 'image/png'),
+            ...(c.data ? { data: String(c.data) } : {}),
+            ...(c.path ? { path: String(c.path) } : {}),
+            ...(c.name ? { name: String(c.name) } : {}),
+            ...(Number.isFinite(Number(c.size)) ? { size: Number(c.size) } : {}),
+          };
+          if (img.data || img.path) {
+            m.images.push(img);
+            m.blocks.push({ type: 'image', ...img });
+          }
         }
         break;
       }

@@ -202,3 +202,31 @@ test("归约器给直播的条目记本机时刻（旁挂在 live-clock，不进
     Date.now = realNow;
   }
 });
+
+test("工具卡认参数的别家写法（file_path / filePath / absolute_path、Grep 的 output_mode）：路径、合并计数与并行读写的行都照规范名摆；规范名在时不动", () => {
+  // 模型按 Claude Code / Gemini CLI 的习惯写参数：服务端执行前归一，转录里留原话——卡片照样认得出路径
+  assert.equal(toolLine("Read", { filePath: "src/app/main.ts" }, "读").meta, "main.ts");
+  assert.equal(toolLine("Read", { absolute_path: "C:/ws/a.ts" }, "读").full, "C:/ws/a.ts");
+  assert.equal(toolLine("Write", { target_file: "notes.md", contents: "x" }, "写").meta, "notes.md");
+  assert.equal(argPreview({ filePath: "x/y.ts" }), "x/y.ts");
+  assert.equal(argPreview({ path: "p.ts", file_path: "q.ts" }), "p.ts", "规范名优先");
+  // 同一个文件用两种写法读又改：仍算一个文件、并成一句
+  const pieces = groupSummary([tool("r", "Read", { file_path: "a.ts" }), tool("e", "Edit", { filePath: "a.ts" })]);
+  assert.equal(pieces.length, 1);
+  assert.match(pieces[0].text, /a\.ts/);
+  // 连续读同一个文件（写法不同）并成一个 run
+  const runs = groupEntries([tool("r1", "Read", { file_path: "a.ts", offset: 1, limit: 10 }), tool("r2", "Read", { absolutePath: "a.ts", offset: 11, limit: 10 })]);
+  assert.equal(runs.length, 1);
+  // 参数表里别家的路径键也摆成路径小片
+  assert.equal(toolParams({ filePath: "a.ts" })[0].chip, true);
+});
+
+test("工具卡的同义名表只补规范名缺的那一项，取值按服务端同一张表换（output_mode files_with_matches → files）", async () => {
+  const { canonicalArgs } = await import("../web/src/lib/tool-args.ts");
+  assert.deepEqual(canonicalArgs("Grep", { pattern: "x", output_mode: "files_with_matches" }), { pattern: "x", output_mode: "files_with_matches", mode: "files" });
+  assert.deepEqual(canonicalArgs("Grep", { pattern: "x", mode: "count", output_mode: "content" }).mode, "count");
+  const raw = { path: "a.ts" };
+  assert.equal(canonicalArgs("Read", raw), raw, "没有要补的原样返回");
+  assert.equal(canonicalArgs("Bash", { cmd: "ls" }).command, "ls");
+  assert.equal(canonicalArgs("NotATool", { file_path: "a" }).path, undefined);
+});

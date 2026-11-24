@@ -11,6 +11,8 @@ import { injectionKind } from "./agent/injections.ts";
 import { say, scripted, useTool } from "./test-harness/scripted-adapter.ts";
 import { attachSession, send } from "./test-harness/session-fixture.ts";
 import { todoTool } from "./tools/todo.ts";
+import { hardenedProfile } from "./agent/profile.ts";
+// 这个文件钉的是加固姿态（hardened）的门禁 / 追问 / 提醒行为：各场景显式在加固档案下跑（lean 默认不设这些）
 
 const roots: string[] = [];
 after(() => {
@@ -25,7 +27,7 @@ const tmp = (prefix: string) => {
 };
 // 夹具默认不带 TodoWrite：挂上，并把 setTodos 接到 state（生产由 session.buildState 接）
 function todoSession(adapter: Parameters<typeof attachSession>[0], prefix: string) {
-  const session = attachSession(adapter, tmp(prefix), { tools: [todoTool] });
+  const session = attachSession(adapter, tmp(prefix), { tools: [todoTool], profile: hardenedProfile() });
   session.state!.ctx.setTodos = (items) => { session.state!.todos = items; };
   return session;
 }

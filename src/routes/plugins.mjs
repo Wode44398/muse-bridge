@@ -16,6 +16,7 @@
 //   GET  /api/plugins/log?id=&name=&lines=   托管子进程（ctx.process）的日志尾巴；name=plugin = 插件自己的日志（ctx.log，&level=warn|error 过滤）
 //   GET  /plugins/<id>/web/<path>           第三方插件自带的页面（web/），插件开着才给；免登录（同 /app 静态资源）；html 与 svg / xml 带 CSP sandbox
 //   GET  /api/plugins/ui                    界面扩展（主页卡片、应用图标……）；POST /api/plugins/ticket 签插件票（面板 / 设置 / 工作台 / 应用）
+//   GET  /api/plugins/ui/decor?agent=        文件夹（工作空间 / 项目）的插件外观（plugins/workspace.mjs）
 //   GET|POST /api/plugin/<id>/_bridge/<op>[/<子操作>]   插件页面的设置（只给主机）与页面宿主能力（kv / grants / chat / files / host）
 //   GET  /api/plugins/grants?plugin=  POST /api/plugins/grants {plugin, perm, allow}   页面权限的授权（只有 bridge 自己的界面能调）
 //   POST /api/plugins/handles {plugin, items, mode?}   给选择器里选中的文件签句柄；GET|POST /api/plugins/host-requests/<req>[/complete] 手机 App 的宿主请求中转
@@ -43,7 +44,8 @@ import { grantFields, grantedIn, grantNeedsConfirm, accountLabel, HOST_ACCOUNT }
 import { CAPABILITIES } from '../config/capabilities.mjs';
 import { listUsers } from '../users.mjs';
 import { installFromGithub, checkUpdate, sourceOf } from '../plugins/github.mjs';
-import { marketOverview, installFromMarket, rollbackInstalled, restoreBuiltinVersion, pendingUpdates } from '../plugins/market.mjs';
+import { marketOverview, installFromMarket, rollbackInstalled, restoreBuiltinVersion, pendingUpdates, isRevoked } from '../plugins/market.mjs';
+import { registerCommunityRoutes } from './plugins-community.mjs';
 import { rollbackTarget } from '../plugins/discover.mjs';
 import { FEATURES } from '../config/index.mjs';
 import { pluginLogs } from '../plugins/logs.mjs';
@@ -55,6 +57,7 @@ import { grantsView, grantsList, setGrant } from '../plugins/page-grants.mjs';
 import { signHandles, useHandle, statHandle, streamHandle, writeHandle, WRITE_MAX } from '../plugins/page-files.mjs';
 import { createHostRequest, waitHostRequest, hostRequestView, completeHostRequest } from '../plugins/page-host.mjs';
 import { chatStart, chatSend, chatStop, chatSessions, chatHistory, chatEvents, chatWatch } from '../plugins/page-chat.mjs';
+import { hasSocket, socketWho, mintSocketTicket } from '../plugins/sockets.mjs';
 
 const MAX_ZIP = 50 * 1024 * 1024;
 
@@ -234,6 +237,8 @@ export function registerPluginRoutes(router, { identify }) {
     try {
       const b = await body(req);
       if (!kernel.has(String(b.id || ''))) throw new PluginError(404, '没有插件「' + b.id + '」');
+      const rv = b.enabled ? isRevoked(kernel, String(b.id)) : null;
+      if (rv) throw new PluginError(409, '这个社区插件已被下架' + (rv.reason ? '：' + rv.reason : '') + '，不能再启用；卸载它，或装一个没被下架的版本');
       const p = await kernel.setEnabled(String(b.id), !!b.enabled);
       changed();
       json(res, 200, { plugin: pluginView(p), ...pluginsOverview() });
@@ -305,11 +310,13 @@ export function registerPluginRoutes(router, { identify }) {
       const p = await fn(id, b);
       changed();
       json(res, 200, { plugin: pluginView(kernel.get(id) ? { ...kernel.get(id), pendingRestart: !!p?.pendingRestart || kernel.get(id).pendingRestart } : p), ...pluginsOverview() });
-    } catch (e) { fail(res, e); }
+    } catch (e) { if (e?.needAck) json(res, 428, { error: String(e.message), needAck: e.needAck }); else fail(res, e); }
   };
-  router.on('POST', '/api/plugins/market/install', marketOp((id, b) => installFromMarket(kernel, id, typeof b.version === 'string' ? b.version : '')));
+  // channel: 'community' = 社区市场；含服务端代码的社区插件要带 ack（用户在确认框里点过「我了解风险」），否则 428 needAck
+  router.on('POST', '/api/plugins/market/install', marketOp((id, b) => installFromMarket(kernel, id, typeof b.version === 'string' ? b.version : '', { channel: b.channel === 'community' ? 'community' : 'official', ack: b.ack === true })));
   router.on('POST', '/api/plugins/rollback', marketOp((id) => rollbackInstalled(kernel, id)));
   router.on('POST', '/api/plugins/restore-builtin', marketOp((id) => restoreBuiltinVersion(kernel, id)));
+  registerCommunityRoutes(router, { kernel, admin, body, json, fail });
 
   router.on('POST', '/api/plugins/uninstall', async (req, res) => {
     if (!admin(req, res)) return;
@@ -349,7 +356,17 @@ export function registerPluginRoutes(router, { identify }) {
     if (!c) return;
     try { json(res, 200, await uiView(c, url.searchParams.get('lang') || 'zh')); } catch (e) { fail(res, e); }
   });
+  // 工作区插槽的外观（plugins/workspace.mjs）：?agent=agy|claude → { decor: [{ plugin, pluginName, id, items }] }
+  router.on('GET', '/api/plugins/ui/decor', async (req, res, url) => {
+    const c = requireCtx(identify, req, res);
+    if (!c) return;
+    try {
+      if (typeof uiMod.decorView !== 'function') throw new PluginError(501, '这个版本还不支持文件夹外观');
+      json(res, 200, await uiMod.decorView(c, url.searchParams.get('agent') || ''));
+    } catch (e) { json(res, e.status || 400, { error: String(e?.message || e) }); }
+  });
   // 按下一个界面动作（「/」命令、＋菜单、消息 / 会话菜单）：{ plugin, kind, id, args } → { toast?, insert?, send?, open? }
+  // 文件夹菜单项：kind 'workspaceDialog' → { dialog }；'workspaceAction' → { toast?, open?, decorChanged?, undo? }
   router.on('POST', '/api/plugins/ui/run', async (req, res) => {
     const c = requireCtx(identify, req, res);
     if (!c) return;
@@ -437,7 +454,7 @@ export function registerPluginRoutes(router, { identify }) {
   //     主机；成员要这个插件有对成员开放的页面）。主机专用的插件，成员拿票或经宿主代发都够不着。
   // 每个能力自己还要再判：声明并授过权（page.chat / page.files）、会话 / 句柄 / 中转请求属于这个插件和这个人。
   const HOST_OPS = new Set(['config', 'options', 'actions', 'action', 'status']);
-  const PAGE_OPS = new Set(['kv', 'grants', 'chat', 'files', 'host']);
+  const PAGE_OPS = new Set(['kv', 'grants', 'chat', 'files', 'host', 'socket']);
   router.prefix(['GET', 'POST'], '/api/plugin/', async (req, res, url) => {
     const m = /^\/api\/plugin\/([a-z][a-z0-9-]{0,47})\/_bridge\/([a-z][a-z0-9-]{0,31})(?:\/([a-z][a-z0-9-]{0,31}))?$/.exec(url.pathname);
     if (!m) { json(res, 404, { error: 'not found' }); return; }
@@ -528,6 +545,15 @@ export function registerPluginRoutes(router, { identify }) {
     };
     const nope = () => json(res, 404, { error: 'not found' });
     try {
+      if (op === 'socket' && !sub && M === 'POST') {
+        // 实时通道的一次性连接票（六期）：页面拿它去连 /api/plugin/<id>/_ws/<name>
+        const b = await body(req);
+        const name = String(b.name || '');
+        if (!hasSocket(id, name)) { json(res, 404, { error: '插件没有这个实时通道：' + name }); return; }
+        if (socketWho(id, name) !== 'members' && !can(who, 'server.manage')) { json(res, 403, { error: '这个实时通道只给服务器主机' }); return; }
+        json(res, 200, mintSocketTicket(id, name, who, b.query));
+        return;
+      }
       if (op === 'kv' && !sub) {
         if (M === 'GET') {
           const key = url.searchParams.get('key');

@@ -4,6 +4,7 @@ import test from "node:test";
 import { callSubject, decide, ruleMatches, type PermissionRules } from "./agent/permissions.ts";
 import { toolMap } from "./tools/registry.ts";
 import { refreshDynamicContext, refreshPlanSection, systemPrompt } from "./agent/prompt.ts";
+import { defaultProfile, hardenedProfile } from "./agent/profile.ts";
 
 const tools = toolMap();
 const rules = (r: Partial<PermissionRules>): PermissionRules => ({
@@ -89,10 +90,11 @@ test("read-only and plan block effectful tools; deny rules bite in every mode", 
 // #75 的恢复语义：plan 段是【会变】的，必须跟着当前模式对齐。会话在 plan 建立、
 // 批准后转 auto，重开走 rec.system（不重新生成 prompt）——不摘掉这段，恢复出来的
 // 模型还以为自己只读，会拒绝动手。
-test("the plan-mode section follows the session's CURRENT mode across resume", () => {
+// 两种姿态的核心正文（lean / hardened）都要成立：按文字标记工作的函数不能只认一版
+for (const [posture, profile, coreHeading] of [["hardened", hardenedProfile(), "## Deliverable form"], ["lean", defaultProfile(), "## Working"]] as const) test(`the plan-mode section follows the session's CURRENT mode across resume (${posture})`, () => {
   const env = {
     root: "C:/ws", shell: "bash", platform: "win32",
-    provider: "openai", model: "x", webSearch: true, memory: "note-1: x",
+    provider: "openai", model: "x", webSearch: true, memory: "note-1: x", profile,
   } as const;
   const M = "PLAN MODE IS ACTIVE";
   // 段首标记（前导空行 + 标题），区别于核心提示词里对它的引述
@@ -108,7 +110,7 @@ test("the plan-mode section follows the session's CURRENT mode across resume", (
   // 批准后（auto）重开：段摘掉，核心契约与 memory 段都还在
   const asAuto = refreshed(planPrompt, "auto");
   assert.ok(!asAuto.includes(M), "stale plan contract must not survive approval");
-  assert.ok(asAuto.includes("## Deliverable form"));
+  assert.ok(asAuto.includes(coreHeading));
   assert.ok(asAuto.includes("## Memory index"));
 
   // 仍是 plan 重开：段保留且不重复，且排在动态段之前

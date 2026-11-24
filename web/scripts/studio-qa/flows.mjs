@@ -44,7 +44,7 @@ async function setupOnce(pg, cfg, first) {
   await pg.send('Page.setInterceptFileChooserDialog', { enabled: true });
   await pg.send('DOM.enable');
   await pg.send('Page.navigate', { url: URL0 });
-  await pg.eval(`(async () => { for (let i = 0; i < 200; i++) { if (document.readyState === 'complete' && !document.documentElement.hasAttribute('data-booting')) return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()`);
+  await pg.eval(`(async () => { for (let i = 0; i < 200; i++) { if (document.readyState === 'complete' && !document.documentElement.hasAttribute('data-boot')) return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()`);
   await sleep(800);
   await pg.eval(`(async () => { await __qa.init(); __qa.st.ui.screen = 'studio'; await __qa.until(() => document.querySelector('.studio-root .sd-page.on'), 15000); await __qa.until(() => __qa.m.studio.catalog, 15000); return true; })()`);
   await sleep(500);

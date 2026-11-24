@@ -7,6 +7,7 @@ import { looksLikeImagePath, MAX_ATTACHMENT_REFS, MAX_IMAGE_ATTACHMENTS, MAX_IMA
 import { DEFAULT_FRAMES, extractFrames, ffmpegAvailable, formatTimestamp, looksLikeVideoPath, MAX_VIDEO_BYTES, sniffVideoMime, type SupportedVideoMime } from "../video.ts";
 import { audioDurationSeconds, looksLikeAudioPath, MAX_AUDIO_BYTES, MAX_AUDIO_TOTAL_BYTES, sniffAudioMime, type SupportedAudioMime } from "../audio.ts";
 import type { Session } from "./types.ts";
+import { outsideReadOf } from "../sandbox.ts";
 
 interface PreparedUserInput {
   content: Block[];
@@ -49,7 +50,20 @@ export function prepareUserInput(
   let totalImageBytes = 0;
 
   for (const requested of unique) {
-    const abs = state.ctx.sandbox.resolve(requested);
+    let abs: string;
+    try {
+      abs = state.ctx.sandbox.resolve(requested);
+    } catch (err) {
+      const outside = outsideReadOf(err);
+      let isDir = false;
+      if (outside && path.isAbsolute(requested)) {
+        try { isDir = statSync(outside.path).isDirectory(); } catch {}
+      }
+      if (!outside || !isDir) throw err;
+      // 用户主动将工作区外的文件夹拖入输入栏：本会话按只读目录放行，再过一遍完整沙箱与 realpath 复核
+      state.grantReadRoots([outside.path]);
+      abs = state.ctx.sandbox.resolve(requested);
+    }
     let stat;
     try {
       stat = statSync(abs);
@@ -58,7 +72,9 @@ export function prepareUserInput(
     }
     const label = state.ctx.sandbox.rel(abs);
     if (stat.isDirectory()) {
-      const ref: AttachmentRef = { path: label.endsWith("/") ? label : `${label}/`, kind: "folder" };
+      // 拖入当前工作空间根目录本身时，rel() 返回 "."，保留带正斜杠的绝对目录名以便芯片展示真实文件夹名
+      const dirPath = label === "." ? abs.split(path.sep).join("/") : label;
+      const ref: AttachmentRef = { path: dirPath.endsWith("/") ? dirPath : `${dirPath}/`, kind: "folder" };
       attachments.push(ref);
       readable.push(ref);
       continue;

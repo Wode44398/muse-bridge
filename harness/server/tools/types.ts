@@ -2,6 +2,7 @@ import type { Block, JsonObjectSchema, ThinkingLevel, ToolDef } from "../agent/t
 import type { TodoItem, AgentEvent, AskOption, DecidedBy, SubAgentTier, WorkflowPhaseMeta } from "../agent/events.ts";
 import type { Sandbox } from "../sandbox.ts";
 import type { ProviderId } from "../providers/types.ts";
+import type { ArgAliasTable } from "./arg-aliases.ts";
 
 // ── AskUserQuestion contract (tool ↔ session wiring) ─────────────────────────
 // One question the agent poses. Mirrors the tool's public schema minus the id
@@ -38,6 +39,8 @@ export interface FileState {
   // for concurrent-change detection, but must not be mistaken for visibility.
   readRanges: Array<[number, number]>;
   complete: boolean;
+  // 工具发现文件被外部改过、替模型把视图刷新成了当前内容：模型没看过改动的部分。覆盖闸在任何要求先读的档位下都按「没重读」拦
+  stale?: true;
 }
 
 // O7（K64）：UpdateGoal(done) 的结论——声明了验证命令的，是 harness 自己跑出来的
@@ -52,6 +55,9 @@ export interface GoalVerdict {
 export interface ToolPolicy {
   verifyContract: "strict" | "lenient"; // lenient：verify:true 写法不合格时不打回，按没带 verify 执行、不记证据
   readBeforeEdit: "strict" | "off"; // off：Edit 不要求先 Read
+  // Write 覆盖已有文件之前要读到什么程度：full = 每一行都读过；any = 这个会话读过它任意一段；off = 不要求。
+  // 读过之后磁盘上又被改了，三档都拦（防止盖掉没见过的内容）
+  readBeforeWrite?: "full" | "any" | "off";
 }
 
 export interface ToolContext {
@@ -72,6 +78,13 @@ export interface ToolContext {
   // control channel. Sub-agents carry their parent session's id (they share its
   // jobs / browser); absent for tests: those get the unowned pool.
   ownerId?: string;
+  // Bash 的当前目录（会话内跨调用保留；子 agent 各有一份）。由 AgentState 建好挂上，逐次调用的上下文经原型共用这一个对象；
+  // cwd 没有 = 工作区根
+  shell?: { cwd?: string };
+  // 这次调用和别的调用在同一个并行批里跑（只读批）：它不改会话状态（比如 Bash 不带走 cd）
+  parallel?: boolean;
+  // 用户配置的 hooks（建会话状态时读定；一条都没配就没有）。子 agent 拿的是共享同一份配置的子 agent 视图
+  hooks?: import("../hooks/session.ts").SessionHooks;
   // Config knobs surfaced from the session (timeouts, limits, ...).
   limits: { bashTimeoutMs: number; bashMaxTimeoutMs: number };
   // 按模型家族放松的工具契约（取自模型档案，逐次调用挂上）；没有 = 全按 strict
@@ -93,6 +106,8 @@ export interface ToolContext {
   // bare/test contexts). Backs the Agent tool and every agent() call a Workflow
   // script makes.
   runSubAgent?: (req: SubAgentRequest) => Promise<SubAgentResult>;
+  // 后台子 agent、接着用、列出与停止（同一个 host 接上；没有 = 只有前台的 runSubAgent）
+  subAgents?: SubAgentControl;
   // Run a Workflow script (agent/workflow.ts). Backs the Workflow tool.
   runWorkflow?: (req: WorkflowRequest) => Promise<WorkflowResult>;
   // Live side-channel to every attached device (wired by the session to its
@@ -159,6 +174,9 @@ export interface ToolContext {
   // Memory governance hooks wired by the main AgentState. Remember marks the
   // current audit dirty; MemoryAudit closes the end/pre-compaction gate.
   noteMemoryChanged?: () => void;
+  // 主会话才有：可以直接 Write / Edit 自己记忆目录里的笔记（memory-files.ts）。子 agent / Workflow worker 没有这一项——
+  // 它们不写持久记忆（读得到；父会话读过外部内容的污染标记也传不进它们）。ScheduleWakeup 也按它认「主会话自己的上下文」
+  memoryWriter?: boolean;
   // K1（#61）：按 id 查本会话转录里的一次工具调用（名字、结果是否成功；没有结果时 ok 为 null）。
   // Remember 用它核对 verified 记忆引用的证据确有其事。
   lookupToolCall?: (id: string) => { name: string; ok: boolean | null } | undefined;
@@ -230,6 +248,28 @@ export interface SubAgentRequest {
   onEvent?: (ev: AgentEvent) => void;
   // O2：子 agent 因为限流 / 上游过载挂起（退避后在同一个 state 上接着跑）时回调——Workflow 据此缩并发。
   onSuspend?: (reason: string) => void;
+  // 类型名：内置的 research / coder（及别名 Explore、Plan、general-purpose），或工作区 / 用户级 agent 定义里的名字。给了就压过 tier
+  type?: string;
+  // fork = 以父会话此刻的 system + 工具表 + 历史为前缀（吃提示缓存）；做不到时退回普通子 agent 并在结果里说明
+  context?: "fresh" | "fork";
+  // worktree = 在父工作区所在仓库上新建一个 worktree 给它（只对会写文件的子 agent 有意义）
+  isolation?: "worktree";
+}
+
+// 子 agent 的控制口（Agent 工具用；会话由 agent/subagent.ts 的 host 接上）：后台起、接着用、列出、停止
+export interface SubAgentStarted {
+  id: string;
+  label: string;
+}
+export interface SubAgentControl {
+  start(req: SubAgentRequest): SubAgentStarted | { error: string };
+  resume(
+    id: string,
+    prompt: string,
+    opts: { background?: boolean; signal?: AbortSignal; onEvent?: (ev: AgentEvent) => void; toolId?: string },
+  ): Promise<SubAgentResult> | SubAgentStarted | { queued: string } | { error: string };
+  list(): string;
+  stop(id: string): { ok: boolean; message: string };
 }
 
 export type SubAgentStop = "completed" | "budget_exhausted" | "rate_limited" | "provider_error" | "no_result" | "aborted";
@@ -274,6 +314,14 @@ export interface SubAgentResult {
   durationMs?: number;
   // K9（X55）：这个子 agent 读过外部内容（网页 / 搜索 / 浏览器）——它交回的报告可能带着网上看来的说法
   externalContent?: boolean;
+  // 显示用的类型（research / coder / 自定义类型名 / fork）
+  type?: string;
+  // 要让父 agent 知道的事（退回了普通方式、认不出的工具名或型号……）
+  notes?: string[];
+  // 跑在自己的 worktree 里：结束时是删掉了还是保留着，给父 agent 的那段说明
+  worktree?: { path: string; branch: string; kept: boolean; summary: string };
+  // 它的上下文还留着，可以 Agent(id, prompt) 接着用
+  resumable?: boolean;
 }
 
 // ── Workflow contract (Workflow tool ↔ agent/workflow.ts) ───────────────────
@@ -434,6 +482,15 @@ export interface Tool {
   def: ToolDef;
   effect: ToolEffect;
   concurrencySafe: boolean; // read-only tools may run in parallel
+  // 按这一次的入参判能不能进并行批（concurrencySafe 为 false 时才问；目前只有 Bash：只读命令可以）
+  concurrentFor?: (args: Record<string, unknown>) => boolean;
+  // 别家 harness 的参数名 → 本工具的规范名（tools/arg-aliases.ts），执行前归一
+  aliases?: ArgAliasTable;
+  // 必填随动作而变（Remember 的 delete 不要 content）：loop 不按 schema 的 required 拦，交给工具自己报
+  looseRequired?: boolean;
+  // 会话级当前目录（tools/bash/cwd.ts）：loop 派发前抹掉模型写的隐藏键、按会话目录注入。用标记而不按对象身份认，
+  // 包装（verify-tools.ts 的 withoutVerify 等 `...tool` 展开）会把它带过去
+  shellCwd?: boolean;
   // Environment-backed capabilities (for example the bridge device channel) may only
   // exist while an external trusted host is reachable. Registry filters them per turn.
   enabled?: () => boolean;

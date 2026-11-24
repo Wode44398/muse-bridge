@@ -216,6 +216,55 @@ test('吊销：401 说 revoked（不是「不认识」）；同一次登录自�
   assert.notEqual(fresh.body.device.id, id);
 });
 
+// 本机「切换账号」（/api/auth/adopt）接手一张有效会话 = 重新证明了身份：被吊销的电脑切到这个号后能再登记。
+// 没被接手的旧会话照样 409；失效的令牌 adopt 不了，也就借不了这条路。
+test('吊销后切换账号接手成员会话：能再登记；未接手的旧会话仍 409；无效令牌 adopt 失败', async () => {
+  await users.createUser('hank', 'password123', 'user');
+  const tok = await login('hank');
+  const idle = await login('hank');   // 同一个号在别处的另一次登录，从没被 adopt 过
+  const reg = await register(tok, 'hank-pc');
+  assert.equal((await call('POST', '/api/devices/action', { bearer: tok, body: { id: reg.body.device.id, action: 'revoke' } })).code, 200);
+  assert.equal((await register(tok, 'hank-pc')).code, 409);
+  assert.equal((await register(idle, 'hank-pc')).code, 409);
+  await new Promise((r) => setTimeout(r, 5));
+  const ad = await call('POST', '/api/auth/adopt', { bearer: tok });
+  assert.equal(ad.code, 200);
+  assert.equal(ad.body.kind, 'user');
+  assert.equal(ad.body.token, undefined, '不换发令牌：保险箱里那张照用');
+  const back = await register(tok, 'hank-pc');
+  assert.equal(back.code, 200, '切换账号算一次重新登录');
+  assert.equal(registry.deviceById(back.body.device.id).login.sid, users.getSession(tok).sid, '登记绑在被接手的这次登录上');
+  // 另一次登录没被接手过，不受影响（换个机器指纹，免得命中刚登记回来的那条在用记录）
+  const reg2 = await register(idle, 'hank-pc2');
+  assert.equal((await call('POST', '/api/devices/action', { bearer: idle, body: { id: reg2.body.device.id, action: 'revoke' } })).code, 200);
+  assert.equal((await register(idle, 'hank-pc2')).code, 409);
+
+  const bad = await call('POST', '/api/auth/adopt', { bearer: 'x'.repeat(32) });
+  assert.equal(bad.code, 401);
+  await call('POST', '/api/logout', { bearer: idle });
+  assert.equal((await call('POST', '/api/auth/adopt', { bearer: idle })).code, 401, '已退出的令牌不能借 adopt 复活');
+  assert.equal(users.markSessionSwitched(idle), false);
+});
+
+test('吊销后切换账号接手管理员会话：能再登记；未接手的仍 409', async () => {
+  const s1 = (await admin('/api/login', {})).body.token;
+  const s2 = (await admin('/api/login', {})).body.token;
+  assert.ok(s1 && s2 && s1 !== s2 && s1 !== MASTER);
+  const reg = await register(s1, 'boss-pc');
+  assert.equal(reg.code, 200);
+  assert.equal((await admin('/api/devices/action', { id: reg.body.device.id, action: 'revoke' })).code, 200);
+  assert.equal((await register(s1, 'boss-pc')).code, 409);
+  await new Promise((r) => setTimeout(r, 5));
+  const ad = await call('POST', '/api/auth/adopt', { bearer: s1 });
+  assert.equal(ad.code, 200);
+  assert.equal(ad.body.kind, 'admin');
+  assert.equal(ad.body.token, undefined);
+  assert.equal((await register(s1, 'boss-pc')).code, 200);
+  const reg2 = await register(s2, 'boss-pc2');
+  assert.equal((await admin('/api/devices/action', { id: reg2.body.device.id, action: 'revoke' })).code, 200);
+  assert.equal((await register(s2, 'boss-pc2')).code, 409, '没被接手的管理员会话照旧');
+});
+
 test('停用：登录与设备都失效（account）；启用后原令牌照常', async () => {
   await users.createUser('frank', 'password123', 'user');
   const tok = await login('frank');

@@ -26,6 +26,38 @@ test('Opus 任务优先放到 Fable 已用完的号上，给 Fable 任务留共�
   assert.equal(reasonFor(rows, task('opus', 1)), 'keep_fable');
 });
 
+test('11-23 实况：Fable 被自己的周限额卡住时，Opus 照样优先去 Fable 已爆的号（不被均衡 / 快重置拉回）', () => {
+  // alice：Fable 58%、周 30%、5 小时 13% 三分钟后重置；dali：Fable 100% 被拒（2.5 天后恢复）、周 72%、5 小时 0%
+  const alice = acct('alice', 0, { five_hour: { pct: 13, resetsAt: NOW + 3 * 60_000 }, seven_day: { pct: 30, resetsAt: NOW + 6 * 86400_000 }, seven_day_overage_included: { pct: 58, resetsAt: NOW + 6 * 86400_000 } });
+  const dali = acct('dali', 1, { five_hour: { pct: 0, resetsAt: NOW + 3 * H }, seven_day: { pct: 72, resetsAt: NOW + 60 * H }, seven_day_overage_included: { pct: 100, status: 'rejected', resetsAt: NOW + 60 * H } }, { fable: true });
+  dali.until = { fable: NOW + 60 * H };
+  const t = task('opus', 1.9);
+  const rows = rank([alice, dali], t);
+  assert.equal(rows[0].id, 'dali');
+  assert.equal(reasonFor(rows, t), 'keep_fable');
+  // Fable 任务当然不去 dali
+  assert.deepEqual(rank([alice, dali], task('fable', 1)).map((r) => r.id), ['alice']);
+});
+
+test('Fable 马上就恢复的号，「用别人用不了的额度」加分随之变小', () => {
+  const y = acct('y', 0, { five_hour: 10, seven_day: 30, seven_day_overage_included: 40 });
+  const x = acct('x', 1, { five_hour: 10, seven_day: 30, seven_day_overage_included: 100 }, { fable: true });
+  x.until = { fable: NOW + 20 * 60_000 };
+  const rows = rank([y, x], task('opus', 1));
+  const xr = rows.find((r) => r.id === 'x');
+  assert.ok(xr.parts.free > 0 && xr.parts.free < 0.1);
+});
+
+test('5 小时窗口几分钟内就重置：不算「快重置先用」', () => {
+  const accounts = [
+    acct('soon', 0, { five_hour: { pct: 10, resetsAt: NOW + 3 * 60_000 }, seven_day: 40 }),
+    acct('other', 1, { five_hour: 10, seven_day: 40 }),
+  ];
+  const rows = rank(accounts, task('opus', 1));
+  const u = (id) => rows.find((r) => r.id === id).parts.urgency;
+  assert.ok(Math.abs(u('soon') - u('other')) < 1e-9);
+});
+
 test('Pro 号没有 Fable：Opus 任务优先去它，Fable 任务不会去它', () => {
   const accounts = [
     acct('max', 0, { five_hour: 20, seven_day: 40, seven_day_overage_included: 30 }),

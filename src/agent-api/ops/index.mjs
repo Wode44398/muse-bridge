@@ -9,6 +9,7 @@ import './files.mjs';
 import './routines.mjs';
 import './media.mjs';
 import './studio.mjs';
+import './studio-config.mjs';
 import './devices.mjs';
 import './ui.mjs';
 import './modules.mjs';
@@ -17,7 +18,7 @@ import './keys.mjs';
 import './plugins.mjs';
 import './feedback.mjs';
 
-setGroupOrder(['core', 'projects', 'sessions', 'chat', 'settings', 'dispatch', 'files', 'routines', 'media', 'studio', 'devices', 'ui', 'modules', 'server', 'plugins', 'keys', 'feedback']);
+setGroupOrder(['core', 'projects', 'sessions', 'chat', 'settings', 'dispatch', 'files', 'routines', 'media', 'studio', 'studio_config', 'devices', 'ui', 'modules', 'server', 'plugins', 'keys', 'feedback']);
 
 // 属于可关的内置功能（插件）的整组操作：功能关着时一律报「这台服务器关着」，不用逐条写 need。
 const GROUP_PLUGIN = { routines: 'routines', devices: 'devices' };

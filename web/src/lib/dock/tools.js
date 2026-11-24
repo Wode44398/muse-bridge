@@ -13,6 +13,7 @@
 import { t, tc } from '../i18n.js';
 import { pluginOn } from '../state.svelte.js';
 import { dockIcon } from '../dockIcons.js';
+import { workbenchFor, workbenchKey, uiIcon } from '../pluginUi.svelte.js';
 
 export const SHARED_TOOLS = [
   {
@@ -49,13 +50,24 @@ export const sharedTool = (key) => byKey.get(key) || null;
 //   own  = [{ key, label, closeLabel, icon?, col?, bar?, kbd?, match?, ok?, fixed?, own:true }]
 //   over = { [key]: 要盖掉的字段 }；skip = 不要的共用卡
 //   order = 开关 / 标签的摆放顺序（没列到的排在后面）
-export function buildTools({ own = [], over = {}, skip = [], order = [] } = {}) {
+//   host  = 宿主 id（claude / codex / agy / dimensio）：插件登记给这个分页的工作区卡片（ctx.ui.workbench 的 hosts）跟着摆进来，
+//           挂在第二列末尾、收进「更多」；内容由 SharedPanel 统一画（插件页面），快照访客不给
+export function buildTools({ own = [], over = {}, skip = [], order = [], host = '' } = {}) {
   const list = [
     ...SHARED_TOOLS.filter((x) => !skip.includes(x.key)).map((x) => ({ ...x, icon: dockIcon(x.key), ...(over[x.key] || {}) })),
     ...own.map((x) => ({ col: 'a', kbd: '', own: true, ...x })),
+    ...(host ? pluginCards(host) : []),
   ];
   const rank = (k) => { const i = order.indexOf(k); return i < 0 ? order.length : i; };
   return list.map((x, i) => [x, i]).sort((p, q) => rank(p[0].key) - rank(q[0].key) || p[1] - q[1]).map((p) => p[0]);
+}
+
+/** 插件给这个分页的工作区卡片（工具表条目形状）。 */
+export function pluginCards(host) {
+  return workbenchFor(host).map((w) => ({
+    key: workbenchKey(w), label: w.title || '', closeLabel: t('关闭「{name}」', { name: w.title || '' }), icon: uiIcon(w.icon), iconSvg: true,
+    col: 'b', kbd: '', fixed: true, plugin: true, ok: ({ snap }) => !snap,
+  }));
 }
 
 // 门禁：meta 没到之前按「有命令行」乐观摆，别让开关闪一下再消失

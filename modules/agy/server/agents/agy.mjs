@@ -1,11 +1,10 @@
 // Antigravity 聊天入参校验与主分支：驱动常驻 ACP 进程并将事件流桥接到共享 gen / SSE 重放缓冲。
 
-import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { writeSseHeaders, startMultiHeartbeat } from '@bridge/core/runtime/sse.mjs';
 import {
   findGenBySession, setCurrentGen, genEmit, genSubscribe, genFinish, retireGen,
 } from '@bridge/core/runtime/gen.mjs';
-import { mimeType } from '@bridge/core/runtime/http-file.mjs';
 import { questionTimeoutMs } from '@bridge/core/runtime/questions.mjs';
 import { devicesEnabled, ownDevices } from '@bridge/core/runtime/devices.mjs';
 import { agentDeviceLink, setAgentDeviceLink } from '@bridge/core/runtime/agent-device-links.mjs';
@@ -17,7 +16,7 @@ import {
   getSessionMeta, noteSessionMeta, rememberSessionConfig, resolveVerifiedSessionCwd,
 } from '../sessions.mjs';
 import { loadAgySettings } from '../settings.mjs';
-import { getProject, authorizeProjectPath } from '../projects.mjs';
+import { getProject, listProjects, authorizeProjectPath } from '../projects.mjs';
 import { buildAgySessionTooling } from '../mcp/config.mjs';
 import {
   agyGenKey, publishAgyRun, publishAgySessions, noticeAgyPending, noticeAgyEnd,
@@ -35,12 +34,15 @@ import {
   noteSessionOwner,
 } from '../subagent-monitor.mjs';
 import { runAgyUserTurnHooks, runAgyTurnEndHooks } from '../turn-hooks.mjs';
+import { agyTurnEvents } from '../turn-events.mjs';
 import { isAgyTenant, guardLivenessOn, tripTenantGuard } from '../tenants.mjs';
 import { makeGuardWatch, GUARD_BROKEN_MESSAGE } from '../guard/liveness.mjs';
+import { extractUserImageAtts } from '../user-media.mjs';
+import { buildPromptBlocks, buildPromptPlan } from './agy/prompt-blocks.mjs';
+import { uploadDirsForAttachments } from './agy/attachment-dirs.mjs';
+import { makeAgyPermissionPolicy } from '../plugin-permission.mjs';
 
-export { extractDeliverablePaths, agyGenKey };
-
-const ACP_IMAGE_EXT = /\.(?:png|jpe?g|webp|gif)$/i;
+export { extractDeliverablePaths, agyGenKey, buildPromptBlocks };
 
 const replyJson = (res, code, obj) => {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -57,41 +59,14 @@ function cleanUserAtts(raw) {
       path: a.path.slice(0, 1000),
       name: String(a.name || '').slice(0, 200),
       ...(a.kind ? { kind: String(a.kind).slice(0, 20) } : {}),
+      ...(a.quoteId ? { quoteId: String(a.quoteId).slice(0, 80) } : {}),
+      ...(Number.isFinite(Number(a.count)) ? { count: Number(a.count) } : {}),
       ...(a.isImage ? { isImage: true } : {}),
       ...(a.isDir ? { isDir: true } : {}),
       ...(Number.isFinite(Number(a.size)) ? { size: Number(a.size) } : {}),
     });
   }
   return out;
-}
-
-function buildPromptBlocks(message, attachments = []) {
-  const blocks = [];
-  const nonImageFiles = [];
-
-  for (const file of attachments) {
-    if (typeof file !== 'string' || !existsSync(file)) continue;
-    if (ACP_IMAGE_EXT.test(file)) {
-      try {
-        const data = readFileSync(file).toString('base64');
-        const mime = mimeType(file, { fallback: 'image/png' });
-        blocks.push({ type: 'image', mimeType: mime, data });
-        continue;
-      } catch {
-        // 读取图片失败时降级为路径提示，由内置文件工具自行读取
-      }
-    }
-    nonImageFiles.push(file);
-  }
-
-  const attPrefix = nonImageFiles.length
-    ? '本轮附加文件路径：\n' + nonImageFiles.map((p) => '- ' + p).join('\n') + '\n\n'
-    : '';
-  const fullText = (attPrefix + String(message ?? '')).trim();
-  if (fullText || !blocks.length) {
-    blocks.unshift({ type: 'text', text: fullText });
-  }
-  return blocks;
 }
 
 export async function handleAgyChat(req, res, { parsed, message, sessionId, ctx, attachments, client = null }) {
@@ -174,12 +149,24 @@ export async function handleAgyChat(req, res, { parsed, message, sessionId, ctx,
     }
   }
 
-  const files = attachments([workDir, ...extraDirs]);
+  // 成员重新生成带历史图片的消息时，放行本会话 .user_uploaded 目录内的原图
+  let userUploadDir = '';
+  if (sessionId) {
+    try {
+      const bdir = sessionBrainDir(acpFor(ctx, sessionId)?.dataDir, sessionId);
+      if (bdir) userUploadDir = path.join(bdir, '.user_uploaded');
+    } catch {}
+  }
+  const projRoots = listProjects(ctx.agyProjects).map((p) => p?.path).filter(Boolean);
+  const exactRoots = [workDir, ...extraDirs, ...projRoots];
+  const files = attachments([...exactRoots, ...(userUploadDir ? [userUploadDir] : [])], exactRoots);
   if (!message && !files.length) {
     res.writeHead(400, { 'Content-Type': 'text/plain' });
     res.end('empty message');
     return;
   }
+  // 附件所在的上传目录一并挂成附加工作区：送不进 prompt 的附件要靠模型自己 read_file（agents/agy/attachment-dirs.mjs）
+  extraDirs.push(...uploadDirsForAttachments(ctx, files, [workDir, ...extraDirs]));
 
   // 真人发的这一条（排队的也算）：会话协作清零连续自动续、拉取请求清零连续唤醒（turn-hooks.mjs）
   runAgyUserTurnHooks(ctx, sessionId);
@@ -255,7 +242,8 @@ export async function runAgyChat(req, res, {
         finishPassiveGenForSession(ctx?.key || 'admin', sessionId);
       } else {
         if (steer && res) {
-          const done = steerAgyTurn(liveSame, { ctx, sessionId, message, attachments, userAtts, blocks: buildPromptBlocks(message, attachments) });
+          const plan = buildPromptPlan(message, attachments, { caps: acp.promptCapabilities?.() ?? null });
+          const done = steerAgyTurn(liveSame, { ctx, sessionId, message, attachments, userAtts, blocks: plan.blocks, fallback: plan.fallback });
           if (done.ok) return replyJson(res, 200, { ok: true, steered: true, sessionId, steer: done.steer });
           // 这一轮还在挂载会话、没到能收消息的那一步（或正在被停下）：改成排队，别把话丢了
           queue = true;
@@ -306,6 +294,7 @@ export async function runAgyChat(req, res, {
     done: false,
     startedAt: Date.now(),
     pendingPermission: null,
+    pendingPermissions: [],
     pendingQuestion: null,
     settled: new Promise((resolve) => { settleGen = resolve; }),
   };
@@ -332,7 +321,15 @@ export async function runAgyChat(req, res, {
     ...(mode ? { mode } : {}),
   };
 
-  const promptBlocks = buildPromptBlocks(message, attachments);
+  // 附件怎么送要看 agy 报的 promptCapabilities，进程可能还没起：交给 runPrompt 在 initialize 之后再组装
+  let turnPromptText = '';
+  const planPrompt = (caps) => {
+    const plan = buildPromptPlan(message, attachments, { caps });
+    turnPromptText = plan.blocks.find((b) => b?.type === 'text')?.text || '';
+    return plan;
+  };
+  const turnUserImages = !internalWake ? extractUserImageAtts(attachments, userAtts) : [];
+  let savedTurnMedia = false;
   const { mcpServers, systemPromptAppend: effectiveSystemPrompt, toolingSig } = buildAgySessionTooling({
     ctx, settings, cwd: workDir, additionalDirectories,
   });
@@ -401,11 +398,15 @@ export async function runAgyChat(req, res, {
   };
   agyUpstreamEvents.on('switch', onAccountSwitch);
 
+  // 插件订阅的 turn.start / turn.end（turn-events.mjs）
+  const turnEv = agyTurnEvents(ctx, gen, { model: desiredConfig.model || '', message: internalWake ? '' : message, isNew: !sessionId, wake: !!internalWake });
+  turnEv.start();
+
   try {
     const result = await acp.runPrompt({
       sessionId,
       cwd: workDir,
-      promptBlocks,
+      promptBlocks: planPrompt,
       mcpServers,
       systemPromptAppend: effectiveSystemPrompt,
       additionalDirectories,
@@ -414,6 +415,8 @@ export async function runAgyChat(req, res, {
       signal: abort.signal,
       // 审批一直等到有人点（同 Claude 的逐次审批；人不在时靠通知叫回来）；表单提问按「提问无人回答时」那项设置
       permissionTimeoutMs: 0,
+      // 插件的审批策略（agents 含 'agy'）：先问它再走自动放行 / 审批卡；后台唤醒的轮没人在，策略要用户批的按拒绝
+      permissionPolicy: makeAgyPermissionPolicy(ctx, gen, { cwd: workDir, unattended: !!internalWake }),
       questionTimeoutMs: questionTimeoutMs(ctx),
       onIdle: background.onIdle,
       onSession: (snapshot) => {
@@ -421,6 +424,9 @@ export async function runAgyChat(req, res, {
         mountedSid = sid;
         gen.sessionId = sid;
         noteSessionOwner(ctx, acp, sid);
+        if (acp.dataDir && hasProtectedSubagents(acp.dataDir, sid)) {
+          armSubagentMonitor(ctx, acp, sid);
+        }
         linkSession(sid);
         noteSessionLabel(sid, snapshot.title || savedMeta?.customTitle || savedMeta?.title || message);
         const summary = extractConfigSummary(snapshot.configOptions, snapshot.modes, snapshot.models);
@@ -434,7 +440,12 @@ export async function runAgyChat(req, res, {
           projectId: effectiveProjectId,
           additionalDirectories,
           hidden: false,
+          ...(!savedTurnMedia && turnUserImages.length
+            ? { appendUserMedia: { prompt: turnPromptText, images: turnUserImages, at: new Date().toISOString() } }
+            : {}),
         });
+        if (turnUserImages.length) savedTurnMedia = true;
+        turnEv.note({ model: summary.model });
         send({
           type: 'session',
           sessionId: sid,
@@ -463,6 +474,7 @@ export async function runAgyChat(req, res, {
           rememberSessionConfig(ctx?.agyDir, mountedSid, { mode: evt.modeId });
         }
         if ((evt.type === 'tool' || evt.type === 'tool-update') && evt.tool?.name) {
+          turnEv.note({ tool: evt.tool.name });
           const tn = String(evt.tool.name).toLowerCase();
           const isImageSub = tn === 'invoke_subagent' && /image/i.test(String(evt.tool.args?.TypeName || ''));
           if (!isImageSub && (tn === 'invoke_subagent' || tn === 'send_message' || tn === 'run_workflow' || tn === 'swarm' || tn === 'post_message' || tn === 'read_board' || tn === 'swarm_wait' || tn === 'schedule')) {
@@ -479,18 +491,25 @@ export async function runAgyChat(req, res, {
         send(evt);
       },
       onPermission: (perm) => {
-        gen.pendingPermission = perm;
+        if (!gen.pendingPermissions.some((p) => p?.requestId === perm?.requestId)) {
+          gen.pendingPermissions.push(perm);
+        }
+        gen.pendingPermission = gen.pendingPermissions[0] || perm;
         send(perm);
         noticeAgyPending(ctx, gen);
         publishAgyRun(ctx, gen);
       },
       onPermissionResolved: (resolved) => {
-        if (gen.pendingPermission?.requestId === resolved.requestId) {
-          gen.pendingPermission = null;
+        const before = gen.pendingPermissions.length;
+        gen.pendingPermissions = gen.pendingPermissions.filter((p) => p?.requestId !== resolved.requestId);
+        const nextFirst = gen.pendingPermissions[0] || null;
+        if (before !== gen.pendingPermissions.length || gen.pendingPermission?.requestId === resolved.requestId) {
+          gen.pendingPermission = nextFirst;
           publishAgyRun(ctx, gen);
         }
-        // 自动放行的不记审批结果（重开历史时也就不挂「已允许」）
-        if (mountedSid && resolved.toolCallId && !resolved.auto) {
+        // 自动放行或子代理自身的审批不记进主会话的 toolApprovals（重开历史时也就不挂「已允许」）
+        const isFromSubagent = Boolean(resolved.sourceSessionId && mountedSid && resolved.sourceSessionId !== mountedSid);
+        if (mountedSid && !isFromSubagent && resolved.toolCallId && !resolved.auto) {
           const denied = resolved.outcome === 'cancelled' || /^(?:deny|reject)/i.test(String(resolved.optionId || ''));
           noteSessionMeta(ctx?.agyDir, mountedSid, {
             toolApprovals: { [resolved.toolCallId]: denied ? 'denied' : 'allowed' },
@@ -568,7 +587,9 @@ export async function runAgyChat(req, res, {
         ...settleQueue('failed'),
       });
       noticeAgyEnd(ctx, gen, { kind: 'error', text: GUARD_BROKEN_MESSAGE });
+      turnEv.end({ ok: false, error: GUARD_BROKEN_MESSAGE });
     } else if (result.status === 'interrupted') {
+      turnEv.end({ ok: false, stopped: true });
       send({
         type: 'interrupted',
         result: result.text || '',
@@ -593,7 +614,9 @@ export async function runAgyChat(req, res, {
         ...settleQueue('failed'),
       });
       noticeAgyEnd(ctx, gen, { kind: 'error', text: errMsg });
+      turnEv.end({ ok: false, error: errMsg });
     } else {
+      turnEv.end({ ok: true, result: result.text || '' });
       const queued = settleQueue('completed');
       send({
         type: 'done',
@@ -621,9 +644,13 @@ export async function runAgyChat(req, res, {
       ...settleQueue('failed'),
     });
     noticeAgyEnd(ctx, gen, { kind: 'error', text: errMsg });
+    turnEv.end({ ok: false, error: errMsg });
   } finally {
+    // 兜底：上面各分支都已发过就什么也不做
+    turnEv.end({ ok: false, stopped: abort.signal.aborted });
     agyUpstreamEvents.off('switch', onAccountSwitch);
     gen.pendingPermission = null;
+    gen.pendingPermissions = [];
     gen.pendingQuestion = null;
     clearInterval(hb);
     genFinish(gen);

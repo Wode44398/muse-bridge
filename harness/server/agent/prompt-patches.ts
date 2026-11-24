@@ -3,13 +3,13 @@
 // 挂点找不到就抛错而不是静默跳过——提示词改版把挂点改没了，补丁会悄悄失效，A/B 的结论也就作废了。
 
 export interface PromptPatch {
-  // 插在哪段文字之前（必须在主提示词里恰好出现一次）
-  before: string;
+  // 插在哪段文字之前：按顺序取第一个在主提示词里出现的挂点，它必须恰好出现一次（两版核心正文各有各的挂点）
+  before: readonly string[];
   text: string;
 }
 
-// 「How to work」列表结束、VerificationAudit 那段开始之前
-const AFTER_HOW_TO_WORK = "\n\nIf no meaningful executable check exists";
+// hardened 正文：「How to work」列表结束、VerificationAudit 那段开始之前；lean 正文：「Working」那段之后、Playbooks 之前
+const AFTER_HOW_TO_WORK = ["\n\nIf no meaningful executable check exists", "\n\n## Playbooks\nStep-by-step playbooks — "];
 
 export const PROMPT_PATCHES: Readonly<Record<string, PromptPatch>> = Object.freeze({
   // 针对「自称做完、其实没做完」：Kimi K3.1 Pro 在第二批难题上的失败全是这一类（漏改 README、只挪了一部分文件、审查漏项）。
@@ -35,8 +35,9 @@ export function applyPromptPatches(prompt: string, ids: readonly string[] | unde
   for (const id of ids) {
     const p = Object.hasOwn(PROMPT_PATCHES, id) ? PROMPT_PATCHES[id] : undefined;
     if (!p) throw new Error(`未知的提示词补丁：${id}`);
-    const at = out.indexOf(p.before);
-    if (at < 0 || out.indexOf(p.before, at + 1) >= 0) throw new Error(`提示词补丁 ${id} 的挂点不存在或不唯一`);
+    const anchor = p.before.find((b) => out.includes(b));
+    const at = anchor === undefined ? -1 : out.indexOf(anchor);
+    if (anchor === undefined || out.indexOf(anchor, at + 1) >= 0) throw new Error(`提示词补丁 ${id} 的挂点不存在或不唯一`);
     out = `${out.slice(0, at)}\n\n${p.text}${out.slice(at)}`;
   }
   return out;

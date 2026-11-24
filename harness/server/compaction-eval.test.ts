@@ -7,10 +7,10 @@ import { anchorsOf, normText } from "../evals/compaction/anchors.ts";
 import { answerRecall, answerRecallWithRecovery, grepArchives, readArchive, RECOVERY_SYSTEM } from "../evals/compaction/answer.ts";
 import { AGE_BUCKETS, emptySummarizer, replay, type ReplayResult, type Tally } from "../evals/compaction/replay.ts";
 import { ratchets, report, rowOf } from "../evals/compaction/report.ts";
-import { COMPACTION_SYSTEM } from "./agent/context.ts";
 import type { StreamEvent } from "./agent/events.ts";
 import type { Msg, Turn } from "./agent/turn.ts";
 import { fakeSummary, scripted } from "./test-harness/scripted-adapter.ts";
+import { isCompactionRequest } from "./test-harness/context-windows.ts";
 
 const WINDOW = 32_768;
 
@@ -43,9 +43,12 @@ function longSession(rounds: number): Msg[] {
 const textOf = (turn: Turn): string => turn.messages.map((m) => m.content.map((b) => (b.t === "text" ? b.text : "")).join("")).join("\n");
 const summaryEvents = (text: string): StreamEvent[] => [{ e: "text_delta", text }, { e: "turn_done", stopReason: "end" }];
 
-// 只记得「这次中段里 Write 过的文件」的摘要器：上一轮摘要里提过的文件，它自己再压一次就忘了。
+// 只记得「眼前这次请求里 Write 过的文件」的摘要器：上一轮摘要里提过的文件，它自己再压一次就忘了。
+// sidecar 的请求里是渲染成文字的转录，inline 的请求里是原样的工具调用：两种都认。
 function forgetfulSummary(turn: Turn): StreamEvent[] {
-  const files = [...textOf(turn).matchAll(/\[tool Write [^\n]*?(mod\d+\.ts)/g)].map((m) => `src/${m[1]}`);
+  const rendered = [...textOf(turn).matchAll(/\[tool Write [^\n]*?(mod\d+\.ts)/g)].map((m) => m[1]);
+  const called = turn.messages.flatMap((m) => m.content.flatMap((b) => (b.t === "tool_call" && b.name === "Write" ? [/mod\d+\.ts/.exec(String(b.args.path))?.[0] ?? ""] : [])));
+  const files = [...rendered, ...called].filter(Boolean).map((f) => `src/${f}`);
   return summaryEvents(fakeSummary(`Files written: ${[...new Set(files)].join(", ")}`));
 }
 
@@ -82,7 +85,7 @@ test("Q6 压缩召回·回放走生产压缩：反复压缩、腾出比例与剩
 
   assert.ok(r.events.length >= 3, `要反复压缩才量得出衰减：只压了 ${r.events.length} 次`);
   assert.equal(forgetful.callCount, r.events.length, "每次整段压缩调一次摘要器");
-  assert.ok(forgetful.inputs.every((turn) => turn.system === COMPACTION_SYSTEM), "摘要请求就是生产的那一个");
+  assert.ok(forgetful.inputs.every(isCompactionRequest), "摘要请求就是生产的那一个（inline 或 sidecar）");
   assert.equal(r.failures, 0);
   assert.equal(r.trigger, WINDOW - 13_000);
   for (const e of r.events) {

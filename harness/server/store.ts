@@ -15,6 +15,7 @@ import type { ProviderId } from "./providers/types.ts";
 import type { SerializedFingerprint } from "./providers/wire-fingerprint.ts";
 import type { PrefixTotals } from "./agent/prefix-audit.ts";
 import type { SandboxAccess } from "./sandbox.ts";
+import type { Posture } from "./agent/profile.ts";
 
 // Session persistence: one JSON file per session under SESSIONS_DIR (default
 // <cwd>/sessions — OUTSIDE the workspace, like the memory dir, so it never
@@ -44,6 +45,9 @@ export interface PersistedConfig {
   readRoots?: string[];
   // 会话形态（project-mode.ts）："project" = 项目对话（协调者）；没有 = 普通对话。只在新会话第一轮定，之后不变。老版本读到会忽略
   shape?: "project";
+  // 模型档案的姿态（agent/profile.ts）：会话第一次建 state 时按当时的型号定下，之后换思考档、换型号、重启恢复都沿用——system 正文与
+  // 工具表是按它建的，中途翻了就对不上、还打穿缓存。没有 = 姿态改造之前写的会话（那时一律是加固形态，恢复时按 hardened）。老版本读到会忽略
+  posture?: Posture;
 }
 
 // M7（D1）：会话记录的当前版本与迁移链（规矩见 record-version.ts）。提版本 = 这里 +1、在迁移链末尾追加一步、
@@ -97,6 +101,8 @@ export interface PersistedSession {
     externalContent?: boolean;
   };
   counters: { compactionFailures: number; turnsSinceTodoSeen: number };
+  // 工具面的会话状态（老记录没有；老版本读到会忽略）：loaded = 已拿到完整说明的延迟加载工具；cwd = Bash 的当前目录（绝对路径）
+  tools?: { loaded?: string[]; cwd?: string };
 }
 
 export interface SessionMeta {

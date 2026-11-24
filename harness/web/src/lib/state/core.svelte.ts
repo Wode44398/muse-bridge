@@ -15,12 +15,13 @@ export const RESYNC_TIMEOUT_MS = 12_000;
 
 // ── 工作区 Dock（右侧五工具面板：任务/审阅/终端/浏览器/文件）────────────────
 // memory = 宿主（bridge）的记忆卡，看 dimensio 的记忆（工作区外壳与共用面板都由宿主给，见 components/dock/HostedDock.svelte）
-export type DockTool = "tasks" | "review" | "term" | "browser" | "files" | "memory";
+export type DockTool = "tasks" | "review" | "term" | "browser" | "files" | "memory" | `plg:${string}`;
 export const DOCK_TOOL_KEY = "harness.dockTool";
 function readDockTool(): DockTool {
   try {
     const v = localStorage.getItem(DOCK_TOOL_KEY);
     if (v === "tasks" || v === "review" || v === "term" || v === "browser" || v === "files" || v === "memory") return v;
+    if (v && /^plg:[a-z][a-z0-9-]{0,47}:[a-z][a-z0-9-]{0,47}$/.test(v)) return v as DockTool;
   } catch { /* ignore */ }
   return "browser";
 }

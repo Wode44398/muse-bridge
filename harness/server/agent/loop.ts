@@ -7,13 +7,13 @@ import { RunInvariants } from "./turn-invariants.ts";
 import { compactNow, contextNeedsTrim, contextTokens, effectiveWindow, ensureContextFits } from "./context.ts";
 import { downsampleForModel, parseImageByteLimit } from "./media-budget.ts";
 import "./injections.ts";
-import { deferredLoaded, notLoadedResult } from "./deferred-tools.ts";
+import { withDeferredDocs } from "./deferred-tools.ts";
 import { playbooksForCalls, playbooksForRequest } from "./playbooks.ts";
+import { attachProjectDocs } from "../project-docs/attach.ts";
 import { loopStopText } from "./loop-guard.ts";
 import { isRunawayRepetition, LOOP_CUT_NOTICE } from "./repetition.ts";
 import { connectErrorLabel, isConnectFailure, isLocalLoadingError, planWait, type NetWait, type WaitPlan } from "./netwait.ts";
 import { callSubject, decide, REPEAT_DENIAL_RULE, sessionRuleChoices } from "./permissions.ts";
-import { normalizeToolArgs } from "./tool-input.ts";
 import { approvalPreview } from "./approval-preview.ts";
 import { permissionReceipt, type PermissionReceipt } from "./card-receipts.ts";
 import { outsideReadOf, readRootFor, type Sandbox } from "../sandbox.ts";
@@ -22,6 +22,7 @@ import "./revdeps.ts";
 import { fail, type PreparedCall, type ToolRunResult } from "../tools/types.ts";
 import { commandCanVerify } from "../tools/bash.ts";
 import { noteKnowledgeEdit, noteKnowledgeVerification } from "../knowledge-service.ts";
+import { plainCheckOutcome } from "./verify-tools.ts";
 import { nudgeOutboundProxy } from "../net-proxy.ts";
 import "../retire.ts";
 import { childSpan, runInTrace, traceIterable } from "../trace.ts";
@@ -31,6 +32,9 @@ import { attachFootnote, attachPlaybooks, destructiveLabel, mayHaveWritten, note
 import { announcesMore, ANSWER_NUDGE, AUDIT_CLOSURE_TOOLS, AUDIT_LIFECYCLE_TOOLS, budgetExhaustedText, budgetNudgeText, budgetStatus, CUTOFF_NUDGE, EMPTY_RESPONSE_KIND, isSilentTool, LENGTH_CONTINUE_NUDGE, looksCutOff, MAX_MEMORY_AUDIT_NUDGES, MAX_VERIFICATION_AUDIT_NUDGES, MEMORY_AUDIT_NUDGE, MIN_OUTPUT_TOKENS, OUTPUT_ROOM_MARGIN, PLAN_SUBMIT_NUDGE, PRECOMPACT_AUDIT_NUDGE, RAN_COMMANDS_CAP, REDUNDANT_AUDIT_MESSAGE, REDUNDANT_AUDIT_TURNS, retryDelayMs, retryScale, type RetryWhy, STEER_PREFIX, UNDECLARED_EVIDENCE_CAP } from "./loop/limits.ts";
 import { abortedEvent, byRestart, closeCutTurn, consentText, cutReason, denialsStopText, failureEvent, NOT_STARTED_RESTART, NOT_STARTED_USER_STOP, ranSummary, withLoopCut } from "./loop/outcomes.ts";
 import { askOutsideRead, auditPermission, callContext, type PermissionAuditBy } from "./loop/permission-flow.ts";
+import { AssistantAssembler } from "./loop/assistant-blocks.ts";
+import { noteLoadedTools, prepareCall, refreshShellCwd, runsConcurrently } from "./loop/dispatch.ts";
+import { appendPromptContext, applyHookPermission, hookDeniedText, postToolHook, preToolHook, stopHook, userPromptHook } from "../hooks/index.ts";
 export { looksCutOff, PLAN_SUBMIT_NUDGE, VERIFY_NUDGE, VERIFY_UNDECLARED_NUDGE, MAX_LENGTH_CONTINUES, LENGTH_CONTINUE_NUDGE, MAX_ANSWER_NUDGES, ANSWER_NUDGE, MAX_CUTOFF_NUDGES, CUTOFF_NUDGE, MEMORY_AUDIT_NUDGE, PRECOMPACT_AUDIT_NUDGE, RETRY_ATTEMPTS, EMPTY_RESPONSE_RETRIES, EMPTY_RESPONSE_KIND, REDUNDANT_AUDIT_TURNS, REDUNDANT_AUDIT_MESSAGE, MAX_PARALLEL_TOOLS, retryDelayMs } from "./loop/limits.ts";
 export type { RetryWhy } from "./loop/limits.ts";
 export { DENIALS_BEFORE_STOP } from "./loop/outcomes.ts";
@@ -60,6 +64,8 @@ export async function* runAgent(
   let auditSettledThisRun = false;
   // 本轮是否已经走过 ExitPlanMode（决定收尾前是否提醒）
   let planSubmitted = false;
+  // 用户 hooks：这一轮 Stop hook 已经拦过几次收尾（有上限，见 hooks/points.ts）
+  let stopHookBlocks = 0;
   // R6：这一轮（本次 runAgent）实际执行过的工具，失败时写进边界消息。
   const ran = new Map<string, number>();
   // Q3：请求不变量（每次请求的结构 + 本次 run 内 system / tools 稳定）。
@@ -82,14 +88,24 @@ export async function* runAgent(
     // (a turn boundary) rather than mid-stream so the transcript stays a clean
     // alternating conversation and no provider sees a message appear mid-turn.
     const steers = state.takeSteer();
+    let steered = 0;
     for (const steer of steers) {
+      // 用户 hooks：插话同样过 UserPromptSubmit——拦下就不进对话，退回输入框
+      const gate = await userPromptHook(state, steer.text);
+      if (gate.blocked) {
+        console.warn(`[hooks] 插话被 UserPromptSubmit hook 拦下：${gate.blocked.slice(0, 200)}`);
+        yield { e: "steer_returned", texts: [steer.text], ids: [steer.id], reason: gate.blocked.slice(0, 2000) };
+        continue;
+      }
+      steered++;
       state.appendUserBlocks([{ t: "text", text: STEER_PREFIX + steer.text }], false, { origin: "steer", displayText: steer.text });
       yield { e: "steer_applied", text: steer.text, id: steer.id };
       // E3：这条插话是 /技能名——技能正文紧跟在插话后面
       if (steer.attach) {
         state.appendUserBlocks([{ t: "text", text: steer.attach.text }], false, { origin: "harness", kind: steer.attach.kind });
-        yield { e: "skill_loaded", name: steer.attach.name, via: "slash", ...(steer.attach.pkg ? { pkg: true } : {}) };
+        if (steer.attach.kind !== "slash-command") yield { e: "skill_loaded", name: steer.attach.name, via: "slash", ...(steer.attach.pkg ? { pkg: true } : {}) };
       }
+      if (gate.context) appendPromptContext(state, gate.context);
       attachPlaybooks(state, playbooksForRequest(steer.text), "request");
     }
     // 会话协作（session-family.ts）：这一轮跑着时别的会话发来的消息，同在这个回合边界注入（harness 消息，界面上是会话消息卡）
@@ -100,7 +116,7 @@ export async function* runAgent(
     }
     // #78：审计前那句收尾答复是对插话之前的对话说的，插话一进来它就不再是最终答复。以前模型下一轮只交了
     // MemoryAudit，loop 就拿那句旧话收工——插话被注入了，却没人回应（Q1 的严格脚本化测试照出来的）。
-    if (steers.length || familyMsgs.length) pendingPreAuditFinal = null;
+    if (steered || familyMsgs.length) pendingPreAuditFinal = null;
 
     // U3：到线了就先说一声再整理（整段压缩的摘要请求可能要几十秒，以前压完才有一条提示）
     if (contextNeedsTrim(state)) yield { e: "compact_start" };
@@ -139,7 +155,7 @@ export async function* runAgent(
     }[] = [];
     let text = "";
     let thinkingText = "";
-    let thinkingSig: string | undefined;
+    let blocks = new AssistantAssembler();
     let stop: StopReason = "end";
     let errored = false;
     // Usage reported by the CURRENT attempt. A retried attempt's tokens must not
@@ -210,7 +226,7 @@ export async function* runAgent(
       calls = [];
       text = "";
       thinkingText = "";
-      thinkingSig = undefined;
+      blocks = new AssistantAssembler();
       stop = "end";
       errored = false;
       attemptUsage = [];
@@ -246,6 +262,7 @@ export async function* runAgent(
           switch (ev.e) {
             case "text_delta":
               text += ev.text;
+              blocks.text(ev.text);
               if (!auditContinuationCandidate) yield { e: "text_delta", text: ev.text };
               break;
             case "thinking_delta":
@@ -253,13 +270,14 @@ export async function* runAgent(
                 thinkingText += ev.text;
                 if (!auditContinuationCandidate) yield { e: "thinking_delta", text: ev.text };
               }
-              if (ev.signature) thinkingSig = ev.signature;
+              blocks.thinking(ev);
               break;
             case "tool_call_begin":
               // U3：模型开始写这个工具调用的参数（活动行不再停在上一个工具的动词上）
               if (!auditContinuationCandidate) yield { e: "tool_call_begin", id: ev.id, name: ev.name, chars: ev.chars };
               break;
             case "tool_call":
+              blocks.call();
               calls.push({
                 id: ev.id,
                 name: ev.name,
@@ -475,7 +493,7 @@ export async function* runAgent(
     }
 
     const beforeAssistant = state.messages.length;
-    state.appendAssistant({ text, thinkingText, thinkingSig, calls }, internalAuditTurn);
+    state.appendAssistant({ text, thinkingText, calls, blocks: blocks.build(calls) }, internalAuditTurn);
     const appendedAssistant = state.messages.length > beforeAssistant
       ? state.messages[state.messages.length - 1]
       : null;
@@ -493,7 +511,11 @@ export async function* runAgent(
         // R16：续写之前先看正文——已经退化成循环（宽松档）就不续写：转录里截到循环开始处、补一句标记，这一轮收工
         if (isRunawayRepetition(text, false, state.profile.loop.repetition)) {
           const block = appendedAssistant?.content.find((b) => b.t === "text");
-          if (block && block.t === "text") block.text = withLoopCut(text, state.profile.loop.repetition);
+          if (block && block.t === "text") {
+            block.text = withLoopCut(text, state.profile.loop.repetition);
+            // 正文被思考隔成了几段时，截过的全文已经放进第一段，其余几段去掉（不然后半截重复一遍）
+            if (appendedAssistant) appendedAssistant.content = appendedAssistant.content.filter((b) => b.t !== "text" || b === block);
+          }
           yield { e: "text_delta", text: `\n\n${LOOP_CUT_NOTICE}` };
           yield { e: "done", stopReason: "end" };
           return;
@@ -607,6 +629,11 @@ export async function* runAgent(
         state.appendUserBlocks([{ t: "text", text: PLAN_SUBMIT_NUDGE }], true, { origin: "harness", kind: "plan-nudge" });
         continue;
       }
+      // 用户 hooks：Stop（子 agent 是 SubagentStop）不让收尾——理由已追加进转录，接着跑一轮
+      if (await stopHook(state, text, stopHookBlocks)) {
+        stopHookBlocks++;
+        continue;
+      }
       const note = verificationFootnote(state);
       if (note) {
         attachFootnote(state, appendedAssistant, note);
@@ -658,12 +685,14 @@ export async function* runAgent(
 
     // Execute the requested tools, appending results for the next turn.
     // A maximal run of consecutive concurrency-safe calls (pure reads:
-    // Read/Grep/Glob/…) executes in parallel, at most MAX_PARALLEL_TOOLS at a
-    // time; anything effectful runs serially, in call order. Results always
-    // land in call order.
+    // Read/Grep/Glob/…, read-only Bash commands) executes in parallel, at most
+    // MAX_PARALLEL_TOOLS at a time; anything effectful runs serially, in call
+    // order. Results always land in call order.
     const results: Block[] = [];
     const feedback: Block[] = [];
     const skills: { name: string; text: string }[] = []; // C5：这一批里加载的技能正文，工具结果之后各追加一条
+    // 派发前处理（loop/dispatch.ts）：入参归一、不执行就能回话的情况；Bash 的当前目录在每批开跑前写；并行与否按归一后的入参判
+    const dispatched = calls.map((rawCall) => prepareCall(state, rawCall));
     let idx = 0;
     while (idx < calls.length) {
       if (signal.aborted) {
@@ -675,11 +704,16 @@ export async function* runAgent(
         return;
       }
 
+      // Bash 的当前目录按这一刻的会话状态写（前一批串行的 cd 已经生效）；判并行也看这一份
+      const fresh = (i: number) => (dispatched[i] = refreshShellCwd(state, dispatched[i]));
       let end = idx + 1;
-      if (state.toolMap.get(calls[idx].name)?.concurrencySafe) {
-        while (end < calls.length && end - idx < state.profile.loop.maxParallelTools && state.toolMap.get(calls[end].name)?.concurrencySafe) end++;
+      if (runsConcurrently(state, fresh(idx))) {
+        while (end < calls.length && end - idx < state.profile.loop.maxParallelTools && runsConcurrently(state, fresh(end))) end++;
       }
       const batch = calls.slice(idx, end);
+      const ready = dispatched.slice(idx, end);
+      // 真要执行的不止一个：它们算并行批（Bash 不把 cd 带回会话）
+      const parallel = ready.filter((d) => !d.early).length > 1;
       idx = end;
 
       // R6：有副作用的批次开跑前先落盘（会话接的是立即保存）——进程若在执行中途死掉，转录里至少
@@ -699,42 +733,12 @@ export async function* runAgent(
       }
 
       const outcomes = await Promise.all(
-        batch.map(async (rawCall) => {
-          // P14（ZCode C6）：按工具声明的 schema 宽松归一化入参（只做强制转换、不做拒绝）；转录里的原始参数不动，
-          // 归一化后的只用于权限判定与执行（以及之后的门禁记账）
-          const normalized = normalizeToolArgs(state.toolMap.get(rawCall.name)?.def.parameters, rawCall.args);
-          const call = normalized.changed.length ? { ...rawCall, args: normalized.args } : rawCall;
-          // Arguments that never parsed as JSON: don't run the tool with {} —
-          // feed the parse error back so the model can re-issue the call.
-          if (call.argsError) {
-            return {
-              call,
-              denied: undefined,
-              res: fail(
-                "bad tool arguments",
-                `The arguments for ${call.name} were not valid JSON (${call.argsError}). ` +
-                  `Raw arguments received:\n${call.argsRaw || "(empty)"}\n` +
-                  "Re-issue the tool call with complete, valid JSON arguments.",
-              ),
-            };
-          }
-          // A name the registry doesn't know (hallucinated or mangled): tell the
-          // model what IS available instead of a confusing permission denial.
-          if (!state.toolMap.has(call.name)) {
-            return {
-              call,
-              denied: undefined,
-              res: fail(
-                "unknown tool",
-                `Unknown tool "${call.name}". Available tools: ${[...state.toolMap.keys()].join(", ")}.`,
-              ),
-            };
-          }
-          // 工具延迟加载（deferred-tools.ts）：说明还没加载就调了推迟的工具——这次不执行，回完整说明（记为已加载），模型照着重发
-          const deferred = state.ctx.deferredTools;
-          if (deferred?.has(call.name) && !deferredLoaded(state.messages, call.name, call.id)) {
-            return { call, denied: undefined, res: notLoadedResult(call.name, deferred) };
-          }
+        ready.map(async ({ call: dispatchedCall, early, docs }) => {
+          if (early) return { call: dispatchedCall, denied: undefined, res: early };
+          // 用户 hooks：PreToolUse 可以拦下、改参数、放行要问人的调用或把放行的转成问人
+          const pre = await preToolHook(state, dispatchedCall);
+          const call = pre?.call ?? dispatchedCall;
+          if (pre?.deny) return { call, denied: pre.deny, res: fail("blocked by a PreToolUse hook", hookDeniedText(pre.deny)) };
           // P11（kimi K20）：出卡之前的规划阶段——注定失败的（硬拒的命令、编不过的工作流）不弹卡、直接回给模型；工具要求
           // 确认的（Workflow 启动）进统一权限闸；卡片上的执行事实优先用工具自己给的。抛错按「没有」处理。
           let prepared: PreparedCall | null = null;
@@ -750,13 +754,16 @@ export async function* runAgent(
           // P6：Bash 的写目标 / 提到的路径（路径规则与拒绝台账按它判）；工作区根用来把各种写法的路径归一
           const view = state.toolMap.get(call.name)?.permissionView?.(call.args) ?? null;
           const root = state.ctx.sandbox.root;
-          let decision = decide(
-            state.effectiveMode(),
-            call.name,
-            state.toolMap,
-            call.args,
-            state.effectiveRules(), // P1：全局规则现读 + 还算数的本会话允许
-            { root, denied: state.deniedTargets, ...(prepared?.confirm ? { confirm: prepared.confirm } : {}) },
+          let decision = applyHookPermission(
+            decide(
+              state.effectiveMode(),
+              call.name,
+              state.toolMap,
+              call.args,
+              state.effectiveRules(), // P1：全局规则现读 + 还算数的本会话允许
+              { root, denied: state.deniedTargets, ...(prepared?.confirm ? { confirm: prepared.confirm } : {}) },
+            ),
+            pre,
           );
           // P14：审计记「第一判」和「最后是谁定的」
           const initial = decision;
@@ -845,6 +852,7 @@ export async function* runAgent(
               // callContext 以会话的上下文为原型（readFileState 这些在原型上）——换沙箱也只加一层自有属性，不能展开
               const ctx = callContext(state.ctx, call.id, profileToolPolicy(state.profile));
               if (sandbox) ctx.sandbox = sandbox;
+              if (parallel) ctx.parallel = true;
               try {
                 return await runInTrace(span, () => tool.run(call.args, ctx));
               } catch (e) {
@@ -858,6 +866,9 @@ export async function* runAgent(
             // P13（X18）：只因为读了工作区外被拒，有人在场就问：允许这一次 / 本会话把这些目录设为只读 / 拒绝；批了带放行重跑。
             // 写、凭据、别名这些拒绝不带 outsideRead，永远不问；没人在场（子 agent、无头）照旧直接失败
             if (res.outsideRead?.dirs.length && state.ctx.requestPermission) res = await askOutsideRead(state, call, res, runWith, receipts);
+            // 没加载说明就直接执行了的推迟工具：结果后面附上这一族的完整说明
+            if (docs?.length && state.ctx.deferredTools) res = withDeferredDocs(res, docs, state.ctx.deferredTools);
+            res = await postToolHook(state, call, res, pre);
             return { call, denied: undefined, invoked: true, receipts, res };
           } catch (e) {
             return { call, denied: undefined, invoked: true, receipts, res: fail("tool error", `${call.name} threw: ${(e as Error).message}`) };
@@ -884,6 +895,7 @@ export async function* runAgent(
           ...(receipts?.length ? { permissions: receipts } : {}),
         };
         results.push(toolResult(call.id, res.ok, res.content, Object.keys(meta).length ? meta : undefined));
+        noteLoadedTools(state, res);
         if (!internalAuditTurn && !isSilentTool(call.name)) {
           yield {
             e: "tool_end",
@@ -918,6 +930,16 @@ export async function* runAgent(
             });
           } catch (error) {
             console.error(`[knowledge] verification record: ${(error as Error).message}`);
+          }
+        } else if (state.profile.tools.verifyTools === "off" && "invoked" in outcome) {
+          // 工具不带 verify 的姿态：一次跑完的测试 / 构建照样记进项目知识的验证历史（不进门禁，agent/verify-tools.ts）
+          const check = plainCheckOutcome(call, res);
+          if (check) {
+            try {
+              noteKnowledgeVerification(state.ctx.sandbox.root, { tool: call.name, ...check, command: String(call.args.command ?? ""), editedPaths: [...state.editedFiles] });
+            } catch (error) {
+              console.error(`[knowledge] verification record: ${(error as Error).message}`);
+            }
           }
         }
 
@@ -1113,6 +1135,8 @@ export async function* runAgent(
     }
     // 瘦身 P0-3：这一轮的调用碰到了某块（写了网页文件、起了 Preview、跑了 adb……）——那一章紧跟在结果后面
     attachPlaybooks(state, playbooksForCalls(calls), "work");
+    // 读 / 改到的文件所在的子目录有自己的 AGENTS.md / CLAUDE.md、这个会话还没加载过：紧跟在后面
+    attachProjectDocs(state, calls, results);
 
     // The plan drifts out of the model's attention over a long run (and dies in
     // a compaction). Periodically re-show the current todo list — on the next

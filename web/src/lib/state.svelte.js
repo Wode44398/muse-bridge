@@ -77,7 +77,7 @@ export const ui = $state({
   booted: false,          // 预载页是否已结束——flux 等到此为 true（进主页）才挂载，好「从黑浮现」
   glassMode: (() => { try { return localStorage.getItem('bridge-glass') || 'B'; } catch { return 'B'; } })(), // iOS 玻璃方案: 'A'=flux+透光毛玻璃 / 'B'=多洛米蒂+WebGL 折射；点 THE BRIDGE 切换
   themeTransition: null,  // 主页明暗换场进行中: null | { dir:'AtoB'|'BtoA', phase:'reveal' }（lib/homeTheme.js）
-  preloadPhase: 'cover',  // 预载演出阶段: 'cover'(封面驻留等加载，标题+方块居中) | 'expand'(方块放大，标题归位左上)
+  bootStage: '',         // 开机入场（components/BootGate）：'gate' 门还在画面里 | 'land' 主页上的东西在落位 | 'plain' 不演、首帧封面在淡出 | '' 结束
   revealIcons: false,     // 明亮主题(B)图标是否浮现(原地透明度 0→1)；预载/转场视频后段触发，暗主题(A)不用此
 });
 
@@ -235,11 +235,12 @@ export function toggleGlassMode() { setHomeMode(ui.glassMode === 'A' ? 'B' : 'A'
 // claudeMark: Claude 运行标记——'clay'=新版 Claude Code 的活动标记（默认）/ 'sprite'=新版 claude.ai 聊天页（星形→节点）/ 'classic'=原来的 claude.ai 星标五态
 // compactFrac: Claude 自动压缩点（用量弹层计量条上的滑块）= 占模型窗口的比例，null = 默认（CLI 自定）
 // homeLayout: 主页入口的顺序与隐藏（{ order, hidden }，lib/homeLayoutCore 清洗；只存本机，不进账号）
+// sysSelect: 触屏长按用系统自带的文字选择（关 = bridge 自己的墨、选择柄、工具条，见 lib/selection/touch.js，那边直接读本机存档）
 const PREFS_KEY = 'bridge-prefs';
 const fracOk = (v) => (typeof v === 'number' && v > 0 && v < 1 ? v : null);
 function loadPrefs() {
-  try { const p = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null'); if (p) return { followSys: !!p.followSys, followPage: !!p.followPage, noEnterAnim: !!p.noEnterAnim, fullResMedia: !!p.fullResMedia, promptSuggest: p.promptSuggest !== false, worktree: !!p.worktree, claudeMark: p.claudeMark === 'classic' || p.claudeMark === 'sprite' ? p.claudeMark : 'clay', compactFrac: fracOk(p.compactFrac), homeLayout: normalizeLayout(p.homeLayout) }; } catch {}
-  return { followSys: false, followPage: false, noEnterAnim: false, fullResMedia: false, promptSuggest: true, worktree: false, claudeMark: 'clay', compactFrac: null, homeLayout: normalizeLayout(null) };
+  try { const p = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null'); if (p) return { followSys: !!p.followSys, followPage: !!p.followPage, noEnterAnim: !!p.noEnterAnim, fullResMedia: !!p.fullResMedia, promptSuggest: p.promptSuggest !== false, worktree: !!p.worktree, claudeMark: p.claudeMark === 'classic' || p.claudeMark === 'sprite' ? p.claudeMark : 'clay', compactFrac: fracOk(p.compactFrac), homeLayout: normalizeLayout(p.homeLayout), sysSelect: !!p.sysSelect }; } catch {}
+  return { followSys: false, followPage: false, noEnterAnim: false, fullResMedia: false, promptSuggest: true, worktree: false, claudeMark: 'clay', compactFrac: null, homeLayout: normalizeLayout(null), sysSelect: false };
 }
 export const prefs = $state(loadPrefs());
 
@@ -248,7 +249,7 @@ export const prefs = $state(loadPrefs());
 // 工作台与归属芯片据此指向 worktree，而不是项目的主检出。
 export const sessionWt = $state({});
 export function savePrefs() {
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ followSys: prefs.followSys, followPage: prefs.followPage, noEnterAnim: prefs.noEnterAnim, fullResMedia: prefs.fullResMedia, promptSuggest: prefs.promptSuggest, worktree: prefs.worktree, claudeMark: prefs.claudeMark, compactFrac: prefs.compactFrac, homeLayout: normalizeLayout(prefs.homeLayout) })); } catch {}
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ followSys: prefs.followSys, followPage: prefs.followPage, noEnterAnim: prefs.noEnterAnim, fullResMedia: prefs.fullResMedia, promptSuggest: prefs.promptSuggest, worktree: prefs.worktree, claudeMark: prefs.claudeMark, compactFrac: prefs.compactFrac, homeLayout: normalizeLayout(prefs.homeLayout), sysSelect: !!prefs.sysSelect })); } catch {}
 }
 
 // 按主页明暗系统的叫法手动切（点 THE BRIDGE、设置页选壁纸槽）：全局明暗统一，等价于 pickTheme。
@@ -269,6 +270,21 @@ if (typeof window !== 'undefined' && window.matchMedia) {
   _applyFollowSys = apply;
 }
 export function applyFollowSys() { _applyFollowSys(); }
+
+// 跨窗口同步主题与偏好：主窗口与独立分页窗口（或浏览器多标签页）共享 localStorage，
+// 任意一扇窗切明暗或改偏好，其余窗口即时静默对齐，不反写存储、不触发死循环。
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'bridge-theme' && (e.newValue === 'dark' || e.newValue === 'light')) {
+      setTheme(e.newValue);
+    } else if (e.key === 'bridge-glass' && (e.newValue === 'A' || e.newValue === 'B')) {
+      setTheme(e.newValue === 'B' ? 'light' : 'dark');
+    } else if (e.key === PREFS_KEY) {
+      Object.assign(prefs, loadPrefs());
+      if (prefs.followSys) _applyFollowSys();
+    }
+  });
+}
 
 // 点 THE BRIDGE 的主页明暗换场住在 lib/homeTheme.js（要用转场引擎，放这里会循环引用）。
 // ui.themeTransition 仍是「换场进行中」的标记：{ dir:'AtoB'|'BtoA', phase:'reveal' } | null。

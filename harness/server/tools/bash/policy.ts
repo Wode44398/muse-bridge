@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { insideReadOnlyRoot, pathAliasViolation, protectedStateViolation, readRootFor, readVerdict, realOrNearest, type SandboxAccess } from "../../sandbox.ts";
-import { grantedSkillDirs, managedExtensionRoots } from "../../extensions.ts";
+import { grantedSkillDirs, managedExtensionRoots, userSkillReadRoots } from "../../extensions.ts";
 import { desktopHostPorts } from "../../desktop-host.ts";
 import { parseShell, type ShellDialect } from "../shell-words.ts";
 import { accessLock, deniedRootLiteral, tenantMode } from "../../tenant.ts";
@@ -103,7 +103,8 @@ export function hostKillViolation(command: string): string | null {
 // 管理员 bypass 档（access="bypass"，非租户）：跳过安全命令黑名单、凭据扫描、工作区围栏；但仍保留
 // 两道底线——宿主自保（不许杀在跑的 bridge / dimensio 进程与端口）与 dimensio 自身会话库写保护，
 // 以及租户禁区（bypass 是管理员专用档，这里是额外兜底）。
-export function commandPolicyViolation(command: string, root: string, access: SandboxAccess, readRoots: string[] = []): string | null {
+// cwd = 这条命令从哪个目录起跑（Bash 跨调用保留的当前目录；默认工作区根）：命令里的相对路径按它解析，边界仍按 root 判。
+export function commandPolicyViolation(command: string, root: string, access: SandboxAccess, readRoots: string[] = [], cwd: string = root): string | null {
   const bypass = access === "bypass" && !tenantMode();
   if (!bypass) {
     const denied = deniedCommand(command);
@@ -116,18 +117,18 @@ export function commandPolicyViolation(command: string, root: string, access: Sa
   if (deniedRoot) return `Command blocked by workspace policy: it references ${deniedRoot}, which belongs to the host or to another user.`;
   if (bypass) {
     // 完全 bypass：工作区围栏与凭据扫描全跳过，只保留 dimensio 自身状态（会话库 / 影子仓库）的写保护。
-    const state = protectedStateCommandViolation(command, root);
+    const state = protectedStateCommandViolation(command, cwd);
     return state ? `Command blocked to protect dimensio's own state: ${state}` : null;
   }
   // 访问范围锁（租户恒 workspace）：调用方传进来的 access 被谁改成 full 都不算数。
-  const scope = commandScopeViolation(command, root, accessLock() ?? (access as "workspace" | "full"), readRoots);
+  const scope = commandScopeViolation(command, root, accessLock() ?? (access as "workspace" | "full"), readRoots, cwd);
   if (scope) return `Command blocked by workspace policy: ${scope}.`;
   return null;
 }
 
 // P13（X18）：被拒只是因为纯读命令读了工作区外——返回放行哪几个目录（只读）这条命令就能过；不是这种情况（别的拒绝理由、
 // 写、非纯读命令、整机模式）返回 null。放行后要真能过才算：逐个补上越界落点所在的目录再判一遍整套命令闸，最多 5 个。
-export function outsideReadDirs(command: string, root: string, access: SandboxAccess, readRoots: string[] = []): string[] | null {
+export function outsideReadDirs(command: string, root: string, access: SandboxAccess, readRoots: string[] = [], cwd: string = root): string[] | null {
   // 租户模式不问（批准的人就是用户自己），越界直接拒；整机 / bypass 本就不拦越界，没有「放行只读目录」可谈。
   if (access !== "workspace" || tenantMode()) return null;
   const dirs: string[] = [];
@@ -138,7 +139,7 @@ export function outsideReadDirs(command: string, root: string, access: SandboxAc
     const dir = readRootFor(target);
     dirs.push(dir);
     roots = [...roots, dir];
-    if (!commandPolicyViolation(command, root, access, roots)) return dirs;
+    if (!commandPolicyViolation(command, root, access, roots, cwd)) return dirs;
   }
   return null;
 }
@@ -210,6 +211,12 @@ function resolveCandidate(raw: string): string | null {
   return path.resolve(raw);
 }
 
+// 命令里的一个词当路径：绝对写法按 resolveCandidate，其余按命令起跑的目录解析
+function resolveToken(token: string, cwd: string): string {
+  const absolute = /^[A-Za-z]:[\\/]/.test(token) || (process.platform === "win32" ? /^\/[A-Za-z](?:\/|$)/.test(token) : token.startsWith("/"));
+  return (absolute ? resolveCandidate(token) : null) ?? path.resolve(cwd, token);
+}
+
 // READ_ONLY_VERBS（shell-policy.ts）是只读动词的单一来源：这里的路径闸与 C9 的只读降级共用。
 const WRITE_FLAG_RE = /(^|\s)-(?:delete|exec|execdir|ok|okdir|fprint|fprintf|fls)\b/;
 
@@ -225,8 +232,8 @@ function isReadOnlyCommand(command: string): boolean {
 
 // S7（#55）：harness 自己的状态（会话目录、检查点影子仓库、桌面宿主描述）经 Bash 也不许改。
 // 纯读命令照常放行，但它的重定向目标仍算写；`--git-dir=<路径>`、`VAR=<路径>` 只看等号右边；
-// 相对路径按工作区根解析（工作区就是 harness 目录时，`rm -rf sessions` 也得拦下）。
-function protectedStateCommandViolation(command: string, root: string): string | null {
+// 相对路径按命令起跑的目录解析（工作区就是 harness 目录时，`rm -rf sessions` 也得拦下；cd 进会话库再 `rm x` 同样）。
+function protectedStateCommandViolation(command: string, cwd: string): string | null {
   const pureRead = isReadOnlyCommand(command);
   let pendingWrite = false;
   for (const match of command.matchAll(/"([^"]*)"|'([^']*)'|([^\s]+)/g)) {
@@ -245,7 +252,7 @@ function protectedStateCommandViolation(command: string, root: string): string |
     if (!value || /^[a-z][a-z0-9+.-]*:\/\//i.test(value) || /[*?$`]/.test(value)) continue;
     const abs = /^[A-Za-z]:[\\/]/.test(value) || /^\/[A-Za-z](?:\/|$)/.test(value)
       ? resolveCandidate(value)
-      : homePathCandidate(value) ?? path.resolve(root, value);
+      : homePathCandidate(value) ?? path.resolve(cwd, value);
     const hit = abs ? protectedStateViolation(abs) : null;
     if (hit) return `${hit}: ${token}`;
   }
@@ -314,9 +321,9 @@ function resolveAgainst(base: string, token: string): string | null {
 // through literal `cd` targets, and reject a `..` only when it actually
 // resolves outside the workspace (or when the cwd is no longer trackable —
 // `cd "$DIR"` and friends stay conservatively blocked).
-function dotdotEscapeViolation(command: string, root: string): string | null {
+function dotdotEscapeViolation(command: string, root: string, start: string = root): string | null {
   const rootAbs = path.resolve(root);
-  let cwd: string | null = rootAbs; // null = untrackable
+  let cwd: string | null = path.resolve(start); // null = untrackable
   const blocked = (token: string) =>
     `parent-directory traversal escapes the workspace (${token}); use workspace-relative paths instead`;
   const sanctioned = (p: string) => sanctionedToolDirs().some((dir) => inside(dir, p));
@@ -436,6 +443,8 @@ export function commandScopeViolation(
   access: "workspace" | "full",
   // P13（X18）：用户在卡片上放行的工作区外只读目录（与 DIMENSIO_READONLY_PATHS 同样只放行纯读命令）
   readRoots: string[] = [],
+  // 命令从哪个目录起跑（Bash 保留的当前目录）；相对路径按它解析
+  cwd: string = root,
 ): string | null {
   // 只问「在不在」的存在性测试（`[ -e x ]`、`test -f x`、`Test-Path x`）只回一个真假、读不到内容：判凭据时把它们的操作数摘掉
   // （2026-10-09：核对打包目录里**没有** .env / devices.json 的检查被整句拒了）。其余部分照旧全判。
@@ -457,6 +466,14 @@ export function commandScopeViolation(
     const verdict = abs ? readVerdict(abs, root) : null;
     if (verdict) return `${verdict}: ${candidate.path}`;
   }
+  // 当前目录不在工作区根上：相对路径的落点也过同一道凭据判定——cd 进 ~/.aws 之后 `cat config` 不能因为词里不带 .aws 就漏过去
+  if (path.resolve(cwd) !== path.resolve(root)) {
+    for (const token of commandTokens(guarded)) {
+      if (token.startsWith("-") || /^[a-z][a-z0-9+.-]*:\/\//i.test(token) || /[*?$`]/.test(token)) continue;
+      const verdict = readVerdict(resolveToken(token, cwd), root);
+      if (verdict) return `${verdict}: ${token}`;
+    }
+  }
   // 候选路径没抽出来的写法（引号拼接、变量里的前缀…）再按真实扩展根做一次字面兜底。
   const lower = normalized.toLowerCase();
   if (managedExtensionRoots().some((root) => lower.includes(root.replace(/\\/g, "/").toLowerCase() + "/registry.json"))) {
@@ -467,17 +484,17 @@ export function commandScopeViolation(
     const alias = pathAliasViolation(token);
     if (alias) return `${alias}: ${token}`;
   }
-  const state = protectedStateCommandViolation(command, root);
+  const state = protectedStateCommandViolation(command, cwd);
   if (state) return state;
   if (access === "full") return null;
-  const dotdot = dotdotEscapeViolation(command, root);
+  const dotdot = dotdotEscapeViolation(command, root, cwd);
   if (dotdot) return dotdot;
   // S6（#17）：字面在工作区里、真实落点在外面——工作区里一个指出去的 junction / 符号链接
   // （mklink /J 不要管理员）。命令里凡是存在于工作区内的路径，都按 realpath 再判一次边界。
   const realRoot = realOrNearest(root) ?? path.resolve(root);
   for (const token of commandTokens(command)) {
     if (token.startsWith("-") || /^[a-z][a-z0-9+.-]*:\/\//i.test(token) || /[*?$`]/.test(token)) continue;
-    const abs = resolveCandidate(token) ?? path.resolve(root, token);
+    const abs = resolveToken(token, cwd);
     if (!inside(path.resolve(root), abs) || !existsSync(abs)) continue;
     const real = realOrNearest(abs);
     if (real && !inside(realRoot, real) && !sanctionedToolDirs().some((dir) => inside(dir, real))) {
@@ -505,6 +522,8 @@ export function commandScopeViolation(
     // workspace is blocked.
     // 成员实例对技能目录只读：全服技能是大家共用的，往里写等于改了所有人的（写落到下面按越界拒）。
     if (candidate && !(write && tenantMode()) && sanctionedToolDirs().some((dir) => inside(dir, candidate))) continue;
+    // 用户级技能根（~/.claude/skills 这类）：读、跑里面的脚本可以，写不行（落到下面按越界拒）
+    if (candidate && !write && userSkillReadRoots().some((dir) => inside(dir, candidate))) continue;
     if (candidate && !inside(path.resolve(root), path.resolve(candidate))) {
       if (!write && pureRead && (insideReadOnlyRoot(candidate) || readRoots.some((dir) => inside(path.resolve(dir), path.resolve(candidate))))) continue;
       return `absolute path escapes the workspace: ${raw}${outsideHint(candidate, write)}`;
@@ -524,6 +543,7 @@ export function outsideReadCandidate(command: string, root: string, readRoots: s
     if (!candidate || sanctionedToolDirs().some((dir) => inside(dir, candidate))) continue;
     if (inside(path.resolve(root), path.resolve(candidate))) continue;
     if (write) return null;
+    if (userSkillReadRoots().some((dir) => inside(dir, candidate))) continue;
     if (insideReadOnlyRoot(candidate) || readRoots.some((dir) => inside(path.resolve(dir), path.resolve(candidate)))) continue;
     return path.resolve(candidate);
   }

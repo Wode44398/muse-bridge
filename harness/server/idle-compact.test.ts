@@ -14,6 +14,7 @@ import { cancelIdleCompact, idleCompactRunEnd, idleDelay, startIdleCompact, _fir
 import { compactIdleSession, dropSession, startRun, type Session } from "./session.ts";
 import { fakeSummary, say, scripted, ScriptedAdapter } from "./test-harness/scripted-adapter.ts";
 import { attachSession } from "./test-harness/session-fixture.ts";
+import { isInlineCompactionRequest } from "./test-harness/context-windows.ts";
 import { setPrefs } from "./prefs.ts";
 
 const roots: string[] = [];
@@ -86,7 +87,9 @@ test("空闲压缩：上下文够大就压（摘要请求一次，转录里出�
   assert.equal(r.ok, true, r.error);
   assert.ok(r.after! < r.before!);
   assert.ok(summaryOf(s), "转录里有压缩摘要");
-  assert.equal(adapter.inputs[0].system, COMPACTION_SYSTEM);
+  // 摘要默认由主模型接着原对话写（inline）：system 就是会话自己的，末尾是摘要指令——空闲压缩正是为了趁缓存还热
+  assert.ok(isInlineCompactionRequest(adapter.inputs[0]), "摘要请求是 inline 的");
+  assert.notEqual(adapter.inputs[0].system, COMPACTION_SYSTEM);
 });
 
 test("压到一半用户发话了：这次压缩作废（不留痕迹），用户这一轮照常跑完", async (t) => {

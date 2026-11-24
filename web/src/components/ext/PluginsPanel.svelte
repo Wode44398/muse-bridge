@@ -2,6 +2,7 @@
   // 扩展中心 ·「功能扩展」：bridge 的插件（服务端 src/plugins/，接口 /api/plugins*）。四个区：
   //   插件市场    官方市场（/api/plugins/market，签过名的索引）里还没装的插件，置顶；有更新时页顶列出来——只提示，点了才装。
   //              内置功能也可以换上市场版（盖住内置实现，详情里「恢复内置版」换回）；装的插件可以「回退」到回收区里的上一版。
+  //              「社区」切换看社区市场（任何人投稿、只有自动检查）：卡片、详情、风险确认、发布面板在 ext/market/，这里只接线。
   //   Agent      （原来这一页就是它）Media Studio / ChatGPT · Codex / dimensio 三个 agent 扩展（原 ModulesPanel：装卸、更新、agent 总开关）；
   //   功能       随 bridge 发布、默认开着的内置功能（定时任务、分享链接、设备、手机操控、内置浏览器……）按分类排，逐项开关；
   //   第三方插件  装的 zip / 登记的本机目录：开关、重新加载、卸载，「添加」上传 zip 或填本机目录。
@@ -29,6 +30,10 @@
   import { openPluginStandalone, inAndroidApp, plText } from '../../lib/pluginPanels.svelte.js';
   import { openSettings } from '../../lib/settingsNav.svelte.js';
   import { relTime } from '../../lib/format.js';
+  import CommunityDetail from './market/CommunityDetail.svelte';
+  import PublishEntry from './market/PublishEntry.svelte';
+  import PublishSheet from './market/PublishSheet.svelte';
+  import { communityConfirm, ackConfirm, isCommunity, kindText, marketSource, revokedOf, canPublish } from './market/community.js';
 
   let { toast = () => {}, confirm = async () => true } = $props();
 
@@ -88,13 +93,14 @@
   const nameOf = (id) => { const p = (data?.plugins || []).find((x) => x.id === id); return p ? pName(p) : id; };
 
   function footOf(p) {
+    if (revokedOf(p)) return { text: t('已被社区市场下架'), err: true };
     if (p.status === 'error') return { text: t('出错：{reason}', { reason: tr(p.error || '') }), err: true };
     if (p.pendingRestart) return { text: p.enabled ? (p.active ? t('重启后生效') : t('重启后开启')) : t('重启后关闭'), warn: true };
     if (p.status === 'blocked') return { text: t('缺依赖：{names}', { names: p.blockedBy.map(nameOf).join('、') }), warn: true };
     if (p.problems?.length) return { text: t('配置有 {n} 项无效，已用默认值', { n: p.problems.length }), warn: true };
     if (p.override?.pending) return { text: p.override.pending.restore ? t('重启后恢复内置版') : t('重启后换上市场版 v{v}', { v: p.override.pending.install }), warn: true };
     const bits = [];
-    if (p.source === 'installed' || p.source === 'local') { if (p.version) bits.push('v' + p.version); bits.push(p.market ? t('插件市场') : SOURCE[p.source]); }
+    if (p.source === 'installed' || p.source === 'local') { if (p.version) bits.push('v' + p.version); bits.push(p.market ? marketSource(p) : SOURCE[p.source]); }
     else bits.push(p.active ? t('已开启') : t('已关闭'));
     if (p.override?.active) bits.push(t('市场版 v{v}', { v: p.override.version }));
     const mx = mktOf(p.id);
@@ -105,7 +111,7 @@
 
   let busy = $state({});
   async function toggle(p) {
-    if (p.locked || busy[p.id]) return;
+    if (p.locked || busy[p.id] || (revokedOf(p) && !p.enabled)) return;
     busy[p.id] = true;
     try {
       const r = await api.post('/api/plugins/toggle', { id: p.id, enabled: !p.enabled });
@@ -424,15 +430,24 @@
     finally { mktBusy = false; }
   }
   loadMarket();
-  const mktOf = (id) => (mkt?.plugins || []).find((x) => x.id === id) || null;
-  const mktNew = $derived((mkt?.plugins || []).filter((x) => !x.builtin && x.state === 'none'));
-  const mktUpdates = $derived((mkt?.plugins || []).filter((x) => x.update));
-  // 市场分类筛选：全部 / 应用 / 其它；索引里 category: 'app' 的算应用（服务端 normalizeIndex 保留 category）
+  // 社区一块：老服务端没有 community 字段，那就不出「官方 / 社区」切换
+  const cmkt = $derived(mkt?.community || null);
+  const mktAll = $derived([...(mkt?.plugins || []), ...(cmkt?.plugins || [])]);
+  // 同 id 两边都有时（社区装的，官方后来也上了）取不是 taken 的那条——它才是这个已装插件所属的通道
+  const mktOf = (id, ch = '') => {
+    const xs = mktAll.filter((x) => x.id === id && (!ch || x.channel === ch));
+    return xs.find((x) => x.state !== 'taken') || xs[0] || null;
+  };
+  const mktUpdates = $derived(mktAll.filter((x) => x.update));
+  let mktTab = $state('official');
+  const mktNew = $derived((mktTab === 'community' ? cmkt?.plugins || [] : mkt?.plugins || []).filter((x) => !x.builtin && x.state === 'none'));
+  // 市场分类筛选：全部 / 应用 / 其它；索引里 category: 'app' 的算应用（服务端 normalizeIndex 保留 category）；官方、社区共用
   let mktCat = $state('all');
   const mktShown = $derived(mktCat === 'all' ? mktNew : mktNew.filter((x) => (x.category === 'app') === (mktCat === 'app')));
   // 应用类卡片的图标：索引只认 https 地址（服务端已滤，这里再挡一道）；加载失败的记下来退回分类字形
   let mkIconBad = $state({});
-  const mkIcon = (x) => (x && x.category === 'app' && typeof x.icon === 'string' && /^https:\/\//i.test(x.icon) && !mkIconBad[x.id] ? x.icon : '');
+  // 社区条目不加载作者给的远程图标：没人审过，一张图就能拿到每个打开这页的人的 IP
+  const mkIcon = (x) => (x && !isCommunity(x) && x.category === 'app' && typeof x.icon === 'string' && /^https:\/\//i.test(x.icon) && !mkIconBad[x.id] ? x.icon : '');
   const mkIconFail = (x) => { mkIconBad = { ...mkIconBad, [x.id]: true }; };
   const mName = (x) => (isEn() && x.nameEn ? x.nameEn : tr(x.name));
   const mDesc = (x) => (isEn() && x.descriptionEn ? x.descriptionEn : tr(x.description || ''));
@@ -453,6 +468,11 @@
     const ve = x.versions.find((y) => y.version === v) || x.latest;
     const has = x.state === 'installed' || (x.builtin && !!x.current);
     const down = has && x.current && cmpVer(v, x.current) < 0;
+    if (isCommunity(x)) {
+      const ask = communityConfirm({ name: mName(x), v, publisher: x.publisher, kind: ve?.kind, caps: ve?.caps, notes: ve?.notes, restart: ve?.restart, has, down });
+      if (await confirm(ask)) await mktPost(x, v, { has });
+      return;
+    }
     const title = x.builtin
       ? (has ? t('把「{name}」换成市场版 v{v}？', { name: mName(x), v }) : t('给「{name}」换上市场版 v{v}？', { name: mName(x), v }))
       : !has ? t('安装「{name}」v{v}？', { name: mName(x), v })
@@ -461,9 +481,21 @@
       x.builtin ? t('市场版会盖住随 bridge 发布的内置实现；它起不来会自动退回内置版，也可以随时「恢复内置版」。') : has ? t('旧版留在回收区，可以随时回退。') : t('插件和 bridge 同进程运行，这是 bridge 官方发布、验过签名的插件。'),
       ve?.restart ? t('要重启 bridge 才生效。') : ''].filter(Boolean).join(' ');
     if (!(await confirm({ title, desc, yes: x.builtin || has ? (down ? t('降级') : t('更新')) : t('安装') }))) return;
+    await mktPost(x, v, { has });
+  }
+  // 社区的在确认框里点过同意才走到这里，所以总带 ack；服务端仍回 428（索引中途换了）就照它给的风险信息再问一次
+  async function mktPost(x, v, { has }) {
     busy['mk:' + x.id] = true;
     try {
-      const r = await api.post('/api/plugins/market/install', { id: x.id, version: v });
+      const body = isCommunity(x) ? { id: x.id, version: v, channel: 'community', ack: true } : { id: x.id, version: v };
+      let r;
+      try { r = await api.post('/api/plugins/market/install', body); }
+      catch (e) {
+        const need = e?.status === 428 && e.body && typeof e.body === 'object' ? e.body.needAck : null;
+        if (!need) throw e;
+        if (!(await confirm(ackConfirm(need, { has, down: has && x.current && cmpVer(need.version || v, x.current) < 0 })))) return;
+        r = await api.post('/api/plugins/market/install', { ...body, version: need.version || v });
+      }
       apply(r);
       await loadMarket();
       const p = r.plugin;
@@ -504,18 +536,34 @@
 
   // 市场条目详情（和插件详情同一套推入 / 返回）
   let mkId = $state(null);
-  const mkSel = $derived(mkId ? mktOf(mkId) : null);
+  let mkCh = $state('');
+  const mkSel = $derived(mkId ? mktOf(mkId, mkCh) : null);
   $effect(() => { if (!mkId) return; return pushBackLayer(() => mkBack()); });
   let mkFrom = $state(null);   // 从插件详情点进来的：返回时回到那个详情
   function openMk(x) {
     if (selId) { mkFrom = selId; selId = null; } else { mkFrom = null; listScroll = scroller()?.scrollTop || 0; }
-    mkId = x.id;
+    mkId = x.id; mkCh = x.channel || '';
     queueMicrotask(() => { const sc = scroller(); if (sc) sc.scrollTop = 0; });
   }
   function mkBack() {
     mkId = null;
     if (mkFrom) { selId = mkFrom; mkFrom = null; return; }
     requestAnimationFrame(() => { const sc = scroller(); if (sc) sc.scrollTop = listScroll; });
+  }
+  // 发布到社区（插件详情推入的一层；面板自己挂返回层，关掉后 pubSeq 变一下让详情里的投稿状态重查）
+  let pubOpen = $state(false);
+  let pubSeq = $state(0);
+  let detailScroll = 0;
+  // 换了插件（直达别的详情、退回列表、卸载）就收起，免得面板挂在别的插件上
+  $effect(() => { selId; untrack(() => { pubOpen = false; }); });
+  function openPublish() {
+    detailScroll = scroller()?.scrollTop || 0;
+    pubOpen = true;
+    queueMicrotask(() => { const sc = scroller(); if (sc) sc.scrollTop = 0; });
+  }
+  function closePublish() {
+    pubOpen = false; pubSeq++;
+    requestAnimationFrame(() => { const sc = scroller(); if (sc) sc.scrollTop = detailScroll; });
   }
   // 市场条目对应的已装插件 / 内置功能：进它的详情
   function openInstalled(x) {
@@ -551,7 +599,7 @@
       <span class="cz-foot" class:err={f.err} class:pp-warn={f.warn} class:pp-upd-foot={f.upd}>{f.text}</span>
     </div>
     {#if !p.locked}
-      <button class="cz-sw" class:on={p.enabled} role="switch" aria-checked={p.enabled} disabled={busy[p.id]}
+      <button class="cz-sw" class:on={p.enabled} role="switch" aria-checked={p.enabled} disabled={busy[p.id] || (!!revokedOf(p) && !p.enabled)}
         onclick={(ev) => { ev.stopPropagation(); toggle(p); }} aria-label={t('启用 {name}', { name: pName(p) })}><span></span></button>
     {/if}
   </div>
@@ -564,20 +612,22 @@
   <!-- 日志行：有记录就给；第三方插件开着时也给（hasLogs 是拉列表那一刻的，之后才记的看不到）。内置功能没记录就不占地方 -->
   {@const logOn = !!(sel.hasLogs || (sel.active && (sel.source === 'installed' || sel.source === 'local')))}
   {@const apps = appsOf(sel)}
-  <div class="pp-detail">
+  {@const rv = revokedOf(sel)}
+  <div class="pp-detail" class:pp-hide={pubOpen}>
     <div class="cz-crumb"><button class="cz-back" onclick={back}>{@html ic('back', 2)}<span>{t('功能扩展')}</span></button></div>
     <div class="cz-dh">
       <span class="cz-tile lg">{@html glyph(sel)}</span>
       <div class="cz-dh-tx">
         <h2>{pName(sel)}</h2>
-        <p>{sel.market ? t('插件市场') : SOURCE[sel.source] || sel.source}{sel.override?.active ? ' · ' + t('市场版 v{v}', { v: sel.override.version }) : sel.version ? ' · v' + sel.version : ''}{sel.author ? ' · ' + sel.author : ''}</p>
+        <p>{sel.market ? marketSource(sel) : SOURCE[sel.source] || sel.source}{sel.override?.active ? ' · ' + t('市场版 v{v}', { v: sel.override.version }) : sel.version ? ' · v' + sel.version : ''}{sel.author ? ' · ' + sel.author : ''}</p>
       </div>
       {#if !sel.locked}
-        <button class="cz-sw" class:on={sel.enabled} role="switch" aria-checked={sel.enabled} disabled={busy[sel.id]} onclick={() => toggle(sel)} aria-label={t('启用 {name}', { name: pName(sel) })}><span></span></button>
+        <button class="cz-sw" class:on={sel.enabled} role="switch" aria-checked={sel.enabled} disabled={busy[sel.id] || (!!rv && !sel.enabled)} onclick={() => toggle(sel)} aria-label={t('启用 {name}', { name: pName(sel) })}><span></span></button>
       {/if}
     </div>
+    {#if rv}<div class="cz-diag err">{t('已被社区市场下架：{reason}。已自动停用，不能再启用；可以卸载，或在社区市场里装没被下架的版本。', { reason: tr(rv.reason || t('没写原因')).replace(/[。.]$/, '') })}</div>{/if}
     {#if sel.description}<p class="cz-lead">{pDesc(sel)}</p>{/if}
-    {#if f.err || f.warn}<div class="pp-state" class:err={f.err}>{f.text}</div>{/if}
+    {#if (f.err || f.warn) && !rv}<div class="pp-state" class:err={f.err}>{f.text}</div>{/if}
     {#if sel.problems?.length}<div class="pp-state">{#each sel.problems as pr}<div>{tr(pr)}</div>{/each}</div>{/if}
     {#if sel.override?.error}<div class="pp-state">{tr(sel.override.error)}</div>{/if}
     <!-- 清单体检：不拒装，只提示（插件作者看的，低调些） -->
@@ -592,9 +642,9 @@
       <div class="cz-sec">{t('版本')}</div>
       <div class="cz-list">
         {#if mx?.update}
-          <button class="cz-li act" disabled={busy['mk:' + mx.id]} onclick={() => mktInstall(mx)}><span class="cz-li-tx"><span class="pp-updtx">{busy['mk:' + mx.id] ? t('正在更新…') : mx.builtin && !mx.current ? t('换上市场版 v{v}', { v: mx.latest.version }) : t('更新到 v{v}', { v: mx.latest.version })}</span><small>{mx.latest.notes ? tr(mx.latest.notes) : t('插件市场有新版本')}</small></span></button>
+          <button class="cz-li act" disabled={busy['mk:' + mx.id]} onclick={() => mktInstall(mx)}><span class="cz-li-tx"><span class="pp-updtx">{busy['mk:' + mx.id] ? t('正在更新…') : mx.builtin && !mx.current ? t('换上市场版 v{v}', { v: mx.latest.version }) : t('更新到 v{v}', { v: mx.latest.version })}</span><small>{mx.latest.notes ? tr(mx.latest.notes) : isCommunity(mx) ? t('社区市场有新版本') : t('插件市场有新版本')}</small></span></button>
         {/if}
-        {#if mx}<button class="cz-li act" onclick={() => openMk(mx)}><span class="cz-li-tx"><span>{t('插件市场里的版本')}</span><small>{t('{n} 个版本 · 可以装指定版本', { n: mx.versions.length })}</small></span></button>{/if}
+        {#if mx}<button class="cz-li act" onclick={() => openMk(mx)}><span class="cz-li-tx"><span>{isCommunity(mx) ? t('社区市场里的版本') : t('插件市场里的版本')}</span><small>{t('{n} 个版本 · 可以装指定版本', { n: mx.versions.length })}</small></span></button>{/if}
         {#if sel.rollbackTo}<button class="cz-li act" disabled={busy[sel.id + ':rb']} onclick={() => rollback(sel)}><span class="cz-li-tx"><span>{rbLabel(sel)}</span><small>{t('换回回收区里的上一版')}</small></span></button>{/if}
         {#if sel.override && !sel.override.pending?.restore}<button class="cz-li act danger" disabled={busy[sel.id + ':rb']} onclick={() => restoreBuiltin(sel)}><span class="cz-li-tx"><span>{t('恢复内置版')}</span><small>{t('不用市场版，换回随 bridge 发布的内置实现')}</small></span></button>{/if}
       </div>
@@ -735,7 +785,7 @@
     <div class="cz-sec">{t('信息')}</div>
     <div class="cz-list">
       <div class="cz-kv"><span>ID</span><b>{sel.id}</b></div>
-      <div class="cz-kv"><span>{t('来源')}</span><b>{sel.market ? t('插件市场') + ' · v' + sel.market.version : sel.override?.active ? t('内置 · 市场版 v{v}', { v: sel.override.version }) : SOURCE[sel.source] || sel.source}</b></div>
+      <div class="cz-kv"><span>{t('来源')}</span><b>{sel.market ? marketSource(sel) + ' · v' + sel.market.version : sel.override?.active ? t('内置 · 市场版 v{v}', { v: sel.override.version }) : SOURCE[sel.source] || sel.source}</b></div>
       {#if sel.dir}<div class="cz-kv"><span>{t('目录')}</span><b class="pp-mono">{sel.dir}</b></div>{/if}
       {#if sel.requires?.length}<div class="cz-kv"><span>{t('依赖')}</span><b>{sel.requires.map(nameOf).join('、')}</b></div>{/if}
       <div class="cz-kv"><span>{t('生效方式')}</span><b>{sel.restart ? t('改开关 / 配置后重启 bridge 生效') : t('改了当场生效')}</b></div>
@@ -749,17 +799,27 @@
         <button class="cz-li act danger" onclick={() => uninstall(sel)}><span class="cz-li-tx"><span>{sel.source === 'local' ? t('取消登记') : t('卸载')}</span></span></button>
       </div>
     {/if}
+    {#if canPublish(sel)}<PublishEntry id={sel.id} seq={pubSeq} onOpen={openPublish} />{/if}
   </div>
+  {#if pubOpen}<PublishSheet plugin={sel} name={pName(sel)} {toast} {confirm} onBack={closePublish} />{/if}
 {/if}
 
+{#snippet mkTile(x, lg = false)}
+  <span class="cz-tile" class:lg class:pp-icon={!!mkIcon(x)}>{#if mkIcon(x)}<img src={mkIcon(x)} alt="" draggable="false" referrerpolicy="no-referrer" onerror={() => mkIconFail(x)} />{:else}{@html glyph(x)}{/if}</span>
+{/snippet}
+
 {#snippet mkCard(x)}
-  <div class="cz-card" role="button" tabindex="0" onclick={() => openMk(x)} onkeydown={(ev) => { if (ev.key === 'Enter') openMk(x); }}>
-    <span class="cz-tile" class:pp-icon={!!mkIcon(x)}>{#if mkIcon(x)}<img src={mkIcon(x)} alt="" draggable="false" referrerpolicy="no-referrer" onerror={() => mkIconFail(x)} />{:else}{@html glyph(x)}{/if}</span>
+  {@const cm = isCommunity(x)}
+  <div class="cz-card" class:pp-cmcard={cm} role="button" tabindex="0" onclick={() => openMk(x)} onkeydown={(ev) => { if (ev.key === 'Enter') openMk(x); }}>
+    {@render mkTile(x)}
     <div class="cz-body">
       <b class="cz-name">{mName(x)}</b>
       <p class="cz-desc">{mDesc(x)}</p>
-      <span class="cz-foot" class:pp-warn={!x.latest}>{x.latest ? 'v' + x.latest.version + (x.author ? ' · ' + x.author : '') + (x.latest.restart ? ' · ' + t('装完重启生效') : '') : tr(x.blocked || t('这台 bridge 装不了'))}</span>
+      <span class="cz-foot" class:pp-warn={!x.latest}>{!x.latest ? tr(x.blocked || t('这台 bridge 装不了'))
+        : cm ? '@' + (x.publisher || '?') + ' · ' + kindText(x.latest.kind)
+        : 'v' + x.latest.version + (x.author ? ' · ' + x.author : '') + (x.latest.restart ? ' · ' + t('装完重启生效') : '')}</span>
     </div>
+    {#if cm}<span class="pp-unrev">{t('未经人工审核')}</span>{/if}
     {#if x.latest}
       <button class="cz-add" disabled={busy['mk:' + x.id]} title={t('安装')} aria-label={t('安装 {name}', { name: mName(x) })}
         onclick={(ev) => { ev.stopPropagation(); mktInstall(x); }}>{@html ic('plus', 2)}</button>
@@ -767,11 +827,14 @@
   </div>
 {/snippet}
 
-{#if mkSel}
+{#if mkSel && isCommunity(mkSel)}
+  <CommunityDetail x={mkSel} backLabel={mkFrom ? nameOf(mkFrom) : ''} busy={!!busy['mk:' + mkSel.id]} tile={mkTile}
+    onBack={mkBack} onInstall={(x, v) => mktInstall(x, v)} onOpenInstalled={openInstalled} />
+{:else if mkSel}
   <div class="pp-detail">
     <div class="cz-crumb"><button class="cz-back" onclick={mkBack}>{@html ic('back', 2)}<span>{mkFrom ? nameOf(mkFrom) : t('功能扩展')}</span></button></div>
     <div class="cz-dh">
-      <span class="cz-tile lg" class:pp-icon={!!mkIcon(mkSel)}>{#if mkIcon(mkSel)}<img src={mkIcon(mkSel)} alt="" draggable="false" referrerpolicy="no-referrer" onerror={() => mkIconFail(mkSel)} />{:else}{@html glyph(mkSel)}{/if}</span>
+      {@render mkTile(mkSel, true)}
       <div class="cz-dh-tx">
         <h2>{mName(mkSel)}</h2>
         <p>{t('插件市场')}{mkSel.latest ? ' · v' + mkSel.latest.version : ''}{mkSel.author ? ' · ' + mkSel.author : ''}</p>
@@ -836,7 +899,7 @@
           <div class="pp-upd-row">
             <button class="pp-upd-tx" onclick={() => openMk(x)}>
               <span>{mName(x)}</span>
-              <small>{x.current ? 'v' + x.current : x.builtin ? t('内置版') : ''} → v{x.latest.version}{x.latest.notes ? ' · ' + tr(x.latest.notes) : ''}</small>
+              <small>{isCommunity(x) ? t('社区') + ' · ' : ''}{x.current ? 'v' + x.current : x.builtin ? t('内置版') : ''} → v{x.latest.version}{x.latest.notes ? ' · ' + tr(x.latest.notes) : ''}</small>
             </button>
             <button class="cz-btn sm pri" disabled={busy['mk:' + x.id]} onclick={() => mktInstall(x)}>{busy['mk:' + x.id] ? t('正在更新…') : t('更新')}</button>
           </div>
@@ -846,28 +909,55 @@
 
     <h3 class="cz-h pp-mkh">{t('插件市场')} {#if mktNew.length}<span class="cz-n">{mktNew.length}</span>{/if}
       <button class="cz-btn sm" disabled={mktBusy} onclick={() => loadMarket(true)}>{mktBusy ? t('正在检查…') : t('检查更新')}</button></h3>
-    <p class="cz-note pp-intro">{t('bridge 官方发布的插件：不用升级 bridge 就能装新功能、更新插件，内置功能的修复也从这里来。有更新只提示，点了才装。')}</p>
-    {#if mkt?.market?.off}
-      <p class="cz-note">{t('插件市场在这台服务器上关着（config.json 的 pluginMarket）。')}</p>
-    {:else}
-      {#if mktErr || mkt?.market?.error}<div class="cz-diag">{t('插件市场没拉下来：{reason}', { reason: tr(mktErr || mkt.market.error) })}</div>{/if}
-      {#if mktNew.length}
-        <div class="cz-chips pp-mkcats" role="tablist" aria-label={t('分类')}>
-          {#each [['all', t('全部')], ['app', tc('插件', '应用')], ['other', t('其它')]] as [k, label] (k)}
-            <button class="cz-chip" class:on={mktCat === k} role="tab" aria-selected={mktCat === k} onclick={() => (mktCat = k)}>{label}</button>
-          {/each}
-        </div>
-        {#if mktShown.length}
-          <div class="cz-grid">{#each mktShown as x (x.id)}{@render mkCard(x)}{/each}</div>
-        {:else}
-          <p class="cz-note pp-intro">{mktCat === 'app' ? t('市场里暂时没有可装的应用。') : t('这一类里暂时没有可装的插件。')}</p>
-        {/if}
-      {:else if mkt?.market?.ok}
-        <p class="cz-note pp-intro">{(mkt.plugins || []).length ? t('市场里的插件都装上了。') : t('市场里暂时还没有插件。')}</p>
-      {:else if !mkt && !mktErr}
-        <p class="cz-note pp-intro">{t('载入中…')}</p>
+    {#if cmkt}
+      <div class="cz-chips pp-mktab" role="tablist" aria-label={t('插件市场')}>
+        {#each [['official', t('官方')], ['community', t('社区')]] as [k, label] (k)}
+          <button class="cz-chip" class:on={mktTab === k} role="tab" aria-selected={mktTab === k} onclick={() => (mktTab = k)}>{label}</button>
+        {/each}
+      </div>
+    {/if}
+    {#snippet mkCats(emptyApp, emptyOther)}
+      <div class="cz-chips pp-mkcats" role="tablist" aria-label={t('分类')}>
+        {#each [['all', t('全部')], ['app', tc('插件', '应用')], ['other', t('其它')]] as [k, label] (k)}
+          <button class="cz-chip" class:on={mktCat === k} role="tab" aria-selected={mktCat === k} onclick={() => (mktCat = k)}>{label}</button>
+        {/each}
+      </div>
+      {#if mktShown.length}
+        <div class="cz-grid">{#each mktShown as x (x.channel + ':' + x.id)}{@render mkCard(x)}{/each}</div>
+      {:else}
+        <p class="cz-note pp-intro">{mktCat === 'app' ? emptyApp : emptyOther}</p>
       {/if}
-      {#if mkt?.market?.ok}<p class="pp-mkfoot">{t('索引第 {n} 版', { n: mkt.market.seq })}{mkt.market.checkedAt ? ' · ' + t('上次检查 {at}', { at: when(mkt.market.checkedAt) }) : ''}</p>{/if}
+    {/snippet}
+    {#if mktTab === 'community' && cmkt}
+      {@const cm = cmkt.market || {}}
+      <p class="cz-note pp-mknote">{t('任何 bridge 用户都能投稿的插件，只经过自动检查，没有人工审核。只装你信得过的作者的。')}</p>
+      {#if cm.off}
+        <p class="cz-note pp-intro">{t('社区插件市场在这台服务器上关着（config.json 的 pluginMarket.community）。')}</p>
+      {:else if mktErr || cm.error}
+        <div class="cz-diag">{t('社区插件市场没拉下来：{reason}', { reason: tr(mktErr || cm.error) })}</div>
+      {:else if cm.empty}
+        <p class="cz-note pp-intro">{t('社区插件市场还没开张，还没有人投稿。自己写的插件可以在它的详情里「发布到社区」。')}</p>
+      {:else if mktNew.length}
+        {@render mkCats(t('社区里暂时没有可装的应用。'), t('这一类里暂时没有可装的插件。'))}
+      {:else if cm.ok}
+        <p class="cz-note pp-intro">{(cmkt.plugins || []).length ? t('社区里的插件都装上了。') : t('社区里暂时还没有插件。')}</p>
+      {/if}
+      {#if cm.ok && !cm.empty}<p class="pp-mkfoot">{t('索引第 {n} 版', { n: cm.seq })}{cm.checkedAt ? ' · ' + t('上次检查 {at}', { at: when(cm.checkedAt) }) : ''}</p>{/if}
+    {:else}
+      <p class="cz-note" class:pp-intro={!cmkt} class:pp-mknote={!!cmkt}>{t('bridge 官方发布的插件：不用升级 bridge 就能装新功能、更新插件，内置功能的修复也从这里来。有更新只提示，点了才装。')}</p>
+      {#if mkt?.market?.off}
+        <p class="cz-note">{t('插件市场在这台服务器上关着（config.json 的 pluginMarket）。')}</p>
+      {:else}
+        {#if mktErr || mkt?.market?.error}<div class="cz-diag">{t('插件市场没拉下来：{reason}', { reason: tr(mktErr || mkt.market.error) })}</div>{/if}
+        {#if mktNew.length}
+          {@render mkCats(t('市场里暂时没有可装的应用。'), t('这一类里暂时没有可装的插件。'))}
+        {:else if mkt?.market?.ok}
+          <p class="cz-note pp-intro">{(mkt.plugins || []).length ? t('市场里的插件都装上了。') : t('市场里暂时还没有插件。')}</p>
+        {:else if !mkt && !mktErr}
+          <p class="cz-note pp-intro">{t('载入中…')}</p>
+        {/if}
+        {#if mkt?.market?.ok}<p class="pp-mkfoot">{t('索引第 {n} 版', { n: mkt.market.seq })}{mkt.market.checkedAt ? ' · ' + t('上次检查 {at}', { at: when(mkt.market.checkedAt) }) : ''}</p>{/if}
+      {/if}
     {/if}
 
     <h3 class="cz-h pp-top">{t('Agent')}</h3>
@@ -965,6 +1055,11 @@
   .cz-tile.pp-icon { overflow: hidden; }
   .cz-tile.pp-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .pp-mkcats { margin: 2px 0 12px; }
+  .pp-mktab { margin: -4px 0 0; }
+  .pp-mknote { margin: 12px 2px 12px; }
+  /* 社区卡片角落那行「未经人工审核」：只是提醒，压到最淡，不用彩色 */
+  .pp-cmcard { padding-bottom: 30px; }
+  .pp-unrev { position: absolute; right: 18px; bottom: 12px; font-size: 11.5px; color: var(--cz-ink3); opacity: .75; pointer-events: none; }
   .pp-upd { margin: 0 0 26px; padding: 14px 16px 6px; border-radius: 14px; background: color-mix(in srgb, var(--cz-crit) 7%, transparent);
     border: 1px solid color-mix(in srgb, var(--cz-crit) 22%, transparent); }
   .pp-upd-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }

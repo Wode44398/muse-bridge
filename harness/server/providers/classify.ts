@@ -279,3 +279,46 @@ export function httpErrorEvent(res: Response, raw: string, ctx?: ErrorCtx): Erro
 export function streamErrorEvent(kind: string, err: unknown): ErrorEvent {
   return eventOf(kind, classifyStreamError(err), err);
 }
+
+// 端点不收回传的思考字段（火山方舟这类：消息上见到 reasoning_content 就 400；也有端点不认 reasoning_details）。认法：
+// 4xx（400 / 422）、错误里点名了 reasoning_content / reasoning_details，且话术是「不认识 / 不允许 / 无效」一类。
+// 话术只看错误体里的说明文字（message / msg / detail），不看整段原文：OpenAI 兼容端点的错误外壳几乎都带
+// "type":"invalid_request_error"，按原文认会把「缺了 reasoning_content」也认成拒收。说的是「要带上 / 缺了」（DeepSeek、Kimi
+// 思考档那种）的不算——那是反过来要回传，关掉回传只会一直 400。
+// 适配器据此在这个会话里不再回传、去掉字段重发一次（providers/openai.ts）。
+const REPLAY_FIELD_RE = /reasoning[_ ]?(?:content|details)/i;
+const REPLAY_REFUSED_RE =
+  /unknown|unrecognized|not (?:allowed|permitted|supported|valid|expected)|invalid|unexpected|extra (?:field|input|parameter)s?|forbidden|additional propert|(?:must|should) not (?:be )?(?:present|set|provided|included|sent)|不支持|不合法|非法|无效|未知/i;
+const REPLAY_REQUIRED_RE = /\brequired\b|\bmissing\b|\bmust\b(?!\s+not\b)|\bneeds? to be (?:passed|provided|included)\b|缺少|缺失|必须(?!不)|必需|需要(?:传|带|提供)/i;
+
+// 错误体里给人看的说明文字：JSON 里 message / msg / detail（字符串）各层都收；不是 JSON 就用原文
+function errorWording(raw: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+  const out: string[] = [];
+  const walk = (v: unknown, depth: number): void => {
+    if (depth > 6 || !v || typeof v !== "object") return;
+    if (Array.isArray(v)) {
+      for (const x of v) walk(x, depth + 1);
+      return;
+    }
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+      if (typeof x === "string" && (k === "message" || k === "msg" || k === "detail" || k === "error")) out.push(x);
+      else walk(x, depth + 1);
+    }
+  };
+  walk(parsed, 0);
+  return out.length ? out.join("\n") : typeof parsed === "string" ? parsed : raw;
+}
+
+export function rejectsReasoningReplay(status: number, raw: string): boolean {
+  if (status !== 400 && status !== 422) return false;
+  const text = String(raw ?? "");
+  if (!REPLAY_FIELD_RE.test(text)) return false; // 字段名可能只在 loc 一类的位置出现：按原文认
+  const wording = errorWording(text);
+  return !REPLAY_REQUIRED_RE.test(wording) && REPLAY_REFUSED_RE.test(wording);
+}

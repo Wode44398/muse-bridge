@@ -8,6 +8,7 @@ import test, { after, afterEach } from "node:test";
 import {
   defaultLoopProfile,
   defaultProfile,
+  hardenedProfile,
   familyKey,
   FAMILY_OVERRIDES,
   MODEL_FAMILIES,
@@ -34,7 +35,7 @@ import { GUARD_DEFAULTS, LoopGuard } from "./agent/loop-guard.ts";
 import { isRunawayRepetition, REPETITION_DEFAULTS } from "./agent/repetition.ts";
 import { SUBMIT_ATTEMPTS, SUBMIT_NUDGES } from "./agent/subagent.ts";
 import { SUMMARY_BUDGET } from "./agent/context.ts";
-import { DEFERRED_FAMILIES, deferToolDefs, notLoadedResult } from "./agent/deferred-tools.ts";
+import { DEFERRED_FAMILIES, deferToolDefs, HARDENED_DEFERRED_FAMILIES, notLoadedResult } from "./agent/deferred-tools.ts";
 import { AgentState } from "./agent/state.ts";
 import { CATALOG } from "./catalog.ts";
 import { Sandbox } from "./sandbox.ts";
@@ -57,8 +58,8 @@ const tmp = (prefix: string) => {
 afterEach(() => setRatingsForTests(undefined));
 
 // ── loop 默认值 = 原常量 ───────────────────────────────────────────────────────
-test("档案 loop 默认值逐项等于各模块原来的常量（也等于接入前的字面值）", () => {
-  const loop = defaultLoopProfile();
+test("加固档案的 loop 逐项等于各模块原来的常量（也等于姿态改造前的字面值）；lean 只在门禁 / 追问 / 提醒几项上不同", () => {
+  const loop = hardenedProfile().loop;
   assert.deepEqual(loop, {
     maxAnswerNudges: MAX_ANSWER_NUDGES,
     maxCutoffNudges: MAX_CUTOFF_NUDGES,
@@ -77,6 +78,7 @@ test("档案 loop 默认值逐项等于各模块原来的常量（也等于接�
     todoReminderEvery: TODO_REMIND_TURNS,
     todoReminderOnlyIncomplete: true,
     thinkingOnly: "nudge",
+    verifyFootnote: "on",
   });
   // 字面值：常量本身被人改了也要红（那是行为变化，得有意为之）
   assert.deepEqual(loop, {
@@ -97,35 +99,69 @@ test("档案 loop 默认值逐项等于各模块原来的常量（也等于接�
     todoReminderEvery: 5,
     todoReminderOnlyIncomplete: true,
     thinkingOnly: "nudge",
+    verifyFootnote: "on",
+  });
+  // lean（默认）：不撤回不追问补验证、半句停下不追问、不提醒待办、只思考就原样重发、不附验证尾注；其余（含被截断的续写）照旧
+  assert.deepEqual(defaultLoopProfile(), {
+    ...loop,
+    maxCutoffNudges: 0,
+    verifyGate: "off",
+    todoReminderEvery: 0,
+    thinkingOnly: "retry",
+    verifyFootnote: "off",
   });
 });
 
-test("现状档案的其余各块：提示词 default、工具不裁、不发采样参数、不挂 providerExtras、摘要关思考 1500", () => {
+test("默认档案（lean）的其余各块：提示词 default、工具不裁且不带验证形状、不发采样参数、不挂 providerExtras、摘要 inline（跟主请求同档思考，输出基准 8000）", () => {
   const p = defaultProfile();
+  assert.equal(p.posture, "lean");
   assert.deepEqual(p.prompt, { variant: "default", patches: [] });
   assert.equal(p.tools.editFormat, "str_replace");
   assert.equal(p.tools.deferredFamilies, DEFERRED_FAMILIES);
   assert.equal(p.tools.subset, null);
   assert.deepEqual(p.tools.pathAliases, {});
-  assert.equal(p.tools.verifyContract, "strict");
-  assert.equal(p.tools.readBeforeEdit, "strict");
+  assert.equal(p.tools.verifyContract, "lenient");
+  assert.equal(p.tools.readBeforeEdit, "off");
+  assert.equal(p.tools.verifyTools, "off");
   assert.deepEqual(p.sampling, {});
   assert.deepEqual(p.providerExtras, {});
   assert.equal(profileProviderExtras(p), undefined);
   assert.deepEqual(p.side.summary, { ...SUMMARY_BUDGET });
-  assert.deepEqual(p.side.summary, { maxOutputTokens: 1500, thinking: "off" });
+  assert.deepEqual(p.side.summary, { mode: "inline", maxOutputTokens: 8000, thinking: "inherit" });
   assert.deepEqual(p.tier, { ii: null, subs: {}, derived: false, source: "none", conservative: false });
+  assert.equal(p.tools.readBeforeWrite, "any");
+  // 加固档案的工具契约 = 改造前的现状（Write 读全才许覆盖、推迟回到改造前的五族）；压缩摘要走旁路（集成时定：弱模型不接着原对话写摘要）
+  const h = hardenedProfile();
+  assert.equal(h.posture, "hardened");
+  assert.deepEqual(
+    { verifyContract: h.tools.verifyContract, readBeforeEdit: h.tools.readBeforeEdit, verifyTools: h.tools.verifyTools, readBeforeWrite: h.tools.readBeforeWrite },
+    { verifyContract: "strict", readBeforeEdit: "strict", verifyTools: "on", readBeforeWrite: "full" },
+  );
+  assert.deepEqual(h.tools.deferredFamilies, HARDENED_DEFERRED_FAMILIES);
+  assert.deepEqual(h.side.summary, { ...SUMMARY_BUDGET, mode: "sidecar" });
+  // 每轮自动召回：lean 关（记忆索引常驻 system），hardened 照旧开
+  assert.deepEqual(p.memory, { autoRecall: false });
+  assert.deepEqual(h.memory, { autoRecall: true });
+  const { posture: _p, postureReason: _r, tools: _t, loop: _l, side: _s, memory: _m, ...restH } = h;
+  const { posture: _p2, postureReason: _r2, tools: _t2, loop: _l2, side: _s2, memory: _m2, ...restL } = p;
+  assert.deepEqual(restH, restL);
 });
 
-test("P0：家族覆盖表为空，目录里每个型号的档案（除家族与分档）都等于现状档案", () => {
+test("家族覆盖表为空；没有评分时目录里每个型号都是 lean，档案（除家族与分档）等于默认档案", () => {
   assert.deepEqual(FAMILY_OVERRIDES, {});
   setRatingsForTests(null);
   const strip = (p: ModelProfile) => {
-    const { family: _f, familySource: _s, tier: _t, ...rest } = p;
+    const { family: _f, familySource: _s, tier: _t, postureReason: _r, ...rest } = p;
     return rest;
   };
   const base = strip(defaultProfile());
-  for (const spec of CATALOG) for (const m of spec.models) assert.deepEqual(strip(resolveProfile(spec.id, m.id)), base, `${spec.id}/${m.id}`);
+  for (const spec of CATALOG) {
+    for (const m of spec.models) {
+      const p = resolveProfile(spec.id, m.id);
+      assert.deepEqual(strip(p), base, `${spec.id}/${m.id}`);
+      assert.equal(p.postureReason, "no rating");
+    }
+  }
 });
 
 test("每次解析给一份新对象：改一个会话的档案不串到别的会话", () => {

@@ -1,12 +1,16 @@
 // 工具延迟加载（对齐 Claude Code 的 tool search）：不常用、说明又长的工具（浏览器一族、操作用户电脑、bridge、拉取请求、
-// 工作区协同）平时只发一句简介 + 去掉说明文字的参数骨架，完整说明经 ToolSearch 取回、作为工具结果留在对话里。
+// 工作区协同、Workflow、会话协作、Preview、对话内图表、项目知识）平时只发一句简介 + 去掉说明文字的参数骨架，完整说明经
+// ToolSearch 取回、作为工具结果留在对话里。
 // 和官方不同：工具表本身一项不增不减（推迟的工具也在表里，只是瘦身）——工具表在缓存前缀最前面，中途往里加工具会让整段
 // 缓存作废，本机 llama.cpp 还要整段重新 prefill；各家 provider 也都认得这些名字，调用照常过 schema。
-// 「加载过没有」不另存状态，从对话里现推：有 ToolSearch / 拦截回过它的说明（tool_result.meta.loadedTools），或者它被调用
-// 过。整段压缩把这些压掉了，就算没加载——下一次调用前再取一次（官方压缩后同样重发）。
+// 没加载就直接调：参数过得了完整 schema 的校验就照常执行，结果后面附上这一族的完整说明、记为已加载（不白费一轮）；校验不过、
+// 或者是不看说明几乎写不对的工具（NEEDS_DOCS），这次不执行、回完整说明。
+// 「加载过没有」记在会话状态里（AgentState.loadedTools，随会话落盘，压缩后不丢）；旧记录没有这一项时退回到从对话里现推
+// （deferredLoaded）。
 import type { JsonObjectSchema, JsonSchemaProp, Msg, ToolDef } from "./turn.ts";
 import type { Tool, ToolRunResult } from "../tools/types.ts";
 import { fail } from "../tools/types.ts";
+import { formatSchemaErrors, validateSchema } from "./schema.ts";
 
 export const TOOL_SEARCH = "ToolSearch";
 
@@ -17,7 +21,21 @@ export const DEFERRED_FAMILIES: readonly string[][] = [
   ["BridgeManual", "BridgeCall"],
   ["PullRequest"],
   ["Workspace", "Terminal"],
+  ["Workflow"],
+  ["StartSession", "SendMessage", "ListSessions", "ReadSession"],
+  ["Preview"],
+  ["WidgetGuide", "ShowWidget"],
+  ["ProjectKnowledge"],
+  // 唤醒与收尾线：直连 MCP 连接器的资源（只在基线里有声明了 resources 的直连连接器时才在表里）
+  ["McpResources"],
+  // 唤醒与收尾线：会话内定时唤醒（平时用得少）
+  ["ScheduleWakeup"],
 ];
+// 加固姿态（profile.ts hardenedPatch）用的族表：推迟范围扩大之前的那五族，工具表与改造前一样
+export const HARDENED_DEFERRED_FAMILIES: readonly string[][] = DEFERRED_FAMILIES.slice(0, 5);
+
+// 不看说明几乎写不对的：Workflow 的脚本 API、Browser 的批量 actions。没加载就调一律先回说明，不按骨架直接执行
+export const NEEDS_DOCS: ReadonlySet<string> = new Set(["Workflow", "Browser"]);
 const familyMap = (families: readonly (readonly string[])[]): Map<string, readonly string[]> =>
   new Map(families.flatMap((f) => f.map((n) => [n, f] as const)));
 const FAMILY_OF = familyMap(DEFERRED_FAMILIES);
@@ -57,11 +75,12 @@ function firstSentence(s: string): string {
 }
 
 export function stubDef(def: ToolDef): ToolDef {
+  const how = NEEDS_DOCS.has(def.name)
+    ? `call ${TOOL_SEARCH} with names ["${def.name}"] before the first use.`
+    : `${TOOL_SEARCH} with names ["${def.name}"] returns them; a call that fits the parameters below also runs directly.`;
   return {
     name: def.name,
-    description:
-      `${firstSentence(def.description)} [Deferred tool: its full instructions are not loaded yet — call ${TOOL_SEARCH} ` +
-      `with names ["${def.name}"] before the first use.]`,
+    description: `${firstSentence(def.description)} [Deferred tool: full instructions not loaded — ${how}]`,
     parameters: stripProp(def.parameters as unknown as JsonSchemaProp, 0) as unknown as JsonObjectSchema,
   };
 }
@@ -127,16 +146,41 @@ function search(query: string, deferred: Map<string, ToolDef>): string[] {
   return scored.slice(0, 3).map((s) => s.name);
 }
 
-/** 模型没加载说明就直接调了推迟的工具：这次不执行，回它（与同族）的完整说明，并记为已加载。 */
-export function notLoadedResult(name: string, deferred: Map<string, ToolDef>): ToolRunResult {
+/** 没加载说明就调了推迟的工具、又不能直接执行（NEEDS_DOCS，或参数过不了完整 schema）：这次不执行，回它（与同族）的完整说明，并记为已加载。 */
+export function notLoadedResult(name: string, deferred: Map<string, ToolDef>, schemaErrors?: string): ToolRunResult {
   const names = expand([name], deferred);
+  const why = schemaErrors
+    ? `its full instructions had not been loaded and the arguments do not match its parameters:\n${schemaErrors}\nSo this call was NOT run.`
+    : "its full instructions had not been loaded, so this call was NOT run.";
   return {
     ...fail(
       "tool instructions not loaded",
-      `${name} is a deferred tool and its full instructions had not been loaded, so this call was NOT run. ` +
+      `${name} is a deferred tool and ${why} ` +
         `They are below (now loaded for the rest of the conversation) — read them, then re-issue the call.\n\n${docsFor(names, deferred)}`,
     ),
     meta: { loadedTools: names },
+  };
+}
+
+export type DeferredGate = { run: true; docs: string[] } | { run: false; res: ToolRunResult };
+
+/** 没加载说明就调的推迟工具：能不能直接执行。能 = 执行完附上 docs 这几件的说明；不能 = 回 res（不执行）。 */
+export function deferredGate(name: string, args: Record<string, unknown>, deferred: Map<string, ToolDef>): DeferredGate {
+  const def = deferred.get(name);
+  if (!def || NEEDS_DOCS.has(name)) return { run: false, res: notLoadedResult(name, deferred) };
+  const errors = validateSchema(def.parameters, args);
+  if (errors.length) return { run: false, res: notLoadedResult(name, deferred, formatSchemaErrors(errors)) };
+  return { run: true, docs: expand([name], deferred) };
+}
+
+/** 直接执行了的推迟工具：结果后面附上这一族的完整说明，meta.loadedTools 记下（微压缩据此不清它）。 */
+export function withDeferredDocs(res: ToolRunResult, names: string[], deferred: Map<string, ToolDef>): ToolRunResult {
+  if (!names.length) return res;
+  const note = `\n\n[${names.join(", ")}: deferred tool instructions, now loaded for the rest of the conversation]\n${docsFor(names, deferred)}`;
+  return {
+    ...res,
+    content: [...res.content, { t: "text", text: note }],
+    meta: { ...(res.meta ?? {}), loadedTools: names },
   };
 }
 
@@ -146,22 +190,28 @@ export const toolSearchTool: Tool = {
   def: {
     name: TOOL_SEARCH,
     description:
-      "Loads the full instructions and parameter schema of deferred tools. A deferred tool's own description says so and carries " +
-      "only a one-line summary; call this before you first use one. Loading one tool loads its whole family (Browser also loads " +
-      "ReadPage, Eval and Network). The instructions stay in the conversation — no need to load a tool twice.",
+      "Loads the full instructions and parameter schema of deferred tools (their own description is a one-line summary marked " +
+      "Deferred). Loading one tool loads its whole family (Browser also loads ReadPage, Eval and Network). Loaded instructions " +
+      "stay in the conversation.",
     parameters: {
       type: "object",
       properties: {
         names: { type: "array", items: { type: "string" }, description: "Exact names of the deferred tools to load." },
-        query: { type: "string", description: "Keywords to find a deferred tool by name or purpose when you do not know its name." },
+        query: { type: "string", description: 'Keywords to find a deferred tool by name or purpose, or "select:A,B" to load by name.' },
       },
     },
   },
   async run(args, ctx) {
     const deferred = ctx.deferredTools;
     if (!deferred?.size) return fail("no deferred tools", "No tools are deferred in this conversation — every tool's full instructions are already loaded.");
-    const asked = Array.isArray(args.names) ? args.names.map(String) : typeof args.names === "string" ? [args.names] : [];
-    const query = typeof args.query === "string" ? args.query : "";
+    let asked = Array.isArray(args.names) ? args.names.map(String) : typeof args.names === "string" ? [args.names] : [];
+    let query = typeof args.query === "string" ? args.query.trim() : "";
+    // 「select:A,B」：按名字点（Claude Code 的写法）
+    const select = /^select:(.*)$/i.exec(query);
+    if (select) {
+      asked = [...asked, ...select[1].split(",").map((n) => n.trim()).filter(Boolean)];
+      query = "";
+    }
     const unknown = asked.filter((n) => !deferred.has(n));
     const names = expand([...asked, ...(query ? search(query, deferred) : [])], deferred);
     if (!names.length) {

@@ -121,7 +121,7 @@ async function boot(pg, cfg) {
   if (cfg.lang && cfg.lang !== 'zh') u.searchParams.set('lang', cfg.lang);
   if (cfg.desk) { u.searchParams.set('fdmock', ''); }
   await pg.send('Page.navigate', { url: u.href });
-  await pg.eval(`(async () => { for (let i = 0; i < 200; i++) { if (document.readyState === 'complete' && !document.documentElement.hasAttribute('data-booting') && document.querySelector('#app *, body > div *')) return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()`, { timeout: 30000 });
+  await pg.eval(`(async () => { for (let i = 0; i < 200; i++) { if (document.readyState === 'complete' && !document.documentElement.hasAttribute('data-boot') && document.querySelector('#app *, body > div *')) return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()`, { timeout: 30000 });
   await sleep(800);
   await pg.eval(`(async () => { await __qa.init(); __qa.st.ui.screen = 'studio'; await __qa.until(() => document.querySelector('.studio-root .sd-page.on'), 15000, 'Studio 外壳'); await __qa.until(() => __qa.m.studio.catalog, 15000, '模型目录'); return true; })()`, { timeout: 40000 });
   await sleep(600);

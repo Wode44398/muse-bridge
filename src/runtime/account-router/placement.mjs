@@ -7,7 +7,11 @@
 //   · 替稀缺额度让路：家族独占的桶（Fable 周限额）只能给那个家族用，共用的 5 小时 / 每周额度谁都能用。
 //     一个 Opus 任务放在还有 Fable 余量、且共用额度正卡着 Fable 的号上，每用一点就少一点 Fable 能用的；
 //     放在 Fable 已用完（或根本没有 Fable，比如 Pro 号）的号上，一点不耽误 Fable——按「会吃掉多少别的家族的可用量」扣分。
-//   · 快重置的先用：离重置越近、剩得越多的额度越该先用掉（过了重置点就作废了）。
+//   · 用别人用不了的额度（维护者 11-23）：Fable 已用完 / 没有 Fable 的号，剩下的共用额度到 Fable 重置前只有非 Fable 任务用得上，
+//     非 Fable 任务优先去那里——直接加分，不管共用额度此刻卡不卡 Fable（上面那项只在共用额度正卡着 Fable 时才扣分，
+//     Fable 被它自己的周限额先卡住时等于零，Opus 就会被「均衡」「快重置」拉回还能跑 Fable 的号）。Fable 越快恢复，加分越少。
+//   · 快重置的先用：离重置越近、剩得越多的额度越该先用掉（过了重置点就作废了）。半小时内就重置的桶不算（同 capacity）：
+//     几分钟里根本用不掉多少，过了点又是满的。
 //   · 分开并行：号上已经在跑的任务越多扣分越多，并行的任务各占一个号，也就不会一起把一个号挤满、再一起换号。
 //   · 均衡：同样装得下时，周额度（Fable 任务看 Fable 周限额）剩得多的号优先——各号的余量拉平，以后并行的任务都还有号可去；
 //     Fable 任务因此落在 Fable 剩得最多的号上。
@@ -19,7 +23,8 @@ import { relevantBucket, isShared, DEDICATED } from './buckets.mjs';
 export const FIT_MARGIN = 1.25;
 const REFILL_SOON = 30 * 60_000;                  // 这么快就重置的桶不算卡脖子（中途会补满）
 const TAU = { five_hour: 1.5 * 3600_000, other: 36 * 3600_000 };   // 「快重置」的时间尺度
-const W = { stickWarm: 0.8, stickCold: 0.25, parent: 0.6, scarce: 1.5, urgency: 1.2, load: 0.35, loadSub: 0.15, balance: 0.8, room: 0.6, order: 0.02 };
+const W = { stickWarm: 0.8, stickCold: 0.25, parent: 0.6, scarce: 1.5, free: 1.4, urgency: 1.2, load: 0.35, loadSub: 0.15, balance: 0.8, room: 0.6, order: 0.02 };
+const FREE_HORIZON = 24 * 3600_000;   // 稀缺家族在这个号上还要挡这么久以上，「用别人用不了的额度」拿满分；更快恢复的按比例减
 const UNKNOWN_PCT = { five_hour: 0, seven_day: 30, dedicated: 30 };   // 这个号没报过这个桶：5 小时多半是新窗口，周桶不知道就按 30%
 // 没报过也当它存在的独占桶：非 Pro 号都有 Fable 周限额（Pro 没有的由 blocked 挡掉）；Opus / Sonnet 周限额现在多数号没有，没报过就是没有。
 const ASSUMED = new Set([DEDICATED.fable]);
@@ -50,6 +55,8 @@ export function rankAccounts({ accounts, task, others = [], rate, demanded = () 
     if (!task.current && task.parent && a.id === task.parent) parts.parent = W.parent;
     const loss = scarceLoss(a, fam, task.est, P, rate, now, limitPct, demanded);
     if (loss.total > 0) { parts.scarce = -W.scarce * loss.total; parts.scarceFor = loss.top; }
+    const fr = freeShare(a, fam, now, demanded);
+    if (fr.v > 0) { parts.free = W.free * fr.v; parts.freeFor = fr.top; }
     const u = urgency(a, fam, P, now, limitPct);
     if (u > 0) parts.urgency = W.urgency * u;
     const load = others.filter((o) => o.acct === a.id).reduce((s, o) => s + (o.sub ? W.loadSub : W.load), 0);
@@ -118,6 +125,20 @@ function scarceLoss(a, fam, est, P, rate, now, limitPct, demanded) {
   return { total, top };
 }
 
+// 这个号的共用额度有多「白给」：别的稀缺家族（有独占桶的，实际就是 Fable）最近有人用、但在这个号上被挡住了（用完 / Pro 没有），
+// 它剩下的共用额度那个家族用不上。按挡住还剩多久打折（0–1），取最大的那个家族。
+// 只有别的号上那个家族还能用时才有意义——全池都挡住就谁也不占谁的，调用方（rankAccounts）对所有号一视同仁，差值为零。
+function freeShare(a, fam, now, demanded) {
+  let v = 0, top = '';
+  for (const c of Object.keys(DEDICATED)) {
+    if (c === fam || !demanded(c) || !(a.blocked && a.blocked[c]) || (a.blocked && a.blocked[fam])) continue;
+    const until = a.until && a.until[c] != null ? a.until[c] : Infinity;
+    const x = Math.min(1, Math.max(0, until - now) / FREE_HORIZON);
+    if (x > v) { v = x; top = c; }
+  }
+  return { v, top };
+}
+
 // 这个家族要用的周桶里最紧的那个还剩几成（0–1）。
 function weeklyLeft(a, fam, P, limitPct) {
   let left = 1;
@@ -133,7 +154,7 @@ function urgency(a, fam, P, now, limitPct) {
   let u = 0;
   for (const k of Object.keys(P)) {
     const b = a.limits && a.limits[k];
-    if (!b || !b.resetsAt || b.resetsAt <= now || !relevantBucket(k, b, fam)) continue;
+    if (!b || !b.resetsAt || b.resetsAt <= now || !relevantBucket(k, b, fam) || refillsSoon(a, k, now)) continue;
     const left = Math.max(0, limitPct - P[k]) / 100;
     const tau = k === 'five_hour' ? TAU.five_hour : TAU.other;
     u = Math.max(u, left * Math.exp(-(b.resetsAt - now) / tau));
@@ -156,10 +177,11 @@ export function reasonFor(rows, task, vsId = '') {
   if (!b || b === a) return 'only';
   if (a.fits && !b.fits) return vsId ? 'refit' : 'fit_only';
   const gap = {};
-  for (const k of new Set([...Object.keys(a.parts), ...Object.keys(b.parts)])) if (k !== 'scarceFor') gap[k] = (a.parts[k] || 0) - (b.parts[k] || 0);
+  for (const k of new Set([...Object.keys(a.parts), ...Object.keys(b.parts)])) if (k !== 'scarceFor' && k !== 'freeFor') gap[k] = (a.parts[k] || 0) - (b.parts[k] || 0);
   const top = Object.entries(gap).filter(([k, v]) => v > 0.05 && k !== 'order' && k !== 'stick').sort((x, y) => y[1] - x[1])[0];
   const k = top ? top[0] : 'room';
   if (k === 'scarce') return 'keep_' + (b.parts.scarceFor || 'fable');
+  if (k === 'free') return 'keep_' + (a.parts.freeFor || 'fable');
   if (k === 'urgency') return 'expiring';
   if (k === 'load') return 'spread';
   if (k === 'parent') return 'with_parent';

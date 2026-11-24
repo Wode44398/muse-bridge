@@ -51,7 +51,35 @@ export async function snapshotAccessibility(send, refs, opts = {}) {
   let refN = 0;
   const lines = [];
 
+  // 分层（page-layers.mjs，由调用方按 backendNodeId 传进来）：看不见的抽屉 / 菜单折成一行；可见弹窗挪到最前。
+  // 只在看整页、不带 query 时用——带 query 是在找东西，看不见的也要能找到；read_page(ref) 是点名看某块。
+  const useLayers = opts.layers && !opts.query && opts.rootBackendId == null;
+  const junkIds = new Set(useLayers ? opts.layers.junk || [] : []);
+  const dialogIds = new Set(useLayers ? opts.layers.dialogs || [] : []);
+  let folded = 0;
+  const countInteractive = (node) => {
+    let n = 0;
+    const stack = [node];
+    while (stack.length) {
+      const x = stack.pop();
+      if (INTERACTIVE_ROLES.has(String(x.role?.value ?? '').toLowerCase())) n++;
+      for (const id of x.childIds ?? []) { const c = byId.get(String(id)); if (c) stack.push(c); }
+    }
+    return n;
+  };
+  let inDialogPass = false;
+
   const emit = (node, depth) => {
+    if (junkIds.has(node.backendDOMNodeId)) {
+      folded++;
+      const n = countInteractive(node);
+      lines.push(`${filter === 'interactive' ? '' : '  '.repeat(depth)}- （看不见的菜单 / 抽屉，已折叠${n ? `：里面 ${n} 个可交互元素` : ''}——要用里面的东西先把它打开，或 find / read_page(query) 搜）`);
+      return;
+    }
+    if (!inDialogPass && dialogIds.has(node.backendDOMNodeId)) {
+      lines.push(`${filter === 'interactive' ? '' : '  '.repeat(depth)}- （当前弹窗，已列在最前）`);
+      return;
+    }
     const role = String(node.role?.value ?? '').toLowerCase();
     const name = String(node.name?.value ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);
     const children = (node.childIds ?? [])
@@ -104,7 +132,21 @@ export async function snapshotAccessibility(send, refs, opts = {}) {
       emit(child, depth + 1);
     }
   };
+  // 可见弹窗先列：它浮在最上面，是用户眼前的东西
+  if (dialogIds.size) {
+    const dlgNodes = nodes.filter((node) => dialogIds.has(node.backendDOMNodeId));
+    if (dlgNodes.length) {
+      inDialogPass = true;
+      for (const d of dlgNodes) {
+        lines.push('- 【当前弹窗】');
+        emit(d, 1);
+      }
+      inDialogPass = false;
+      lines.push('- 【弹窗底下的页面】');
+    } else dialogIds.clear();
+  }
   emit(root, 0);
+  if (folded) lines.push(`(另有 ${folded} 处看不见的菜单 / 抽屉已折叠)`);
 
   let output = lines;
   if (opts.query) {

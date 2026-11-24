@@ -18,6 +18,8 @@ import { agentTool } from "./tools/agent.ts";
 import { bashTool } from "./tools/bash.ts";
 import { editTool } from "./tools/edit.ts";
 import { ok, type Tool } from "./tools/types.ts";
+import { hardenedProfile } from "./agent/profile.ts";
+// 这个文件钉的是加固姿态（hardened）的门禁 / 追问 / 提醒行为：各场景显式在加固档案下跑（lean 默认不设这些）
 
 const KNOWN_BROKEN: Record<string, string> = {
   "steer-during-delegation": "#34 / U2（M 步）：委派期间的插话要等委派整个结束才注入，子 agent 收不到（阶段 3）",
@@ -48,7 +50,7 @@ test("probe-delegated-edit-gate：派 coder 子 agent 改完文件就收尾，�
   // 修好之后门禁会多追问几轮；always 兜住，不算多调
   const adapter = scripted(t).next(useTool("c1", "Agent", { prompt: "change x to 2 in a.ts", tools: "coder" }), say("做完了，x 已经是 2")).always(say("做完了"));
   let root = "";
-  const { state, root: r } = loopState(t, adapter, {
+  const { state, root: r } = loopState(t, adapter, { profile: hardenedProfile(),
     tools: [agentTool],
     user: "把 x 改成 2",
     ctx: {
@@ -72,7 +74,7 @@ test("probe-delegated-edit-gate：派 coder 子 agent 改完文件就收尾，�
 test("probe-gate-exhaust 场景 C：用 Bash 写了文件就收尾，验证门禁应当追问", async (t) => {
   // V5 修好后用真 Bash：命令里的重定向目标就是它写的文件
   const adapter = scripted(t).next(useTool("b1", "Bash", { command: "echo 'export const x = 2;' > a.ts" }), say("改好了")).always(say("改好了"));
-  const { state } = loopState(t, adapter, {
+  const { state } = loopState(t, adapter, { profile: hardenedProfile(),
     tools: [bashTool],
     user: "把 x 改成 2",
     ctx: { limits: { bashTimeoutMs: 20_000, bashMaxTimeoutMs: 20_000 } },
@@ -88,7 +90,7 @@ test("probe-deny-bypass：用户拒了 Edit 之后，模型换 Bash 写同一个
     say("改好了"),
   ).always(say("好"));
   let cards = 0;
-  const { state, root } = loopState(t, adapter, {
+  const { state, root } = loopState(t, adapter, { profile: hardenedProfile(),
     tools: [editTool, bashTool],
     user: "把 v 改成 2",
     // 用户的意图：src 下的改动都要我点头；这一次点了「拒绝」
@@ -110,7 +112,7 @@ test("probe-deny-bypass：用户拒了 Edit 之后，模型换 Bash 写同一个
 
 test("probe-compact-signal：用户已经点了停止，压缩的摘要请求不该再发、或者至少带着已中止的信号", async (t) => {
   const adapter = scripted(t, { capabilities: { contextWindow: 30_000 } }).always(say("summary"));
-  const { state } = loopState(t, adapter, {});
+  const { state } = loopState(t, adapter, { profile: hardenedProfile(),});
   const msgs: Msg[] = [
     { role: "user", content: [{ t: "text", text: "task" }] },
     { role: "assistant", content: [{ t: "text", text: "ok" }] },
@@ -156,7 +158,7 @@ test("probe-steer-during-delegation：委派进行中插的话，应当在委派
     },
   };
   const adapter = scripted(t).next(useTool("a1", "Agent", { prompt: "refactor" }), say("ok")).always(say("ok"));
-  ({ state } = loopState(t, adapter, { tools: [fakeAgent], user: "重构一下" }));
+  ({ state } = loopState(t, adapter, { profile: hardenedProfile(), tools: [fakeAgent], user: "重构一下" }));
   const events = await drain(state);
   const toolEnd = events.findIndex((e) => e.e === "tool_end");
   const applied = events.findIndex((e) => e.e === "steer_applied");

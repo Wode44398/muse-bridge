@@ -3,22 +3,24 @@ import type { Tool, ToolContext, ToolRunResult } from "./types.ts";
 import { fail } from "./types.ts";
 import { walk, globToRegExp } from "./walk.ts";
 import { readVerdict } from "../sandbox.ts";
+import { ARG_ALIASES } from "./arg-aliases.ts";
 
 const MAX_RESULTS = 500;
 
 export const globTool: Tool = {
   effect: "read",
   concurrencySafe: true,
+  aliases: ARG_ALIASES.Glob,
   def: {
     name: "Glob",
     description:
-      "Find files by glob pattern (supports **, *, ?, {a,b}). Returns paths relative to the " +
-      "sandbox, most-recently-modified first.",
+      `Find files by glob pattern (supports **, *, ?, {a,b}), matched relative to path. Returns paths relative to the ` +
+      `workspace, most recently modified first (at most ${MAX_RESULTS}).`,
     parameters: {
       type: "object",
       properties: {
         pattern: { type: "string", description: 'Glob, e.g. "**/*.ts" or "src/*.{js,ts}".' },
-        path: { type: "string", description: "Base directory to search from (default: sandbox root)." },
+        path: { type: "string", description: "Directory to search from (default: workspace root)." },
       },
       required: ["pattern"],
     },
@@ -34,13 +36,17 @@ export const globTool: Tool = {
     }
 
     const hits: { rel: string; mtimeMs: number }[] = [];
+    // 模式既按相对工作区根比（老写法），也按相对 path 比（path: "src" + "*.ts" 找 src 下的 ts）
+    const baseRel = ctx.sandbox.rel(base);
+    const prefix = baseRel && baseRel !== "." ? `${baseRel}/` : "";
+    let truncated = false;
     // S4（#37①）：递归遍历逐个过统一的凭据判定——以前 walk 不经 secret guard，
     // Read 拦得住的 .env、deploy/.ssh/id_rsa，一次 Grep 就原文吐出来。
     const skip = (abs: string) => readVerdict(abs, ctx.sandbox.root, { bypass: ctx.sandbox.bypassing }) !== null;
     for await (const { abs } of walk(base, { skip })) {
       if (ctx.signal?.aborted) break;
       const rel = ctx.sandbox.rel(abs);
-      if (!re.test(rel)) continue;
+      if (!re.test(rel) && !(prefix && rel.startsWith(prefix) && re.test(rel.slice(prefix.length)))) continue;
       let mtimeMs = 0;
       try {
         mtimeMs = (await fs.stat(abs)).mtimeMs;
@@ -48,15 +54,21 @@ export const globTool: Tool = {
         /* ignore */
       }
       hits.push({ rel, mtimeMs });
-      if (hits.length >= MAX_RESULTS) break;
+      if (hits.length >= MAX_RESULTS) {
+        truncated = true;
+        break;
+      }
     }
 
     hits.sort((a, b) => b.mtimeMs - a.mtimeMs);
-    const body = hits.length ? hits.map((h) => h.rel).join("\n") : "No files matched.";
+    const body = hits.length
+      ? hits.map((h) => h.rel).join("\n") +
+        (truncated ? `\n…[stopped at ${MAX_RESULTS} files — the list is incomplete; narrow the pattern or path]` : "")
+      : "No files matched.";
     return {
       ok: true,
       summary: `glob ${args.pattern} → ${hits.length} files`,
-      outcome: hits.length ? `找到 ${hits.length} 个文件${hits.length >= MAX_RESULTS ? "（只列了前这些）" : ""}` : "没有匹配的文件", // U8（K36）
+      outcome: hits.length ? `找到 ${hits.length} 个文件${truncated ? "（只列了前这些）" : ""}` : "没有匹配的文件", // U8（K36）
       content: [{ t: "text", text: body }],
     };
   },

@@ -5,6 +5,7 @@
   import { agy, retryAgyFrom } from '../../lib/agy/store.svelte.js';
   import { t } from '../../lib/i18n.js';
   import Message from './Message.svelte';
+  import { touchGuard } from '../../lib/selection.js';
   import AgyStateBanner from './AgyStateBanner.svelte';
 
   const INITIAL_MSG_WINDOW = 40;
@@ -156,6 +157,7 @@
   <div
     class="agy-thread"
     bind:this={scroller}
+    use:touchGuard
     onscroll={onScroll}
     ontouchstart={onTouchStart}
     ontouchend={onTouchEnd}

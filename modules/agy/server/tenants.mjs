@@ -15,6 +15,7 @@ import { PORT } from '@bridge/core/config/index.mjs';
 import { mintAgentDeviceToken } from '@bridge/core/runtime/agent-device-token.mjs';
 import { memberProcessEnv } from '@bridge/core/runtime/member-boundary.mjs';
 import { AcpClient } from './acp/client.mjs';
+import { defaultDaemonCwd } from './acp/binary.mjs';
 import { installGuard } from './guard/install.mjs';
 import { guardBroken, markGuardBroken, GUARD_BROKEN_MESSAGE } from './guard/liveness.mjs';
 
@@ -102,8 +103,8 @@ export function tenantClient(ctx) {
       // 成员在自己的 agy 里跑一句 `Get-ChildItem env:` 就全看见了。与成员的 Claude CLI 同一套清洗；
       // 完全信任档保留真实用户目录与代理变量（agy 的登录态在用户目录里，联网要走代理）。
       env: memberProcessEnv(process.env, { shell: true }),
-      // 占位目录必须叫 daemon-cwd（prepareReadOnlyDaemonDir 只认这个名字），各进程各用各的
-      daemonCwd: path.join(dir, 'daemon-cwd'),
+      // 占位目录落在系统临时目录下（不进主仓库，避免把主仓库 AGENTS.md 注入成员会话），各进程按人分槽
+      daemonCwd: defaultDaemonCwd(`tenant-${tenantId(ctx)}`, DATA_ROOT),
       logFile: path.join(dir, 'acp.log'),
       dataDir: path.join(dir, 'antigravity-cli'),
       // 每次起进程前重装守卫：脚本、令牌、端口都以此刻为准。装不上就不起进程——没有守卫的 agy 不能给注册用户用

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseSessionRecord, sessionsDir, saveSession, unsupportedVersionMessage, type PersistedSession } from "./store.ts";
 import { IGNORE_DIRS } from "./tools/walk.ts";
-import { knowledgeRoot, memoryRoot } from "./paths.ts";
+import { knowledgeRoot, memoryRoot, worktreesRoot } from "./paths.ts";
 import { isSecretPath } from "./sandbox.ts";
 import { GIT_DIFF_NO_EXTERNAL, helperEnv, helperGitArgs } from "./helper-proc.ts";
 import { atomicWriteFile } from "./atomic-write.ts";
@@ -252,7 +252,8 @@ const BRIDGE_DATA_SEG = ".bridge";
 // 数据目录在这个工作区里的相对位置（正斜杠）；不在里面的不算
 function dataDirsIn(work: string): string[] {
   const out = new Set<string>();
-  for (const dir of [sessionsDir(), memoryRoot(), knowledgeRoot()]) {
+  // 子 agent 的 worktree 目录（数据目录落在工作区里时）同样不进快照：那是另一份检出
+  for (const dir of [sessionsDir(), memoryRoot(), knowledgeRoot(), worktreesRoot()]) {
     const rel = path.relative(path.resolve(work), path.resolve(dir));
     if (!rel || rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) continue;
     out.add(rel.split(path.sep).join("/"));

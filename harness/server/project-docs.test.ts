@@ -21,24 +21,34 @@ function repo(t: TestContext): { above: string; top: string } {
   fs.mkdirSync(path.join(top, "pkg", "app"), { recursive: true });
   fs.writeFileSync(path.join(above, "AGENTS.md"), "ABOVE-THE-REPO\n"); // git 根之上：不收
   fs.writeFileSync(path.join(top, "AGENTS.md"), "ROOT-RULES\n");
-  fs.writeFileSync(path.join(top, "CLAUDE.md"), "ROOT-CLAUDE-DUPLICATE\n"); // 同一层已有 AGENTS.md：不取
+  fs.writeFileSync(path.join(top, "CLAUDE.md"), "ROOT-CLAUDE-EXTRA\n"); // 同一层两份都读（内容不同）
   fs.writeFileSync(path.join(top, "pkg", "CLAUDE.md"), "PKG-CLAUDE\n"); // 这一层只有 CLAUDE.md：取它
   return { above, top };
 }
 
-test("C6: collects from the git root down, one file per level (AGENTS.md over CLAUDE.md), nearest last, sources labeled", (t) => {
+// 记忆与项目上下文（m 线）改了「每层只取第一个」：同一层 AGENTS.md 与 CLAUDE.md 都读，内容相同或一份只是指向另一份时只留一份；
+// AGENTS.override.md 只替代同层的 AGENTS.md
+test("C6: collects from the git root down, AGENTS.md and CLAUDE.md both per level (deduplicated), nearest last, sources labeled", (t) => {
   const { top } = repo(t);
   const ws = path.join(top, "pkg", "app");
   const docs = readProjectDocs(ws, { installRoot: null }) ?? "";
   assert.match(docs, /<file path="AGENTS.md">\nROOT-RULES\n<\/file>/);
+  assert.match(docs, /<file path="CLAUDE.md">\nROOT-CLAUDE-EXTRA\n<\/file>/, "同一层的 CLAUDE.md 也读");
   assert.match(docs, /<file path="pkg\/CLAUDE.md">\nPKG-CLAUDE\n<\/file>/);
   assert.ok(docs.indexOf("ROOT-RULES") < docs.indexOf("PKG-CLAUDE"), "离工作区最近的排在最后");
-  assert.ok(!docs.includes("ROOT-CLAUDE-DUPLICATE"), "每层只取第一个命中");
   assert.ok(!docs.includes("ABOVE-THE-REPO"), "git 根之上不收");
-  // AGENTS.override.md 在这一层压过别的
+  // 只是指向另一份的、内容一模一样的：不重复
+  fs.writeFileSync(path.join(top, "CLAUDE.md"), "# Claude\nSee AGENTS.md for the rules.\n");
+  assert.ok(!(readProjectDocs(ws, { installRoot: null }) ?? "").includes("See AGENTS.md"));
+  fs.writeFileSync(path.join(top, "CLAUDE.md"), "@AGENTS.md\n");
+  assert.equal(((readProjectDocs(ws, { installRoot: null }) ?? "").match(/ROOT-RULES/g) ?? []).length, 1, "@导入的就是同层那份：只出现一次");
+  fs.writeFileSync(path.join(top, "CLAUDE.md"), "ROOT-RULES\n");
+  assert.equal(((readProjectDocs(ws, { installRoot: null }) ?? "").match(/ROOT-RULES/g) ?? []).length, 1);
+  // AGENTS.override.md 替代同层的 AGENTS.md（CLAUDE.md 照读）
+  fs.writeFileSync(path.join(top, "pkg", "AGENTS.md"), "PKG-AGENTS\n");
   fs.writeFileSync(path.join(top, "pkg", "AGENTS.override.md"), "PKG-OVERRIDE\n");
   const again = readProjectDocs(ws, { installRoot: null }) ?? "";
-  assert.ok(again.includes("PKG-OVERRIDE") && !again.includes("PKG-CLAUDE"));
+  assert.ok(again.includes("PKG-OVERRIDE") && !again.includes("PKG-AGENTS") && again.includes("PKG-CLAUDE"));
   // 没有任何指令文件：不注入
   const bare = fs.mkdtempSync(path.join(os.tmpdir(), "dimensio-c6-bare-"));
   t.after(() => fs.rmSync(bare, { recursive: true, force: true }));
@@ -56,7 +66,7 @@ test("C6: a read error keeps the last good content (a deleted file drops out); t
   // 真的删掉了：这一层退到下一个候选（CLAUDE.md）
   fs.rmdirSync(path.join(top, "AGENTS.md"));
   const now = readProjectDocs(ws, { installRoot: null }) ?? "";
-  assert.ok(!now.includes("ROOT-RULES") && now.includes("ROOT-CLAUDE-DUPLICATE"));
+  assert.ok(!now.includes("ROOT-RULES") && now.includes("ROOT-CLAUDE-EXTRA"));
 
   // N29：会话落在回退选出的默认工作区、而它又在 dimensio 自己的安装仓库里 → 不加载（那份 AGENTS.md 是写给开发 dimensio 的）
   assert.equal(readProjectDocs(ws, { installRoot: top, defaultWorkspace: ws }), undefined);
@@ -71,7 +81,7 @@ test("C6: the main prompt frames it as project data under the GUIDE; sub-agents 
   const agents = prompt.indexOf("## Project instructions (AGENTS.md)");
   assert.ok(agents > 0);
   assert.match(prompt, /project-provided reference data/);
-  assert.match(prompt, /memory files or memory directories do not apply to you/);
+  assert.match(prompt, /describes other agents' memory — yours is the directory named in the Memory index section/);
   assert.ok(agents < prompt.indexOf("## Project guide (GUIDE.md)"), "GUIDE 排在后面、冲突时赢");
 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dimensio-c6-sub-"));

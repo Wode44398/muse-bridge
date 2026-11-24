@@ -61,6 +61,7 @@ export function parseJsonParam(v, label = '额外参数', { array = false } = {}
 /**
  * 按 ParamSpec 通用规范化：不认的键丢掉；enum 不在选项里回落默认（没默认就不传）；数字夹紧；
  * bool 只认布尔；text 截长；seed 取整；json 解析；when 不满足的丢掉。
+ * ctx.report（对象）给了就把「丢掉 / 回落 / 夹紧」记进去（见 noteReport），规范化结果不受影响。
  */
 // 通用参数名 → 各家卡上的字段名（Claude 的媒体工具、旧接口、通用卡都用左边这套）：卡上没有左边的键、有右边的，就搬过去
 const ALIASES = {
@@ -81,7 +82,8 @@ export function aliasParams(specs, raw) {
 }
 
 export function applySpecs(specs, raw = {}, ctx = {}) {
-  raw = aliasParams(specs, raw && typeof raw === 'object' ? raw : {});
+  const rawIn = raw && typeof raw === 'object' ? raw : {};
+  raw = aliasParams(specs, rawIn);
   const flags = inputFlags(ctx);
   const out = {};
   const vals = () => ({ ...flags, ...out });
@@ -135,9 +137,50 @@ export function applySpecs(specs, raw = {}, ctx = {}) {
     if (v === '' && s.type === 'enum') continue;   // '' = 「默认」档：不传
     out[s.key] = v;
   }
-  for (const s of specs) if (s.key in out && !whenOk(s, vals())) delete out[s.key];
+  const whenDropped = new Set();
+  for (const s of specs) if (s.key in out && !whenOk(s, vals())) { delete out[s.key]; whenDropped.add(s.key); }
   for (const [k, e] of bad) if (k in out) throw e;
+  if (ctx?.report) noteReport(ctx.report, specs, rawIn, raw, out, { ...flags, ...out }, whenDropped);
   return out;
+}
+
+const given = (v) => v !== undefined && v !== null && v !== '';
+// 别名搬过去的键：卡上没有左边的键、有右边的（aliasParams 同一条规则）
+export function aliasConsumed(keys, rawIn) {
+  const used = new Map();   // 卡上的键 → 调用方写的别名
+  for (const [from, tos] of Object.entries(ALIASES)) {
+    if (!(from in rawIn) || keys.has(from)) continue;
+    const to = tos.find((k) => keys.has(k));
+    if (to) used.set(to, from);
+  }
+  return used;
+}
+const enumValues = (s, vals) => (s.options || []).filter((o) => optionOk(o, vals) && o.value !== '').map((o) => o.value);
+
+/**
+ * 规范化没照原样生效的参数记进 report（生成工具据此回提示，不改变规范化结果）：
+ *   ignored：调用方给了、卡上没有的键（别名能搬过去的不算）；
+ *   changed：{ key, as?, from, to?, options?, min?, max?, when? }——enum 不在可选值里回落 / 被换成最近一档、数字被夹紧、
+ *            类型不对没下发（to 没有 = 没下发）、生效条件 when 不满足被丢。as = 调用方写的别名。
+ */
+function noteReport(report, specs, rawIn, raw, out, vals, whenDropped) {
+  const keys = new Set(specs.map((s) => s.key));
+  const alias = aliasConsumed(keys, rawIn);
+  const aliasFrom = new Set(alias.values());
+  for (const k of Object.keys(rawIn)) if (given(rawIn[k]) && !keys.has(k) && !aliasFrom.has(k)) (report.ignored ||= []).push(k);
+  const push = (s, x) => (report.changed ||= []).push({ key: s.key, ...(alias.has(s.key) && !(s.key in rawIn) ? { as: alias.get(s.key) } : {}), from: raw[s.key], ...x });
+  for (const s of specs) {
+    const g = raw[s.key];
+    if (!given(g)) continue;
+    if (whenDropped.has(s.key)) { push(s, { when: s.when }); continue; }
+    const has = s.key in out;
+    if (s.type === 'enum') {
+      if (!has || String(out[s.key]) !== String(g)) push(s, { ...(has ? { to: out[s.key] } : {}), options: enumValues(s, vals) });
+    } else if (s.type === 'number' || s.type === 'seed') {
+      if (s.type === 'seed' && Number(g) === -1) continue;   // -1 = 随机，本来就不下发
+      if (!has || out[s.key] !== Number(g)) push(s, { ...(has ? { to: out[s.key] } : {}), min: s.min, max: s.max });
+    } else if (s.type === 'bool' && !has) push(s, {});
+  }
 }
 
 // —— 通用卡：拉取来的、手填的未知模型（方言 × 种类）——前端照这些参数渲染，extra 原样透传进请求体 ——

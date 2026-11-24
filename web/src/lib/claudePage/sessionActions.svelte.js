@@ -111,12 +111,14 @@ export function createSessionActions(pc) {
   let menuPos = $state({ top: null, bottom: null, right: 0 });
   let delConfirm = $state(false);
   function openMenu(e, kind, id) {
-    e.stopPropagation();
-    // 右键（鼠标）：菜单开在指针处，再右键别处直接换过去；⋮ 照旧锚在按钮下沿、再点一下收起
+    e.stopPropagation?.();
+    // 右键（鼠标）/ 触屏原地长按松手（传进来的只有 clientX/Y、没有按钮）：菜单开在指针处，再右键别处直接换过去；
+    // ⋮ 照旧锚在按钮下沿、再点一下收起
     const ctx = e.type === 'contextmenu';
     if (ctx) e.preventDefault();
-    if (!ctx && menuFor && menuFor.kind === kind && menuFor.id === id) { closeMenu(); return; }
-    const r = ctx ? { top: e.clientY, bottom: e.clientY, right: Math.min(e.clientX + 176, window.innerWidth - 8) } : e.currentTarget.getBoundingClientRect();
+    const atPt = ctx || !e.currentTarget;
+    if (!atPt && menuFor && menuFor.kind === kind && menuFor.id === id) { closeMenu(); return; }
+    const r = atPt ? { top: e.clientY, bottom: e.clientY, right: Math.min(e.clientX + 176, window.innerWidth - 8) } : e.currentTarget.getBoundingClientRect();
     // 下方放不下就锚到按钮上方（bottom 定位，向上生长不出屏）。
     const up = (window.innerHeight - r.bottom) < 180;
     menuPos = up
@@ -125,8 +127,14 @@ export function createSessionActions(pc) {
     menuFor = { kind, id }; delConfirm = false;
   }
   function closeMenu() { menuFor = null; delConfirm = false; }
-  // 行上右键 = 同一个 ⋮ 菜单。只认鼠标：触屏长按在安卓上也会发 contextmenu，那是「拿起拖动」的手势，不抢。
-  function rowCtx(e, kind, id) { if (!pointer.fine || IS_CSNAP) return; openMenu(e, kind, id); }
+  // 行上右键 = 同一个行菜单（项目行没有 ⋮，右键就是它在电脑上的唯一入口）。只认鼠标：触屏长按也会发 contextmenu，
+  // 那是「拿起拖动」的手势，菜单由原地松手补出（sideDnd 的 onStay），不抢。事件带 pointerType 就按它认
+  // （触屏笔记本、接了鼠标的平板都对），不带（键盘菜单键 / 老内核）才退回看主指针。
+  function rowCtx(e, kind, id) {
+    if (IS_CSNAP) return;
+    if (e.pointerType ? e.pointerType !== 'mouse' : !pointer.fine) return;
+    openMenu(e, kind, id);
+  }
   const menuProject = () => pc.projects.find((x) => x.id === (menuFor && menuFor.id)) || null;
   const menuStyle = $derived(menuFor
     ? (menuPos.top != null ? `top:${menuPos.top}px;` : `bottom:${menuPos.bottom}px;`) + `right:${menuPos.right}px;`

@@ -28,13 +28,13 @@
 手上没有源码也行——脚本会先把公开仓库克隆下来，再用克隆里同一版本的脚本接着装：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Wode44398/claude-bridge/main/scripts/server/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Wode44398/bridge/main/scripts/server/install.sh | sudo bash
 ```
 
 已经克隆了（别放在 `/root` 底下，服务用户读不到）：
 
 ```bash
-git clone https://github.com/Wode44398/claude-bridge.git /opt/bridge
+git clone https://github.com/Wode44398/bridge.git /opt/bridge
 sudo bash /opt/bridge/scripts/server/install.sh
 ```
 

@@ -76,6 +76,9 @@ export function sessionRecord(session: Session): PersistedSession | null {
       compactionFailures: st.compactionFailures,
       turnsSinceTodoSeen: st.turnsSinceTodoSeen,
     },
+    ...(st.loadedTools.size || st.ctx.shell?.cwd
+      ? { tools: { ...(st.loadedTools.size ? { loaded: [...st.loadedTools] } : {}), ...(st.ctx.shell?.cwd ? { cwd: st.ctx.shell.cwd } : {}) } }
+      : {}),
     // O7：目标续跑的契约与进度（老版本读到会忽略）
     ...(session.goal ? { goal: session.goal } : {}),
     // O8：用量账本（会话 × 厂商 × 型号 × 任务）

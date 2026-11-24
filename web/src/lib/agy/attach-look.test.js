@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  attLook, attMeta, clampRatio, fmtBytes, splitAttachedPaths,
+  attLook, attMeta, clampRatio, fmtBytes, splitAttachedPaths, parseAgyQuoteFile,
   draftAttDescriptor, buildDraftMediaGallery,
 } from './attach-look.js';
 
@@ -141,4 +141,22 @@ test('draftAttDescriptor 与 buildDraftMediaGallery 覆盖图片/视频/恢复�
   assert.deepEqual(g.items[1].originRect, rect);
   assert.equal(g.items[0].originRect, undefined);
   assert.equal(buildDraftMediaGallery([pdfDone], pdfDone), null);
+});
+
+test('引用对话卡与服务端标注（← 文件夹 / ← 引用的对话）还原', () => {
+  const look = attLook({ name: '老对话', kind: 'chat', quoteId: 's-1' });
+  assert.equal(look.isChat, true);
+  assert.equal(look.glyph, 'chat');
+  assert.equal(look.tone, 'blue');
+  assert.equal(attMeta(look, { chatWord: '引用对话' }), '引用对话');
+
+  assert.deepEqual(parseAgyQuoteFile('1795102601189-chatref-abc-123--讨论记录.md'), { id: 'abc-123', title: '讨论记录' });
+
+  const raw = '本轮附加文件路径：\n- D:\\Notes\\2026-project  ← 文件夹\n- C:\\up\\1795102601189-chatref-abc-123--讨论记录.md  ← 引用的对话\n\n继续聊';
+  const r = splitAttachedPaths(raw);
+  assert.equal(r.text, '继续聊');
+  assert.deepEqual(r.atts, [
+    { path: 'D:\\Notes\\2026-project', name: '2026-project', kind: 'folder' },
+    { path: 'C:\\up\\1795102601189-chatref-abc-123--讨论记录.md', name: '讨论记录', kind: 'chat', quoteId: 'abc-123' },
+  ]);
 });

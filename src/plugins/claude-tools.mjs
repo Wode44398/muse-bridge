@@ -17,8 +17,8 @@ import { kernel } from './state.mjs';
 
 export const CLAUDE_SLOT = 'claude.tools';
 // 插件工具 / 提示能声明给哪些 agent（spec.agents）。模型服务另有一张表（runtime/model-services.mjs MODEL_AGENTS）：
-// Antigravity 用不了插件提供的模型，但能经 bridge 的工具服务调插件工具（modules/agy 的工具中枢）。
-export const TOOL_AGENTS = Object.freeze(['claude', 'dimensio', 'agy']);
+// Antigravity 用不了插件提供的模型，但能经 bridge 的工具服务调插件工具（modules/agy 的工具中枢）；Codex 同理（modules/codex 的工具中枢）。
+export const TOOL_AGENTS = Object.freeze(['claude', 'dimensio', 'agy', 'codex']);
 
 // 内置 MCP 的键名（claude.mjs 与扩展中心连接器在用），插件 id 撞上就加前缀。
 const RESERVED = new Set(['snapshot', 'media', 'phone', 'phoneControl', 'browser', 'terminal', 'workspace', 'bridge', 'sessions',
@@ -108,7 +108,7 @@ export function audienceOk(who, turn) {
   return c.kind === 'admin' && !c.sandbox;
 }
 
-/** 这一轮里声明给某个非 Claude agent（dimensio / agy）的插件工具与说明：{ tools: [{ owner, spec }], prompts: [文本] }。 */
+/** 这一轮里声明给某个非 Claude agent（dimensio / agy / codex）的插件工具与说明：{ tools: [{ owner, spec }], prompts: [文本] }。 */
 export function agentContributions(agent, turn) {
   const out = { tools: [], prompts: [] };
   if (!kernel.started) return out;
@@ -322,12 +322,35 @@ export function mergeHooks(base, extra) {
  * 审批策略（ctx.claude.permission）：permissions.mjs 在沙箱复检之后、无人值守放行与审批卡之前问。
  * 依次问各插件，第一个表态的说了算。回 null = 都没表态（照常走审批卡）；否则 SDK 的 { behavior, … }（多一个 by = 哪个插件）。
  */
+const permAgents = (item) => (Array.isArray(item.agents) && item.agents.length ? item.agents : ['claude']);
+
 export async function pluginPermission(turn, { tool, input, mode, agentID, signal }) {
-  const list = entriesOf('permission', turn);
+  const list = entriesOf('permission', turn, (it) => permAgents(it).includes('claude'));
   if (!list.length) return null;
   const pt = publicTurn(turn);
+  return decidePermission(list, pt, { tool, input, mode: mode || '', agentID: agentID || '', sessionId: turn.sessionId || null }, signal);
+}
+
+/**
+ * Antigravity 的审批（八期，能力名 claude.permission.agy）：agy 的 ACP 审批请求在自动放行（含完全放行）之前先问
+ * agents 含 'agy' 的审批策略（modules/agy/server/plugin-permission.mjs 接线）。turn = { kind:'chat', agent:'agy', ctx, cwd, sessionId, getGen }。
+ * 回值同 pluginPermission：null（都没表态）/ { behavior: 'allow' | 'deny' | 'ask', message?, by }。
+ * agy 单次工具调用有 180 秒硬上限：策略最长等 timeoutMs（缺省 30 秒），超时当没表态。
+ */
+export async function agyPluginPermission(turn, { tool, input, title = '', signal, timeoutMs = 30_000 } = {}) {
+  const list = entriesOf('permission', turn, (it) => permAgents(it).includes('agy'));
+  if (!list.length) return null;
+  const pt = { ...publicTurn(turn), agent: 'agy', cwd: turn.cwd || '' };
+  const cap = Math.max(1000, Math.min(Number(timeoutMs) || 30_000, 60_000));
+  return decidePermission(list.map((x) => ({ ...x, item: { ...x.item, timeout: Math.min(x.item.timeout || cap, cap) } })), pt,
+    { tool, input, title: String(title || ''), mode: '', agentID: '', sessionId: turn.sessionId || null, agent: 'agy' }, signal);
+}
+
+/** 依次问各插件，第一个表态的说了算。 */
+async function decidePermission(list, pt, view, signal) {
+  const { input } = view;
   for (const { item, owner } of list) {
-    const r = await guarded(owner, '审批策略', () => item.fn({ tool, input, mode: mode || '', agentID: agentID || '', sessionId: turn.sessionId || null }, pt),
+    const r = await guarded(owner, '审批策略', () => item.fn(view, pt),
       msOf(item.timeout, 10 * 60_000, 30 * 60_000), signal);
     if (r === 'allow' || r?.allow === true || r?.behavior === 'allow') {
       const ui = r && typeof r === 'object' && r.input && typeof r.input === 'object' ? r.input : input;
@@ -337,13 +360,21 @@ export async function pluginPermission(turn, { tool, input, mode, agentID, signa
       const msg = (r && typeof r === 'object' && (r.message || r.reason)) || `插件「${owner}」的审批策略拒绝了这次调用`;
       return { behavior: 'deny', message: String(msg).slice(0, 2000), by: owner };
     }
+    // 一定要用户本人批（七期之后，能力名 claude.permission.ask）：交互轮照常弹审批卡——绕过权限、bridge 自家工具的免审批都不越过它；
+    // 无人值守的轮没人能批，按拒绝处理（调用方见 headless-turn.mjs）
+    if (r === 'ask' || r?.ask === true || r?.behavior === 'ask') {
+      const msg = (r && typeof r === 'object' && (r.message || r.reason)) || '';
+      return { behavior: 'ask', message: String(msg).slice(0, 2000), by: owner };
+    }
   }
   return null;
 }
 
 /**
  * 消息改写（ctx.claude.input）：发给 Claude 之前依次过各插件。回 { message, attachments, changed }（界面上显示的仍是用户原话）。
- * 插件回 { message?, prepend?, append?, attachments?: [绝对路径]（追加） }。
+ * 插件回 { message?, prepend?, append?, attachments?: [绝对路径]（追加）, hint? }。
+ * hint（八期，能力名 claude.input.hint）：只给模型看的一段旁注——包进 <session-hint> 放在消息最前面；
+ * 界面气泡不显示、不进会话标题与搜索（同会话间消息的提示）。别的 agent 发来的那一轮说明「这不是用户本人」就用它。
  */
 export async function pluginInput(turn, { message, attachments }) {
   const list = entriesOf('input', turn);
@@ -352,14 +383,18 @@ export async function pluginInput(turn, { message, attachments }) {
   if (!list.length) return { message: msg, attachments: atts, changed: false };
   const pt = publicTurn(turn);
   let changed = false;
+  const hints = [];
   for (const { item, owner } of list) {
     const r = await guarded(owner, '消息改写', () => item.fn({ message: msg, attachments: atts.slice() }, pt), msOf(item.timeout, 20_000, 120_000));
     if (!r || typeof r !== 'object') continue;
+    // 旁注里的尖括号换掉：插件写的字不能拼出 bridge 自己的信封
+    if (typeof r.hint === 'string' && r.hint.trim()) hints.push(r.hint.trim().slice(0, 2000).replace(/</g, '‹').replace(/>/g, '›'));
     if (typeof r.message === 'string') { msg = r.message; changed = true; }
     if (typeof r.prepend === 'string' && r.prepend) { msg = r.prepend + '\n\n' + msg; changed = true; }
     if (typeof r.append === 'string' && r.append) { msg = msg + '\n\n' + r.append; changed = true; }
     if (Array.isArray(r.attachments)) for (const a of r.attachments) if (typeof a === 'string' && a && !atts.includes(a)) { atts.push(a); changed = true; }
   }
+  if (hints.length) { msg = '<session-hint>' + hints.join('\n') + '</session-hint>\n\n' + msg; changed = true; }
   return { message: msg, attachments: atts, changed };
 }
 

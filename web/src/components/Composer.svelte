@@ -602,7 +602,7 @@
 
   {#if slashQ != null && slashItems.length}<SlashMenu items={slashItems} active={slashIdx} onPick={pickSlash} onHover={(i) => (slashIdx = i)} />{/if}
   <div class="field-wrap">
-    <div class="field" class:sugg={showSugg} bind:this={field} contenteditable="true" data-ph={showSugg ? suggestion : placeholder} role="textbox" tabindex="0" aria-multiline="true" onkeydown={onKey} oninput={onInput} onpaste={onPaste} onfocus={prewarmNewChat} onblur={() => setTimeout(() => (slashQ = null), 120)}></div>
+    <div class="field" class:sugg={showSugg} bind:this={field} data-sel-composer contenteditable="true" data-ph={showSugg ? suggestion : placeholder} role="textbox" tabindex="0" aria-multiline="true" onkeydown={onKey} oninput={onInput} onpaste={onPaste} onfocus={prewarmNewChat} onblur={() => setTimeout(() => (slashQ = null), 120)}></div>
     {#if showSugg}
       <!-- mousedown 不抢焦点：桌面上点键帽等同按 Tab；手机没有 Tab 键，这是唯一入口 -->
       <button class="sg-key" type="button" tabindex="-1" title={t('填入建议（Tab）· Esc 收起')} aria-label={t('填入建议：{text}', { text: suggestion })} onmousedown={(e) => e.preventDefault()} onclick={acceptSuggestion}>{touchUI ? t('填入') : 'Tab'}</button>

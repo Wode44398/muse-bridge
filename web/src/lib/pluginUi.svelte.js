@@ -22,6 +22,14 @@ import { openPluginStandalone, inAndroidApp } from './pluginPanels.svelte.js';
 import { openSettings } from './settingsNav.svelte.js';
 import { isNativeDesktop, desktopOpenExternal } from './nativeDesktop.js';
 import { pluginIcon } from './pluginIcons.js';
+import { setWorkspaceActions, workspaceIdentity } from './pluginUi/workspace.svelte.js';
+
+// 工作区插槽（文件夹的外观与菜单项）：实现在 pluginUi/workspace.svelte.js，这里只转出
+export {
+  workspaceUi, nowTick, WORKSPACE_AGENTS, workspaceActions, decorOf, loadDecor, decorFor, sessionMark, peerSessionsFor, workspaceMenuItems,
+  registerWorkspaceDialog, openWorkspaceDialog, registerWorkspaceSnackHost, dismissWorkspaceSnack, runWorkspaceSnackUndo,
+  runWorkspaceAction, openTarget, gotoPeerFolder, useNowTick, sinceSeconds, sameDir, normDirKey,
+} from './pluginUi/workspace.svelte.js';
 
 // fileHandlers = 文件「用「X」打开」：[{ plugin, pluginName, id, title, exts: ['csv', …], app: 应用键 }]
 const EMPTY = () => ({ homeCards: [], workbench: [], commands: [], composerActions: [], messageActions: [], sessionActions: [], theme: {}, apps: [], fileHandlers: [] });
@@ -57,6 +65,7 @@ export async function loadPluginUi() {
           ...h, exts: arr(h.exts || h.match?.ext).map((e) => String(e || '').trim().replace(/^\./, '').toLowerCase()).filter(Boolean),
         }));
         pluginUi.theme = r?.theme && typeof r.theme === 'object' ? r.theme : {};
+        setWorkspaceActions(r?.workspaceActions);
         pluginUi.loaded = true;
         applyTheme(pluginUi.theme);
       } catch (e) {
@@ -70,6 +79,7 @@ export async function loadPluginUi() {
 
 function clearAll() {
   Object.assign(pluginUi, EMPTY());
+  setWorkspaceActions([]);
   pluginUi.loaded = false;
   applyTheme({});
 }
@@ -84,6 +94,7 @@ export function syncPluginUi(key) {
   const k = String(key || '');
   if (k === who) return;
   who = k;
+  workspaceIdentity(k);
   if (!k) { clearAll(); return; }
   again = true;
   loadPluginUi();
@@ -117,7 +128,9 @@ export const WB_PREFIX = 'plg:';
 export const isPluginView = (k) => typeof k === 'string' && k.startsWith(WB_PREFIX);
 export const workbenchKey = (w) => WB_PREFIX + w.plugin + ':' + w.id;
 export const workbenchByKey = (k) => (isPluginView(k) ? pluginUi.workbench.find((w) => workbenchKey(w) === k) || null : null);
-export const workbenchKeys = () => pluginUi.workbench.map(workbenchKey);
+// host：哪个分页的工作区（claude / codex / agy / dimensio）；插件卡片缺省只进 Claude（ctx.ui.workbench 的 hosts，六期）
+export const workbenchFor = (host = 'claude') => pluginUi.workbench.filter((w) => (Array.isArray(w.hosts) && w.hosts.length ? w.hosts : ['claude']).includes(host));
+export const workbenchKeys = (host = 'claude') => workbenchFor(host).map(workbenchKey);
 export const uiIcon = (name) => pluginIcon(name || 'plugin');
 
 /** 手机 App 里打开工作台标签：签票后交给原生另起的干净页面（App 的 JS 桥对所有帧可见，绝不内嵌第三方 iframe）。 */

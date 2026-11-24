@@ -104,7 +104,7 @@ export function makeAdapter({ ctx, genKey, getGen }) {
         b.parent = continueFrom;
       }
       if (signal?.aborted) throw new Error('已取消');
-      const { job: j0, done } = startJob(ctx, b, {
+      const { job: j0, done, warnings } = startJob(ctx, b, {
         source: 'claude', presetIds: [id], quota: false, autoSave: false,
         onEvent: (ev) => { if (ev.state === 'running') onProgress(ev.elapsed || 0); },
       });
@@ -113,13 +113,13 @@ export function makeAdapter({ ctx, genKey, getGen }) {
       signal?.addEventListener('abort', onAbort, { once: true });
       let job;
       try { job = await done; } finally { signal?.removeEventListener('abort', onAbort); }
-      if (job.state !== 'done' || !job.result.length) throw new Error(job.error || job.note || '没有结果');
+      if (job.state !== 'done' || !job.result.length) throw Object.assign(new Error(job.error || job.note || '没有结果'), { warnings });
       const fileOf = (aid) => vertexMedia.mediaPath(aid, vertexMedia.get(aid, ctx.media)?.ext || 'bin', ctx.media);
       const a = job.result[0];
       const rec = vertexMedia.get(a.id, ctx.media);
       // 图片带回实际像素（存作品时量的）与真正下发的参数（卡规范化之后）：回执报实际值、查是不是没拿到要的档位
       return {
-        id: a.id, file: fileOf(a.id), model: rec?.model, width: rec?.width, height: rec?.height, params: rec?.params,
+        id: a.id, file: fileOf(a.id), model: rec?.model, width: rec?.width, height: rec?.height, params: rec?.params, warnings,
         ...(job.result.length > 1 ? { more: job.result.slice(1).map((x) => ({ id: x.id, file: fileOf(x.id) })) } : {}),
       };
     },

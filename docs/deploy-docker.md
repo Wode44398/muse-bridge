@@ -7,7 +7,7 @@
 ## 1. 安装
 
 ```bash
-git clone https://github.com/Wode44398/claude-bridge.git bridge && cd bridge
+git clone https://github.com/Wode44398/bridge.git bridge && cd bridge
 cp .env.example .env
 nano .env                    # 至少看一眼第 0 段「给谁用」；Claude 认证也可以装好后在设置里加
 docker compose up -d --build
@@ -44,8 +44,10 @@ docker compose exec bridge node src/cli.mjs pair --origin=http://192.168.1.10:87
 | | `BRIDGE_PUBLIC_ORIGIN` | 你的公网地址（如 `https://bridge.example.com`），分享链接与配对二维码用它 |
 | | `TUNNEL_TOKEN` | Cloudflare 隧道侧车容器用（第 4 节） |
 | 3–4 可选功能 | dimensio 厂商 key、Vertex | 留空就是不开；Vertex 凭据也可以登录后在「设置 › Agent › Vertex」里上传，不用改这里 |
+| 5 Codex | `BRIDGE_CODEX_CLI_DOWNLOAD` / `BRIDGE_CODEX_CLI_SOURCES` | 留空 = Codex 运行组件第一次用到时自动下载（第 3 节）；`0` = 不下载；镜像站 URL 模板逗号分隔、排在官方源前面 |
 | 构建 | `WITH_OFFICE` | `1` = 装 LibreOffice，Office 文档能在线预览（镜像约大 600MB） |
 | | `WITH_CLAUDE_CLI` | 见第 3 节 |
+| | `WITH_CODEX_CLI` | 见第 3 节 |
 
 改完 `.env` 运行 `docker compose up -d` 生效（构建选项要加 `--build`）。
 
@@ -55,6 +57,12 @@ docker compose exec bridge node src/cli.mjs pair --origin=http://192.168.1.10:87
 
 - 服务器连不上 npm 源：`.env` 里设 `WITH_CLAUDE_CLI=1` 后 `docker compose up -d --build`，构建时就把它留在镜像里（自己构建、自己用）。
 - 关掉自动下载：`config.json` 里 `"claudeCliDownload": false`，再用 `"claudeCliPath"` 指向你放进卷里的二进制。
+
+ChatGPT · Codex 分页用的 Codex 运行组件（OpenAI 的独立 codex-app-server 发行包，开源，压缩包约 150MB）也不用自己装：第一次用到时服务端从官方源下载到数据卷 `/data/.bin/codex`（先 releases.openai.com，不通或太慢换 GitHub Releases），按固定版本的 sha256 校验，只下一次。加 ChatGPT 账号走设备码登录，先在 ChatGPT 网页「设置 › 安全」里打开设备码登录。
+
+- 服务器连不上这两个源：`.env` 里设 `BRIDGE_CODEX_CLI_SOURCES` 指向镜像站，或设 `WITH_CODEX_CLI=1` 后 `docker compose up -d --build`，构建时就下进镜像（构建机要能连外网）。
+- 服务器完全不能连外网：从 releases.openai.com 或 GitHub Releases（`rust-v0.171.0`）下 `codex-app-server-package-x86_64-unknown-linux-musl.tar.gz`（ARM 机器换成 `aarch64-unknown-linux-musl`），原样放进数据卷 `/data/.bin/codex/`。第一次用到时按同一份固定的 sha256 校验、解开，装好后压缩包自动删掉；设了 `BRIDGE_CODEX_CLI_DOWNLOAD=0` 也认它。
+- 关掉自动下载：`BRIDGE_CODEX_CLI_DOWNLOAD=0`（或 `config.json` 里 `"codexCliDownload": false`）。
 
 ## 4. 从外网访问
 

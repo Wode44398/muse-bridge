@@ -12,6 +12,8 @@ bridge 的功能都是插件：内置功能（定时任务、分享链接、设�
 - `plugins.install_github {repo}` 从 GitHub 装（只装用户点名、信得过的仓库，先确认）；`plugins.check_update {id}` 看有没有新版。
 - 官方插件市场：`plugins.market` 看有哪些、哪些有更新；`plugins.market_install {id, version?}` 装 / 更新（用户没点名要装时先确认）；
   `plugins.rollback {id}` 回退到上一版；`plugins.restore_builtin {id}` 内置功能换回内置版。详见下面「插件市场」。
+- 社区插件市场（任何 bridge 用户投稿、只有自动检查）：`plugins.market` 的 `community` 一块；装用 `plugins.market_install {id, channel:"community", ack?}`，
+  含服务端代码的要先把作者与能力告诉用户、用户同意后才带 `ack:true`。把用户写的插件发出去：`plugins.community_check` → `plugins.community_publish` → `plugins.community_status`。详见下面「社区插件市场」。
 - 授权字段（`type:"user"` + `grant:"chat"`）新选了服务器主机或 Pro 档账号时，`plugins.config` 要带 `confirmGrant: true`——先问用户。
 
 {{ops:plugins}}
@@ -22,7 +24,7 @@ bridge 的功能都是插件：内置功能（定时任务、分享链接、设�
 只有服务器主机能建插件（插件和 bridge 同进程、权限相同）；成员问起就说明要主机来装。
 
 1. **建骨架**：调 `plugins.scaffold {id, name?, description?, panel?, from?, template?}`。缺省在你工作空间下建 `plugins-dev/<id>/` 并登记启用；
-   `panel: true` 带一个控制面板页面；`from: "hello-world"` / `"hello-app"` / `"hello-view"` / `"qq-onebot"` / `"power-tools"` 拿示例整个当起点（id 自动换成新的）；
+   `panel: true` 带一个控制面板页面；`from: "hello-world"` / `"hello-app"` / `"hello-view"` / `"qq-onebot"` / `"power-tools"` / `"workspace-demo"` 拿示例整个当起点（id 自动换成新的）；
    `template: "app-page"` / `"app-view"` / `"app-chat"` 直接生成一个能用的应用骨架（和 from、panel 不能同给）。返回目录与文件清单。
    用户要的是「主页上多一个图标、点开是个应用」（待办、看板、记账、小工具、问答助手……）就用 template，见「做一个应用」。
 2. **改代码**：照本章下面的参考改 `bridge-plugin.json`（名字、配置 schema、`ui`）和 `index.mjs`（`apply(ctx, config)`），用你的文件工具直接写。
@@ -34,7 +36,7 @@ bridge 的功能都是插件：内置功能（定时任务、分享链接、设�
    插件给 Claude 的工具**要下一条消息才出现**（工具集在这一轮开始时就定了），告诉用户「发下一条消息就能用」。
 5. **交付**：告诉用户插件在哪、怎么开关、设置里要填什么；要给别人用就把目录打成 zip（设置 › 功能扩展 › 添加 › 上传 zip），或放到 GitHub 用「GitHub 地址」装。
 
-五个示例的完整代码就在程序目录 `src/plugins/examples/` 下（`hello-world` 最小；`hello-app` 是没有服务端代码的纯页面插件，主页一个图标、点开一个全屏分页；`hello-view` 是声明式应用，不写页面、bridge 按积木画；`power-tools` 用到「改到核心」那一节的事件、钩子、审批策略、卡片工具与界面扩展；`qq-onebot` 用到以账号跑 Claude、收外部推送、托管外部程序、分组表单、状态块、控制面板），不知道某个能力怎么写时先读对应示例。
+六个示例的完整代码就在程序目录 `src/plugins/examples/` 下（`hello-world` 最小；`hello-app` 是没有服务端代码的纯页面插件，主页一个图标、点开一个全屏分页；`hello-view` 是声明式应用，不写页面、bridge 按积木画；`power-tools` 用到「改到核心」那一节的事件、钩子、审批策略、卡片工具与界面扩展；`qq-onebot` 用到以账号跑 Claude、收外部推送、托管外部程序、分组表单、状态块、控制面板；`workspace-demo` 用到「往界面里加东西 › 文件夹」的外观、菜单项、确认框与撤销），不知道某个能力怎么写时先读对应示例。
 聊天平台机器人（QQ、微信、飞书、Telegram……）的完整写法参考官方插件「QQ 机器人」（qqchatbot）：每个聊天一个沙箱、群聊记录、单轮工具发文件、看门狗、每日上限、热更新设置。
 
 ## 接口版本与兼容承诺
@@ -53,13 +55,15 @@ chat  chat.sandbox  chat.tools  chat.format  chat.history  chat.usage  chat.budg
 files  files.rw  share.space  share.chat  process  process.health  webhook  schedule  notify  log.view
 config.hot  config.self  status  action  configOptions  store  panel  panel.config  process.args  sandbox.readDirs  claude.tool  claude.prompt  claude.mcp  agentOp  manual
 models.provide
-events  claude.hook  claude.permission  claude.input  claude.options  tools.agents  tools.agy  net  oauth  models.middleware  tool.card
+events  claude.hook  claude.permission  claude.input  claude.options  tools.agents  tools.agy  tools.codex  net  oauth  models.middleware  tool.card
 replaces  service.priority  notify.channel  auth.provider
 ui.homeCard  ui.workbench  ui.command  ui.composerAction  ui.messageAction  ui.sessionAction  ui.theme
 ui.app  plugin.pageOnly
 page.kv  page.grants  page.chat  page.files  page.nav  page.host
 ui.app.view  ui.refresh  ui.blocks
 ui.fileHandler  ui.command.palette  ui.app.pin  market.app
+ui.workspaceDecor  ui.workspaceAction  ui.refreshDecor  claude.memory  events.agy  prompt.agy.cwd
+ops.call  claude.permission.ask  events.via  claude.permission.agy  claude.ensureProject  claude.input.hint
 ```
 
 ## 插件目录
@@ -190,6 +194,7 @@ bridge 内部模块（`@bridge/core/…` = 程序的 `src/`）技术上能 impor
 | `ctx.http.json(res, status, obj)` / `ctx.http.text(…)` | 回响应 |
 | `await ctx.http.body(req)` | 读 JSON 请求体 |
 | `ctx.bus.publish(key, event)` / `ctx.bus.publishAll(event)` | 往在线页面的实时总线推事件 |
+| `ctx.socket(name, handler, { who? })` | 实时通道：插件页面经 `bridge.socket(name)` 连上来，双向收发文本 / 二进制（见「实时通道」） |
 
 ### 给 Claude
 
@@ -205,9 +210,17 @@ ctx.claude.tool({
 });
 ctx.claude.prompt('一段系统提示');        // 或 (turn) => 字符串；缺省只给主机的会话
 ctx.claude.mcp('my-server', (turn) => ({ type: 'stdio', command: 'node', args: ['server.js'] }));   // 挂现成 MCP
+await ctx.claude.memoryDir('E:\\work\\proj');    // 这个工作目录的 Claude 记忆目录（绝对路径；目录还不存在也给算出来的路径；参数不是绝对路径 → null）
+await ctx.claude.memoryInfo('E:\\work\\proj');   // { dir, exists, index（有没有 MEMORY.md）, files（第一层 .md 篇数，封顶 2000）} | null
+await ctx.claude.ensureProject('E:\\work\\proj', { who, name });   // 确保是这个人的 Claude 项目：已是就返回，不是就建 → { id, name, path, created }
 ```
 
 `turn`：`{ kind: 'chat' | 'routine' | 'plugin', ctx（身份上下文：kind、cwd、sandbox…）, snap, message, sessionId, getGen() }`。
+memoryDir / memoryInfo 的找法同 Claude Code：`.claude/settings.local.json` → `.claude/settings.json` → 用户 settings 的 autoMemoryDirectory，都没有就是 `<配置目录>/projects/<git 主仓库根的键>/memory`；
+第二个参数 `{ who }` 给身份上下文时按那个人的 Claude 配置目录算，缺省按服务器主机。只给位置与篇数，不读内容。能力名 claude.memory。
+ensureProject 和侧栏「新建项目」走同一份代码（路径授权、上限照旧），建了在线的 Claude 侧栏当场重拉；只做加法，不改名、不删。能力名 claude.ensureProject。
+给 agy 的提示（`agents` 含 'agy'）：`turn.cwd` / `turn.sessionId` 是要挂载的那个会话；有插件工具与否都会带上。系统提示只在**挂载会话时**给 agy，
+已挂着的会话拿不到新提示；提示里「不看 cwd 的那部分」变了，agy 常驻进程会在空闲时重启、会话重新挂载时拿到新的；随 cwd 变的部分只对新挂载的会话生效（否则在不同目录的会话间切换会反复重启）。
 快照访客和插件沙箱永远拿不到这些常驻工具。工具集在 Claude 进程起来时定下，插件开关 / 重载后下一条消息自动换新。
 只想给**插件自己发起的那一轮**加工具（机器人「发图到群里」之类），用 `ctx.chat.run({ tools })`，见下。
 
@@ -218,6 +231,18 @@ ctx.agentOp({ name: 'status', title: '一句话', desc: '详细说明', params: 
 ctx.manual('manual');   // 插件目录下 manual/*.md 并入 bridge 项目手册
 ```
 操作名自动加前缀成 `<id 把连字符换成下划线>.status`，同时出现在 `/agent/v1/…`、手册的接口目录和 bridge 里 Claude 的 bridge 工具里。
+
+反过来，插件服务端要用 bridge 现成的**只读**操作（某个文件夹下有哪些 Claude / Antigravity 会话、读一段对话、列项目……）：
+
+```js
+const { sessions } = await ctx.ops.call('sessions.list', { agent: 'agy', limit: 200 }, { who });   // who = list / handler 收到的身份；缺省服务器主机
+const { projects } = await ctx.ops.call('projects.list', {}, { who });
+const { messages } = await ctx.ops.call('sessions.read', { sessionId, limit: 5 }, { who });
+```
+
+- 和 agent 经 HTTP / bridge_call 调的是同一张操作表：参数照操作的 params 校验、按 `who` 这个身份判权限（要哪个 agent 对他开着、要不要主机），返回操作的原样数据（副本）。
+- 只认 `access: 'read'` 的操作；会改东西的（`chat.send`、`routines.create`……）一律拒——替人跑 Claude 用 `ctx.chat`，要用户看得见、批得了的写操作交给 agent 去调。
+- 出错抛 `{ code, message, hint }`（code 同 agent 接口：bad_args / forbidden / not_found / failed …）；快照、分享访客这类非登录身份拒。能力名 ops.call。
 
 ### 插件之间
 
@@ -275,7 +300,7 @@ ctx.events.on('*', (e, name) => ctx.log(name, e.sessionId));   // 全收
 
 | 事件 | 什么时候 | 主要字段 |
 |---|---|---|
-| turn.start | 一轮开始（Claude 主聊天、定时任务、插件代跑、dimensio） | agent（claude / dimensio）、kind（chat / routine / plugin / goal / resume）、owner、sessionId、isNew、model、message |
+| turn.start | 一轮开始（Claude 主聊天、定时任务、插件代跑、dimensio、Antigravity） | agent（claude / dimensio / agy）、kind（chat / routine / plugin / goal / resume）、owner、sessionId、cwd、isNew、model、message |
 | turn.end | 一轮结束 | 同上 + ok、stopped、error、result（回答，截到 8000 字）、costUsd、durationMs、tools |
 | tool.end | Claude 每次工具调用完 | owner、sessionId、tool、input（摘要）、isError、agentId（子 agent） |
 | routine.run | 定时任务跑完 | id、name、ok、sessionId、preview |
@@ -285,6 +310,12 @@ ctx.events.on('*', (e, name) => ctx.log(name, e.sessionId));   // 全收
 | model.request | 模型服务（自定义 API、插件提供的）每次请求 | provider、plugin、model、status、ms、inTok、outTok |
 
 owner：`{ kind: 'admin', login: 'host' }`、`{ kind: 'user', login, id }`、`{ kind: 'sandbox', token }`。事件是事后通知：拿到的是副本，改了不影响 bridge。
+别的 agent 经 bridge 操作 `chat.send` 发给 Claude 的那一轮（不是用户本人发的），Claude 的 turn.start / turn.end 多一个 `via`（`'agy'` / `'dimensio'` / `'codex'`）；
+同一轮的消息改写（`ctx.claude.input`）、提示与钩子拿到的 turn 里也有 `turn.via`。排队之后才发出去的那条不带。能力名 events.via。
+要告诉 Claude「这条不是用户本人说的」，在消息改写里回 `{ hint: '这条来自 Antigravity……' }`：核心把它包进 `<session-hint>` 放在消息最前面，
+模型看得到，会话标题、搜索、历史气泡都不带它（别用 prepend，那会进标题）。能力名 claude.input.hint。
+Antigravity（agent 'agy'，能力名 events.agy）：一次发送 = 一轮，各发一次 turn.start / turn.end（kind 恒为 chat；中途插话、后台子代理回报续接都算在这一轮里；
+排队消息接着跑、后台唤醒各算新的一轮，唤醒的 source 是 'wake'；agy 自己的子代理不发）。新会话的 turn.start 里 sessionId 为空，turn.end 里有；costUsd 恒为 0。
 
 ### 拦截与改写 Claude（ctx.claude.hook / permission / input / options）
 
@@ -300,7 +331,7 @@ ctx.claude.hook('Stop', (input) => (needsMore(input) ? { block: true, reason: '�
 // 审批策略：Claude 要审批时（当前权限模式要求）先问插件，第一个表态的说了算；不表态就照常弹审批卡
 ctx.claude.permission(({ tool, input }) => (tool === 'Bash' && /^git (status|diff|log)\b/.test(input.command) ? 'allow' : undefined));
 
-// 消息改写：只改发给 Claude 的那份（界面上显示的仍是用户原话）
+// 消息改写：只改发给 Claude 的那份（界面上显示的仍是用户原话）；另可回 hint = 只给模型看的旁注（见「订阅 bridge 事件」末尾）
 ctx.claude.input(({ message }) => ({ message: message.replace(/\d{11}/g, '<手机号>'), attachments: ['D:/kb/规范.md'] }));
 
 // 每轮参数
@@ -319,14 +350,22 @@ ctx.claude.options((turn) => ({
   多个插件：deny 优先，input 依次叠，context 拼接。缺省 30 秒时限（`timeout` 改，最长 10 分钟）。
 - 审批策略只在需要审批时被问（绕过权限 / 自动模式下大多数调用根本不问）；要拦**所有**调用用 PreToolUse 钩子。放行越不过计划模式，
   也越不过要用户本人逐次批准的那几样（开自动合并、Auto-fix）。可以慢慢答（比如转去飞书等人点）：缺省等 10 分钟，`timeout` 最长 30 分钟。
+- 审批策略回 `'ask'`（或 `{ ask: true, message }`）= **一定要用户本人批**：照常弹审批卡，绕过权限、bridge 自家工具的免审批都不越过它；
+  无人值守的轮（定时任务、`ctx.chat` 代跑）没人能批，按拒绝处理。绕过权限 / 自动模式下 CLI 根本不来问，所以要配一个同条件的
+  PreToolUse 钩子回 `{ decision: 'ask', reason }` 把调用送进审批（钩子的 reason 会写在卡上）。能力名 claude.permission.ask。
+- **Antigravity 的审批**：`ctx.claude.permission(fn, { agents: ['agy'] })`（缺省只管 Claude；写 `['claude', 'agy']` 两边都管）。agy 的每个审批请求在
+  自动放行（bridge 自家工具免审批、完全放行模式）**之前**先问它：fn 收到 `{ tool: agy 的工具名（如 mcp_bridge_call）, input: 工具参数, title, agent: 'agy', sessionId }`
+  与 turn（`turn.agent === 'agy'`、`turn.cwd` = 会话目录）。回值同上：allow 直接放、deny 直接拒、'ask' 完全放行也弹卡；后台唤醒这类没人在的轮 'ask' 按拒绝。
+  只按工具名与参数判断，别看 title（agy 跑命令时 title 就是命令原文）。agy 单次工具调用有 180 秒硬上限，策略最多等 30 秒，超时当没表态。能力名 claude.permission.agy。
 - who：`'host'`（缺省）/ `'members'`（成员的会话也管）/ `'all'`（再加插件沙箱跑的轮）。
 - 钩子、子 agent、env、附加目录在 Claude 进程起来时就定了：插件改了这些，下一条消息自动冷起新进程。
 
-### 两个 agent 都给的工具（ctx.tools.add）
+### 各 agent 都给的工具（ctx.tools.add）
 
-`ctx.tools.add(spec)` 写法同 `ctx.claude.tool`，缺省 Claude、dimensio、Antigravity 都给；`ctx.claude.tool` / `ctx.claude.prompt` 也可以写 `agents: ['claude', 'dimensio', 'agy']` 里的任意几个。
+`ctx.tools.add(spec)` 写法同 `ctx.claude.tool`，缺省 Claude、dimensio、Antigravity、ChatGPT（Codex）都给；`ctx.claude.tool` / `ctx.claude.prompt` 也可以写 `agents: ['claude', 'dimensio', 'agy', 'codex']` 里的任意几个。
 dimensio 那边是一个叫「bridge 插件」的连接器（模型看到 `mcp__bridge_plugins__<插件>__<工具>`），新会话生效；`access: 'read'` 的免审批。
 Antigravity 那边并进 bridge 自带的工具服务（模型看到 `mcp_bridge_plugin_<插件>_<工具>`，名字里的连字符换成下划线），设置里「插件工具」开着才给，`access: 'read'` 的免审批。
+Codex 那边并进 bridge 的工具中枢（命名空间 `bridge_plugins`，工具名 `<插件>_<工具>`，连字符换成下划线），清单在建会话时定下、新会话生效；`access: 'read'` 的免审批；`ctx.claude.prompt` 带 `agents` 含 `codex` 的说明并进 Codex 的开发者说明。翻修前建的老会话（没有工具中枢）是一个叫 `bridge_plugins` 的 stdio MCP 服务，只给服务器主机的会话。能力名 `tools.codex`。
 
 工具结果画成卡片：工具 spec 写 `render: 'card'`，handler 回 `{ card: { title, subtitle, fields: [{ label, value }], image, link: { url, label }, markdown, tone }, text }`——
 界面上是一张卡片，模型看到 text（没给就是卡片的文字摘要）。image / link 只收 http(s) 与站内地址。
@@ -386,6 +425,7 @@ ctx.auth.provider({
 ```js
 ctx.ui.homeCard({ id: 'oncall', title: '值班', icon: 'users', order: 1, data: async (who) => ({ text: '今天：小王', tone: 'ok', items: [{ label: '电话', value: '1234' }], badge: '3' }), open: 'panel' });
 ctx.ui.workbench({ id: 'board', title: '看板', page: 'web/board.html' });   // Claude 工作台多一个标签（插件页面；SDK 的 bridge.context() 拿当前会话）
+ctx.ui.workbench({ id: 'dev', title: '设备', icon: 'android', page: 'web/dev.html', hosts: 'all' });   // 各分页的工作区都有这张卡（见下）
 ctx.ui.command({ name: 'standup', description: '写站会', template: '总结一下今天做了什么：' });          // 「/」菜单：插模板
 ctx.ui.command({ name: 'ticket', description: '开工单', handler: (who, { args, sessionId }) => ({ toast: '已开：' + args }) });
 ctx.ui.composerAction({ id: 'tmpl', label: '插入模板', handler: () => ({ insert: '……' }) });        // 输入框「＋」菜单
@@ -403,6 +443,85 @@ ctx.ui.fileHandler({ id: 'csv', title: 'CSV 查看器', exts: ['csv'], app: 'inb
 - 主页卡片的 data 每次打开主页现算，3 秒没回就只显示标题；`open`：`'panel'`（插件控制面板）、`{ action: 'id' }`（ctx.action 的按钮）、`{ url }`。
 - who：`'host'`（缺省）/ `'members'`。英文界面：插件 `locales/en.json` 的 `ui.<种类>.<id>.<字段>`（如 ui.homeCard.oncall.title、ui.command.standup.description）。
 - 登记变了，在线页面当场刷新；手机 App 里工作台标签点开是独立的干净页面。
+
+#### 文件夹（ctx.ui.workspaceDecor / workspaceAction / refreshDecor）
+
+给 Antigravity 的工作空间、Claude 的项目（统称文件夹，按绝对路径认）加外观和菜单项。同一份声明，两个分页各按自己的设计语言画。完整示例见 `workspace-demo`。
+
+```js
+ctx.ui.workspaceDecor({
+  id: 'collab', who: 'host', agents: ['agy', 'claude'],          // agents 缺省两个分页都画
+  list: async (who, { agent }) => [{                              // agent = 正在取外观的分页
+    path: 'E:\\work\\proj',                                       // 绝对路径（必填）；Windows 不分大小写、去尾斜杠
+    panel: true, peers: ['agy', 'claude'], busy: ['claude'],      // 收进底板、画谁的标识、谁在这里干活
+    note: '与 Antigravity 共用 · 记忆 214 篇',                      // ≤60；Claude 侧写在项目名下（不给就不写），Antigravity 侧放进悬停卡
+    open: { folder: { agent: 'agy', path: 'E:\\work\\proj' } },  // 点文件夹上的标识（Claude 侧方块 / Antigravity 侧头像组）去哪；不给就不跳
+    status: { agent: 'claude', text: '正在出 apk', since: Date.now(), open: Target },   // since = 开始时间，前端自己走秒
+    footer: { icon: 'book', text: '共用记忆 214 篇', open: Target },
+    card: { title, subtitle, sections: [{ label, link: { label, open: Target }, rows: [{ icon, agent, live, text, meta, since, mono, open: Target }] }], foot: { text, link } },
+    sessions: [{ agent: 'agy', id: '<会话 id>', by: 'claude' }],              // 本页会话行首标「谁开的」
+    peerSessions: [{ agent: 'agy', items: [{ id, title, meta, live }] }],     // 在本页这个文件夹下列出别的 agent 的会话
+  }],
+});
+ctx.ui.workspaceAction({
+  id: 'collab-on', label: '设为协作工作空间', icon: 'claude',        // icon 另认 'claude' / 'agy'（画该 agent 的单色标志）
+  who: 'host', agents: ['agy'], when: 'plain', decor: 'collab',      // when：always（缺省）/ decorated（这个文件夹有本插件的 decor 外观才出现）/ plain（反之）
+  danger: false,
+  dialog: (who, { path, agent }) => ({ title, subtitle, hero: { peers: ['agy', 'claude'] },
+    sections: [{ label, items: [{ icon, agent, title, desc, chip: { ok, code, text } }] }],
+    fields: [{ id: 'askFirst', type: 'switch', label, desc, value: false }],
+    ok: '设为协作空间', cancel: '取消', danger: false, extra: { label: '取消协作', action: 'collab-off', danger: true } }),
+  handler: (who, { path, projectId, agent, values }) => ({ toast: '好了', decorChanged: true, undo: { label: '撤销', action: 'collab-off' } }),
+});
+ctx.ui.refreshDecor('collab');            // 外观的数据变了：在线页面重拉（{ who } 只推那个人）
+```
+
+- **Target**（点了去哪）只认五种，其余丢掉：`{ action: '<本插件的 workspaceAction id>' }`（跑那个动作，带上这个文件夹）、
+  `{ session: { agent: 'claude' | 'agy', id } }`（跨分页打开那个会话）、`{ folder: { agent: 'claude' | 'agy', path } }`（到那个分页的这个文件夹：
+  那边正停在这里就不动，否则打开那边在这里正在跑的会话 → 这里最近的会话 → 在这里开新对话）、`{ file: { rel, ws? } }`、`{ url }`（http(s) 或站内 / 开头）。
+- 限额：每个 decor 50 个路径（同一路径只留第一条）、card 4 节 × 每节 8 行、sessions 200、peerSessions 每个 agent 20 条；对话框 4 节 × 6 项、开关 4 个（v1 只有 switch）。
+  文字一律截断、去换行（note / status 60、footer 80、卡片标题 40、副标题 120、行 80、行尾 30；对话框标题 40、副标题与说明 120、按钮 20）。agent 字段只认 'agy' / 'claude'。
+- list、dialog 3 秒封顶，handler 60 秒；出错只写插件日志：list 出错这个外观当作空；dialog 出错这一下不执行（不会跳过确认直接跑 handler）。
+- handler 的 values 只有 dialog 里声明过的开关（布尔），没传的取开关的缺省值；没有 dialog 的动作 values 是 {}。handler 回字符串（当提示）或
+  `{ toast, open: 'panel' | 网址 | Target, decorChanged: true, undo: { label, action } }`：前端执行完总会重拉一次外观，同一个人的别的设备也会收到重拉通知；
+  undo 在提示条上放一个按钮，按下直接跑那个动作（不弹它的确认框，开关取缺省值）。
+- when / agents 只管菜单里出不出现；按 Target、undo、对话框的 extra 跑一个动作不看它们，只看 who。
+- 同一个文件夹有好几个插件给外观时，按插件 id 排序取第一个画。英文界面：菜单项文字取 `locales/en.json` 的 `ui.workspaceAction.<id>.label`；外观与对话框里插件给的动态文字不翻译。
+
+### 工作区卡片进哪些分页（ctx.ui.workbench 的 hosts）
+
+- `hosts`：`'claude'`（缺省，同四期）/ `'codex'`（ChatGPT 分页）/ `'agy'`（Antigravity）/ `'dimensio'`，可写数组，`'all'` = 全部。
+  卡片挂在工作区第二列末尾、收进工具开关的「更多」；快照访客没有。
+- `bridge.context()` 按所在分页给：`{ sessionId, cwd, agent }`，agent 是 `claude` / `codex` / `antigravity` / `dimensio`；切会话、换工作目录时 `bridge.on('context')` 再推一次。
+- 手机 App 里点开是独立的干净页面（各分页同一条路）。
+- 图标名（`icon`）只认内置的一组线条图标，包括 `plugin` `phone` `android` `terminal` `globe` `robot` `chart` 等（同应用的内置图标）。
+- 能力名 `ui.workbench.hosts`。
+
+### 实时通道（ctx.socket / bridge.socket）
+
+插件页面要持续收发数据（画面流、日志流、连续的触摸 / 键盘事件）时用它，比轮询接口、`ctx.bus.toPage` 推 JSON 快得多，也能传二进制。
+
+```js
+// 服务端
+ctx.socket('stream', (sock, who, query) => {
+  // who = 连接者的身份上下文（同 ctx.http.user）；query = 页面连接时带的参数（URLSearchParams）
+  const t = setInterval(() => { if (sock.bufferedAmount < 1e6) sock.sendBinary(frame()); }, 33);   // 积压太多就先别发
+  sock.onJson((m) => handle(m));          // 也有 onText(str) / onBinary(buf)
+  sock.onClose(() => clearInterval(t));
+  sock.sendJson({ type: 'hello' });       // send(text) / sendJson(obj) / sendBinary(buf) / close(code?, reason?) / open
+}, { who: 'host' });                     // 缺省 host：只有服务器主机能连；'members' = 能用这个插件页面的成员也能连
+
+// 页面
+const ws = await bridge.socket('stream', { serial: 'emulator-5554' });   // 标准 WebSocket，binaryType = 'arraybuffer'
+ws.onmessage = (e) => (typeof e.data === 'string' ? JSON.parse(e.data) : new Uint8Array(e.data));
+ws.send(JSON.stringify({ t: 'tap', x: 0.5, y: 0.5 }));
+```
+
+- 鉴权：页面先经 SDK 的普通请求（嵌入时宿主代发、独立时带插件票据）换一张 30 秒、只能用一次的连接票，再直连
+  `/api/plugin/<id>/_ws/<name>?t=<票>`；身份 = 换票的人。插件停用时端点撤掉、连接全部关闭（1001）。
+- 断了不自动重连：要不要重连、怎么补状态跟业务走，页面自己再调一次 `bridge.socket`。
+- 一个插件同时最多 64 条连接；页面发上来的单条消息最多 8 MB。经隧道时有 20 秒一次的心跳，空闲连接不会被掐。
+- 能力名 `socket`（服务端）、`page.socket`（页面：`bridge.can('socket')`）；页面下载 `bridge.download` 是 `page.download`。
 
 ## 以某个身份做事（ctx.chat / sandbox / files / share）
 
@@ -545,6 +664,8 @@ ctx.notify({ title: 'QQ 掉线了', body: '到 WebUI 扫码', level: 'warn' }); 
   bridge.onStatus((s) => …);                         // 状态块更新
   bridge.toast('已保存'); await bridge.confirm({ title: '清空？', danger: true });
   img.src = await bridge.blobUrl('image?id=1');      // 要登录才拿得到的图片
+  const ws = await bridge.socket('stream', { id: 3 });  // 实时通道（插件 ctx.socket 登记的端点）：标准 WebSocket，见「实时通道」
+  await bridge.download('export?id=1', 'a.csv');      // 下载插件接口给的文件：嵌入时由宿主存（桌面壳 / 手机 App 走原生下载器）
   bridge.openExternal(url); bridge.back();
   bridge.go('detail.html?id=3');                     // 跳到本插件别的页面（保留 bridge 给的 #，见下）
 </script>
@@ -1157,15 +1278,16 @@ ctx.ui.app({ id: 'board', title: '看板', page: 'web/board.html', pin: 'sidebar
 - **GitHub 地址**：功能扩展 › 添加 › GitHub 地址，填 `owner/repo`、`owner/repo@ref` 或仓库网址。没写 ref 装最新 Release
   （有 .zip 资产用资产，没有用该 tag 的源码包），没发过 Release 用默认分支。详情页「检查更新」比最新 Release 的版本号。
   只从 github.com / codeload / 资产域下载，重定向逐跳校验，包最大 50MB。
-- **插件市场**：见下一节。
+- **插件市场**：见下一节；任何人都能投稿的**社区插件市场**见再下一节。
 - **agent 接口**：`plugins.list` / `plugins.status` / `plugins.toggle` / `plugins.config` / `plugins.action` / `plugins.scaffold` / `plugins.link` / `plugins.reload` /
-  `plugins.install_github` / `plugins.check_update` / `plugins.uninstall` / `plugins.market` / `plugins.market_install` / `plugins.rollback` / `plugins.restore_builtin`。
+  `plugins.install_github` / `plugins.check_update` / `plugins.uninstall` / `plugins.market` / `plugins.market_install` / `plugins.rollback` / `plugins.restore_builtin` /
+  `plugins.community_account` / `plugins.community_check` / `plugins.community_publish` / `plugins.community_status`。
 
 开关和配置存在数据根的 `plugins.json`；装的插件在 `plugins/<id>/`；插件数据在 `plugin-data/<id>/`。
 
 ## 插件市场
 
-设置 › 扩展 › 功能扩展里的「插件市场」：bridge 官方发布的插件（目前只上架官方的，不收第三方）。不用升级 bridge 就能装新插件、更新插件，
+设置 › 扩展 › 功能扩展里的「插件市场」分「官方」与「社区」两栏。这一节讲官方：bridge 官方发布的插件，第三方作者的插件在社区那一栏（见下一节）。不用升级 bridge 就能装新插件、更新插件，
 **也能更新内置功能**。
 
 - 市场是一份签过名的索引（仓库 Wode44398/bridge-plugins 的 Release「index」），列出每个插件的各个版本：下载地址、sha256、大小、engines、更新说明。
@@ -1181,6 +1303,39 @@ ctx.ui.app({ id: 'board', title: '看板', page: 'web/board.html', pin: 'sidebar
 - 内置功能的 id 只有市场能占：上传 zip / GitHub 装同名包一律拒绝。
 - `config.json` 的 `pluginMarket: false` 关掉市场；`pluginMarket.index` / `pluginMarket.publicKeys` 换成自建市场（给了公钥就只认它们）。
 - 发布端（打包、签名、上传）在市场仓库里，`node scripts/publish.mjs`；只在用户说「发布插件」时跑。
+
+## 社区插件市场
+
+任何 bridge 用户都能把自己的插件发上来，别的 bridge 用户在「插件市场 › 社区」里看到、安装。**只有自动检查，没有人工审核**——
+给用户装之前、替用户发布之前都要把这一点说清楚。
+
+**装的人这边**
+- 社区索引是另一个签过名的文件（仓库 Wode44398/bridge-plugins 的 Release「community-index」），用另一把钥匙签；条目带
+  `publisher`（作者的 GitHub 账号，权威身份）、每个版本的 `kind` 与 `caps`：
+  - `kind: "page"` 纯页面插件：没有服务端代码，只在沙箱页面里跑，用到对话、文件时还会单独问使用者；
+  - `kind: "server"` 含服务端代码：在这台服务器上以 bridge 的**全部权限**运行（能读写服务器上的文件、用账号）。
+    `caps` 是自动检测到的能力：process 运行外部程序、network 访问网络、files 读写服务器上的文件、env 读环境变量、core 调用 bridge 内部模块。
+- 装 `kind: "server"` 的社区插件必须带 `ack: true`；没带回 needAck（里面有作者、能力的中文标签）。agent 只能在用户看过这些、明确同意后带 ack。
+- 社区插件永远不能盖内置功能，也不能用官方插件的 id；同一个 id 官方与社区都有时只认官方。
+- **下架**：维护者可以吊销某些版本或整个插件。bridge 拉到索引后，已装的被吊销版本**自动停用**并提醒主机，之后不能再启用（toggle 回 conflict），
+  也不能回退到被吊销的版本；卸载它，或装一个没被吊销的新版（装上后开关自动恢复）。条目里的 `report` 是举报链接（GitHub issue）。
+- `config.json` 的 `pluginMarket.community: false` 只关社区市场；`pluginMarket.community.index` / `publicKeys` 换成自建的社区索引。
+
+**发布的人这边**（只有服务器主机能发）
+- 设置 › 扩展 › 功能扩展 › 插件详情 › 「发布到社区」：自己装的或本机开发目录里的插件都能发。用作者自己的 GitHub 账号：
+  这台电脑 gh 登录过就直接用；否则在面板里用 GitHub 设备码登录，或粘贴一个有 public_repo 权限的令牌（令牌只存在服务器上，不经过对话）。
+- 流程：本地预检（与市场仓库 CI 同一份规则）→ 以作者的账号 fork 市场仓库、把插件目录提交到 `community/<id>/`、开拉取请求 →
+  CI 自动检查，通过就自动合并、打包、签名上架（几分钟）；没通过会在拉取请求里留言写原因，改完重新发布即可（同一个拉取请求会更新）。
+- 规则（不通过就上不了架）：
+  - 文件 ≤300 个、单个 ≤2 MB、合计 ≤8 MB；只收代码、文本、网页、图片、字体；不许 node_modules（依赖写成纯 JS 放进插件目录）、点开头的文件；
+  - 清单 id 与目录名一致、version 写成 x.y.z 且比已上架的大、要写 `engines.pluginApi`；不许 `replaces`（社区插件不能接管 bridge 自带的入口）；
+  - 要有这一版的更新说明（发布面板里填，或插件目录里的 market.json：`{"notes": {"1.0.0": "…"}, "nameEn": "…", "descriptionEn": "…"}`）；
+  - 服务端代码（web/ 以外的 .mjs / .js / .cjs）要能读：不许压缩、混淆、内嵌大段编码数据；不许 `eval`、`new Function`、`vm`、
+    `createRequire`、`WebAssembly`，`import()` / `require()` 的参数必须是写死的字符串；
+  - 插件 id 先到先得、绑首个投稿者的 GitHub 账号，之后只有本人能发新版本；内置功能、agent 扩展、官方插件的名字和 `bridge-` / `official-` 开头的 id 不给用。
+- agent 替用户发布：`plugins.community_account` 看有没有登录（没有就请用户去面板里登录）→ `plugins.community_check {id, notes}` 修到 ok →
+  用户确认要公开发布后 `plugins.community_publish {id, notes}` → `plugins.community_status {id}`（checking 检查中 / failed 没通过 / merged 已合并 / live 已上架）。
+- 每个版本的包由 CI 从源码确定性打包，sha256 写进签名索引：作者事后改不了已上架的包，任何人都能从仓库里的源码复现同一个 sha256。
 
 ## 内置插件
 

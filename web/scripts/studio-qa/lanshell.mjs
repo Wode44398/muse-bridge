@@ -121,7 +121,7 @@ try {
   })();` });
   await pg.send('Page.navigate', { url: 'https://appassets.androidplatform.net/app/index.html' });
   // 等首页
-  await pg.eval(`(async () => { for (let i = 0; i < 300; i++) { if (document.readyState === 'complete' && !document.documentElement.hasAttribute('data-booting') && [...document.querySelectorAll('img')].some((x) => x.src.includes('/icons/studio-') && x.getBoundingClientRect().width > 0)) return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()`, { timeout: 40000 });
+  await pg.eval(`(async () => { for (let i = 0; i < 300; i++) { if (document.readyState === 'complete' && !document.documentElement.hasAttribute('data-boot') && [...document.querySelectorAll('img')].some((x) => x.src.includes('/icons/studio-') && x.getBoundingClientRect().width > 0)) return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()`, { timeout: 40000 });
   if (MODE === 'lan') {
     // 等局域网探活通过（后续 /api 请求开始走 lan.test）
     for (let i = 0; i < 60 && !result.hosts[LAN]; i++) await sleep(250);

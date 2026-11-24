@@ -2,7 +2,7 @@
 // 下半截彩虹缓缓流动；闪烁照系统 1060ms 硬闪（demo：前端设计/agy-caret/v5-官方对比.html 的 B2）。
 // 原生光标用 caret-color: transparent 藏起来，由这里画的 .agy-caret 接管；形状与动画全在 theme.css。
 // 定位：1em = 字形高（font-size 设成它，同原生光标），水平以插入点为中心。
-// 用法：<textarea use:glowCaret>，textarea 的父元素必须是定位容器（.agy-cbox）。样式在 theme.css。
+// 用法：<textarea use:glowCaret>，textarea 的直接父元素必须是定位容器（如 .agy-input-wrap）。样式在 theme.css。
 
 const COPY = [
   'boxSizing', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
@@ -71,7 +71,7 @@ export function glowCaret(ta) {
   const schedule = () => { if (!raf) raf = requestAnimationFrame(place); };
   const onSel = () => { if (document.activeElement === ta) schedule(); };
 
-  const evs = ['focus', 'blur', 'input', 'scroll', 'compositionupdate', 'compositionend'];
+  const evs = ['focus', 'blur', 'input', 'scroll', 'compositionstart', 'compositionupdate', 'compositionend'];
   for (const e of evs) ta.addEventListener(e, schedule);
   document.addEventListener('selectionchange', onSel);
   const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(schedule) : null;

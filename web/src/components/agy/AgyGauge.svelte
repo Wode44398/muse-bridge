@@ -15,9 +15,11 @@
     dot = null,     // 0–100，指示点位置（5 小时额度已用）；null = 不画点也不镂空
     value = null,   // 0–100，中间数字（上下文占用）；null = 还没有上下文：不写数字，模式图标居中放大
     mode = 'default',
+    charge = 0,     // 0–1，长按录音蓄力弧进度（沿 270° 原轨顺时针蓄满）
   } = $props();
 
   const CX = 36, CY = 35.4, R = 26, A0 = 135, SWEEP = 270;
+  const ARC_LEN = (SWEEP / 360) * 2 * Math.PI * R;
   const pt = (deg) => [CX + R * Math.cos((deg * Math.PI) / 180), CY + R * Math.sin((deg * Math.PI) / 180)];
   function arc(a, b) {
     const [x0, y0] = pt(a), [x1, y1] = pt(b);
@@ -50,6 +52,10 @@
   const isBig = $derived(Math.max(14, 30 * k));
   const icoScale = $derived(hasValue ? is / isBig : 1);
   const icoTop = $derived((hasValue ? 56.5 : 37.5) * k);
+  const chargeClamped = $derived(Math.max(0, Math.min(1, Number(charge) || 0)));
+  const charging = $derived(chargeClamped > 0.01);
+  const chargeDash = $derived(`${(chargeClamped * ARC_LEN).toFixed(2)} ${ARC_LEN.toFixed(2)}`);
+  const innerDim = $derived(charging ? (1 - chargeClamped * 0.55).toFixed(3) : null);
 </script>
 
 <span class="agy-gauge" style:width="{size}px" style:height="{size}px" aria-hidden="true">
@@ -66,10 +72,13 @@
       <path class="g-track" d={TRACK} />
       {#if fillD}<path class="g-fill {fillLevel}" d={fillD} />{/if}
     </g>
+    {#if charging}
+      <path class="g-charge" d={TRACK} fill="none" stroke-width="6.2" stroke-linecap="round" stroke-dasharray={chargeDash} />
+    {/if}
     {#if hasDot}<circle class="g-dot {dotLevel}" cx={dotPt[0]} cy={dotPt[1]} r={dotR} />{/if}
   </svg>
-  <span class="g-num {valueLevel}" class:none={!hasValue} style:font-size="{fs}px" style:top="{34.5 * k}px">{shown}{#if hasValue && shown.length < 3}<small>%</small>{/if}</span>
-  <span class="g-ico" class:solo={!hasValue} style:top="{icoTop}px" style:--g-ico-s={icoScale}><AgyModeIcon {mode} size={isBig} /></span>
+  <span class="g-num {valueLevel}" class:none={!hasValue} style:font-size="{fs}px" style:top="{34.5 * k}px" style:opacity={hasValue ? innerDim : null}>{shown}{#if hasValue && shown.length < 3}<small>%</small>{/if}</span>
+  <span class="g-ico" class:solo={!hasValue} style:top="{icoTop}px" style:--g-ico-s={icoScale} style:opacity={innerDim}><AgyModeIcon {mode} size={isBig} /></span>
 </span>
 
 <style>
@@ -79,7 +88,7 @@
     flex: none;
     color: var(--ag-on-sub);
   }
-  svg {
+  .agy-gauge > svg {
     position: absolute;
     inset: 0;
     width: 100%;
@@ -88,6 +97,7 @@
   }
   .g-track { stroke: currentColor; stroke-opacity: 0.14; }
   .g-fill { stroke: currentColor; stroke-opacity: 0.42; }
+  .g-charge { stroke: var(--ag-accent-fill); stroke-opacity: 0.96; }
   .g-fill.warn { stroke: var(--ag-warn); stroke-opacity: 0.7; }
   .g-fill.err { stroke: var(--ag-err); stroke-opacity: 0.8; }
   .g-dot { fill: var(--ag-on); }

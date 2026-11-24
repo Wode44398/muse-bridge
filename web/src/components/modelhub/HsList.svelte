@@ -4,6 +4,7 @@
   // 键盘焦点用 aria-activedescendant 指在行上（行本身不进 Tab 序列），↑↓ / Home / End 移动、空格 / 回车勾选。
   // 已添加的行名字用重字（其余常规字重），几百行里一眼能挑出来；pinN > 0 时前 pinN 行是置顶的已添加段，段后画一道分隔。
   // 行尾的小按钮（11-15）：提示缓存时长、调用配置（改过的写「已自定义」、用正文色）；手动添加的模型标「手动」、带删除。
+  // 改备注名（11-23）：已添加的行尾一支铅笔（悬停整行才显），点了名字就地变成输入框；回车 / 失焦保存，Esc 放弃，清空 = 恢复识别到的原名。
   import { untrack } from 'svelte';
   import BrandLogo from './BrandLogo.svelte';
   import AgentStack from './AgentStack.svelte';
@@ -14,7 +15,7 @@
   let {
     rows = [], picked, onpick, busy = false, filtered = false, onclearfilters,
     revealKey = '', narrow = false, listId = 'hs-list', label = '',
-    onmanual, manualOk = true, pinN = 0, oncache, onadv, ondel,
+    onmanual, manualOk = true, pinN = 0, oncache, onadv, ondel, onrename,
   } = $props();
 
   let box = $state();
@@ -66,14 +67,17 @@
     bump(el);
   }
   function click(e) {
-    // 行里的小按钮（缓存时长 / 调用配置 / 删除手动添加的）：各开各的，不勾选这一行
-    const cb = e.target.closest?.('.cache, .adv, .del');
+    // 正在改名的输入框：点里面是在编辑文字，不勾选
+    if (e.target.closest?.('.rin')) return;
+    // 行里的小按钮（缓存时长 / 调用配置 / 改备注名 / 删除手动添加的）：各开各的，不勾选这一行
+    const cb = e.target.closest?.('.cache, .adv, .ren, .del');
     if (cb && box?.contains(cb)) {
       const i = Number(cb.closest('[data-i]')?.dataset.i);
       const r = rows[i];
       if (!r) return;
       if (cb.classList.contains('cache')) oncache?.(r.id, cb.getBoundingClientRect());
       else if (cb.classList.contains('adv')) onadv?.(r.id);
+      else if (cb.classList.contains('ren')) startRename(r);
       else ondel?.(r.id);
       return;
     }
@@ -118,6 +122,45 @@
     if (fi < 0 && rows.length) fi = 0;
   }
 
+  // —— 改备注名：同一时间只改一行 ——
+  let renId = $state('');
+  let renVal = $state('');
+  let renErr = $state('');
+  let renBusy = $state(false);
+  let renInput = $state();
+  function startRename(r) {
+    if (!onrename || !r.ren) return;
+    renId = r.id;
+    renVal = r.label && r.label !== r.id ? r.label : '';
+    renErr = '';
+  }
+  function endRename(refocus) {
+    renId = ''; renVal = ''; renErr = '';
+    if (refocus) box?.focus({ preventScroll: true });
+  }
+  async function commitRename(refocus) {
+    const id = renId;
+    if (!id || renBusy) return;
+    const r = rows.find((x) => x.id === id);
+    const val = renVal.trim();
+    const cur = r && r.label && r.label !== r.id ? r.label : '';
+    // 没改，或清空时本来就是原名：不发请求
+    if (!r || val === cur || (!val && cur === r.orig)) { endRename(refocus); return; }
+    renBusy = true;
+    try {
+      const err = await onrename(id, val);
+      if (renId !== id) return;
+      if (err) { renErr = err; renInput?.focus(); }
+      else endRename(refocus);
+    } finally { renBusy = false; }
+  }
+  function renameKey(e) {
+    if (e.isComposing) return;
+    if (e.key === 'Enter') { e.preventDefault(); commitRename(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); endRename(true); }
+  }
+  $effect(() => { if (renId && renInput) { renInput.focus(); renInput.select(); } });
+
   // —— 手动添加模型 ID：一行低调的文字按钮，点了就地变成输入框，回车加进当前种类 ——
   let adding = $state(false);
   let mid = $state('');
@@ -160,15 +203,25 @@
       {/if}
       <span class="vlg"><BrandLogo plain size={22} logo={r.vLogo} name={r.vName || r.id} /></span>
       <span class="tx">
-        <span class="nm" class:mono={same} title={same ? r.id : r.label}>{same ? r.id : r.label}</span>
+        {#if renId === r.id}
+          <span class="rin" class:bad={!!renErr} title={renErr || undefined}>
+            <input bind:this={renInput} bind:value={renVal} type="text" maxlength="80" autocomplete="off" spellcheck="false" enterkeyhint="done"
+              placeholder={r.orig || t('备注名（留空只显示 ID）')} aria-label={t('{model} 的备注名', { model: r.id })} aria-invalid={renErr ? 'true' : undefined}
+              disabled={renBusy} onkeydown={renameKey} oninput={() => { renErr = ''; }} onblur={() => commitRename(false)} />
+          </span>
+        {:else}
+          <span class="nm" class:mono={same} title={same ? r.id : r.label}>{same ? r.id : r.label}</span>
+        {/if}
         <span class="sub">
-          {#if !same}<span class="id" title={r.id}>{r.id}</span>{/if}
+          {#if !same || renId === r.id}<span class="id" title={r.id}>{r.id}</span>{/if}
           {#if r.ctx || r.manual}<span class="ctx">{#if r.manual}<span class="mt" title={t('手动添加的模型 ID（接口没列出它）')}>{t('手动')}</span>{/if}{#if r.ctx}<span title={t('上下文')}>{r.ctx}</span>{/if}</span>{/if}
-          {#if (r.cache && oncache) || (r.adv && onadv)}<span class="rb">
+          {#if (r.cache && oncache) || (r.adv && onadv) || (r.ren && onrename)}<span class="rb">
+            {#if r.ren && onrename}<button type="button" class="ren" class:hide={renId === r.id} tabindex="-1" title={t('改备注名')} aria-label={t('改备注名')}>{@html svg(G.pen)}</button>{/if}
             {#if r.cache && oncache}<button type="button" class="cache" class:set={r.cache.set} title={r.cache.title} aria-label={r.cache.title} tabindex="-1">
               <svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.6" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 3.4V6l1.7 1.1" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>{r.cache.text}</button>{/if}
             {#if r.adv && onadv}<button type="button" class="adv" class:set={r.custom} tabindex="-1"
-              title={r.custom ? t('调用配置：已自定义（上下文、思考写法或调用参数改过）') : t('调用配置：上下文、输出上限、思考写法、温度等')}
+              title={r.media ? (r.custom ? t('调用配置：已自定义（补过参数或写了调用配方）') : t('调用配置：补参数、调用配方、预演与试跑'))
+                : r.custom ? t('调用配置：已自定义（上下文、思考写法或调用参数改过）') : t('调用配置：上下文、输出上限、思考写法、温度等')}
               aria-label={r.custom ? t('调用配置（已自定义）') : t('调用配置')}>
               <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1.5 3.5h5M9.5 3.5h1M1.5 8.5h1.5M6 8.5h4.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="8" cy="3.5" r="1.4" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="4.5" cy="8.5" r="1.4" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>{#if r.custom}{t('已自定义')}{/if}</button>{/if}
           </span>{/if}
@@ -280,6 +333,22 @@
   .row:hover .del, .row.fo .del { opacity: 1; }
   @media (hover: hover) { .del:hover { background: var(--st-hover); color: var(--pm-red); } }
   @media (hover: none) { .del { opacity: .7; } }
+  /* 改备注名：和删除同一套（悬停整行才显），悬停变正文色 */
+  .ren { flex: none; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent;
+    color: var(--st-muted); cursor: pointer; opacity: 0; transition: opacity var(--mo-micro) var(--ea-fade), background-color var(--mo-micro) var(--ea-fade), color var(--mo-micro) var(--ea-fade); }
+  .ren :global(svg) { width: 13px; height: 13px; }
+  .row:hover .ren, .row.fo .ren { opacity: 1; }
+  .ren.hide, .row:hover .ren.hide { opacity: 0; pointer-events: none; }
+  @media (hover: hover) { .ren:hover { background: var(--st-hover); color: var(--text); } }
+  @media (hover: none) { .ren { opacity: .7; } }
+  /* 就地改名的输入框：占名字那一列，ID 照旧在第二列（看着 ID 起名） */
+  .rin { min-width: 0; display: flex; align-self: center; height: 30px; margin: -4px 0; border-radius: 8px; background: var(--st-field);
+    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text) 50%, transparent); }
+  .rin.bad { box-shadow: inset 0 0 0 1.5px var(--pm-red); }
+  .rin input { flex: 1; min-width: 0; height: 100%; padding: 0 9px; border: 0; background: transparent; color: var(--text); outline: none;
+    font: inherit; font-size: 14px; font-weight: 600; user-select: text; -webkit-user-select: text; }
+  .rin input::placeholder { color: var(--st-muted); font-weight: 400; }
+  .rin input:disabled { opacity: .6; }
   .na-t { flex: none; font-size: 12px; color: var(--st-muted); white-space: nowrap; }
   /* 留足两枚叠放图标的宽度（20 + 20 − 压叠 3.2）：行尾图标多少不一，前面的上下文列照样对齐 */
   .ags { flex: none; display: flex; justify-content: flex-end; min-width: 37px; }
@@ -300,6 +369,9 @@
   .narrow .rb { flex: none; margin: -4px -6px -4px 0; }
   .narrow .cache, .narrow .adv { height: 26px; font-size: 12.5px; }
   .narrow .del { width: 36px; height: 36px; margin: -8px -4px; opacity: .7; }
+  .narrow .ren { width: 30px; height: 26px; opacity: .7; }
+  .narrow .rin { align-self: stretch; height: 32px; margin: -2px 0 0; }
+  .narrow .rin input { font-size: 16px; }
 
   /* 骨架：微光是伪元素的 translateX，不动 background-position（合成器上跑，几十行也不卡） */
   .row.sk { cursor: default; overflow: hidden; }

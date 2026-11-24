@@ -11,6 +11,9 @@ import { getSchema, discoveryRev, referenceModel } from '../discovery/store.mjs'
 import { fromJsonSchema, fromOpenRouterImage, fromOpenRouterVideo } from '../discovery/schema.mjs';
 import { pickParent, inheritCard, refineGoogleCard } from '../discovery/family.mjs';
 import { mergeBuiltinWithSchema } from './merge.mjs';
+import { getModelConfig, modelConfigRev } from '../model-config/store.mjs';
+import { applyOver } from '../model-config/overlay.mjs';
+import { recipeCard } from '../recipe/card.mjs';
 // 各方言适配器导入时登记自己的常见模型卡（registerDialectCards）：先确保它们都导进来了
 import '../adapters/index.mjs';
 import { flexSizeSpec, gptFormatSpecs, roundFrameMs, BG_TRANSPARENT, MODERATION_OPTS, COMPLEXITY_OPTS } from '../adapters/openai.mjs';
@@ -76,6 +79,7 @@ export function gptImageCard(id, sp = null, ep = null) {
     desc: meta.desc || '构图、文字与指令遵循精细；没有多轮上下文，续改拿上一张当参考',
     inputs: { text: true, images: { max: 16, roles: ['edit', 'ref'] }, multiTurn: false },
     params,
+    legacyKeys: ['aspectRatio', 'imageSize'],   // 旧写法照收（见 normalize），生成工具报「未生效参数」时别算它们
     ...(meta.priceHint ? { priceHint: meta.priceHint } : {}),
     normalize(raw = {}, ctx = {}) {
       // 新写法（给了 size）：全部参数按 ParamSpec 规范化（不认的键丢、默认值补上、when 不满足的丢）
@@ -191,7 +195,7 @@ function refinedGptCard(provider, entry) {
 const dyn = new Map();
 let dynRev = -1;
 /** 这个服务里这个模型用哪张卡：① 显式 card → ② 内置卡 → ③ 上游 schema 卡 → ④ 同族继承卡 → ⑤ 通用卡 + extra。 */
-export function cardFor(provider, entry) {
+export function baseCardFor(provider, entry) {
   const b = builtinCard(provider.dialect, entry);
   if (dynRev !== discoveryRev()) { dyn.clear(); dynRev = discoveryRev(); }
   const k = (provider.owner || '') + '|' + provider.id + '|' + provider.dialect + '|' + entry.id + '|' + entry.kind + '|' + (entry.label || '');
@@ -219,6 +223,22 @@ export function cardFor(provider, entry) {
   if (dyn.has(k)) return dyn.get(k);
   const card = schemaCard(provider, entry) || familyCard(provider, entry) || genericCard(provider.dialect, entry.kind);
   dyn.set(k, card);
+  return card;
+}
+
+// 模型配置层（model-config/）：配方整张换掉卡（配方自己声明参数），覆盖叠在卡上。按 服务 + 模型 + 配置版本 缓存
+const cfgCache = new Map();
+let cfgRev = -1;
+/** 最终用的卡：上面那条解析链出来的卡，再叠这个模型的配置（配方 / 参数覆盖）。没配置的模型原样返回。 */
+export function cardFor(provider, entry) {
+  const cfg = provider?.id && entry?.id ? getModelConfig(provider.owner, provider.id, entry.id) : null;
+  if (!cfg) return baseCardFor(provider, entry);
+  if (cfgRev !== modelConfigRev() + ':' + discoveryRev()) { cfgCache.clear(); cfgRev = modelConfigRev() + ':' + discoveryRev(); }
+  const k = (provider.owner || '') + '|' + provider.id + '|' + entry.id + '|' + entry.kind + '|' + (entry.label || '');
+  if (cfgCache.has(k)) return cfgCache.get(k);
+  let card = cfg.recipe ? recipeCard(cfg.recipe, entry) : baseCardFor(provider, entry);
+  if (cfg.over) card = applyOver(card, cfg.over);
+  cfgCache.set(k, card);
   return card;
 }
 

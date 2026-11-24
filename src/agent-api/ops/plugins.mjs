@@ -6,7 +6,8 @@ import { defineGroup, defineOp, OpError } from '../registry.mjs';
 import { kernel } from '../../plugins/state.mjs';
 import { linkLocal, uninstallPlugin, reloadPlugin, PluginError } from '../../plugins/discover.mjs';
 import { installFromGithub, checkUpdate } from '../../plugins/github.mjs';
-import { marketOverview, installFromMarket, rollbackInstalled, restoreBuiltinVersion } from '../../plugins/market.mjs';
+import { marketOverview, installFromMarket, rollbackInstalled, restoreBuiltinVersion, isRevoked } from '../../plugins/market.mjs';
+import { accountView, precheck, publishToCommunity, submissionStatus } from '../../plugins/market/publish.mjs';
 import { scaffoldPlugin, EXAMPLES, TEMPLATES, APP_TEMPLATE_IDS, ScaffoldError } from '../../plugins/scaffold.mjs';
 import { localOrigin } from '../local-origin.mjs';
 import path from 'node:path';
@@ -100,6 +101,8 @@ defineOp({
   example: { id: 'wallpapers', enabled: false },
   handler: (ctx, args) => wrap(async () => {
     must(args.id);
+    const rv = args.enabled ? isRevoked(kernel, args.id) : null;
+    if (rv) throw new OpError('conflict', '这个社区插件已被下架' + (rv.reason ? '：' + rv.reason : '') + '，不能再启用', { hint: '卸载它（plugins.uninstall），或用 plugins.market_install 装一个没被下架的版本' });
     const p = await kernel.setEnabled(args.id, args.enabled);
     changed();
     return { plugin: pluginView(p) };
@@ -164,29 +167,40 @@ defineOp({
 });
 
 defineOp({
-  name: 'plugins.market', title: '看官方插件市场',
+  name: 'plugins.market', title: '看插件市场（官方 + 社区）',
   desc: '官方插件市场（签过名的索引，只有 bridge 官方的插件）：每项 id、name、description、builtin（true = 内置功能的市场版，装上盖住内置实现）、'
     + 'state（none 没装 / installed 装了 / builtin 用着内置版 / override 用着市场版 / taken id 被本机目录占了）、current（已装版本）、'
     + 'latest（这台 bridge 能装的最新版：version、notes 更新说明、restart 要不要重启）、update（有没有更新）、versions（全部版本，problem 非空 = 这台装不了）、'
     + 'blocked（latest 为空时这台为什么一版都装不了，多半是 bridge 版本不合）、rollback（回收区里能回退到的版本）。updates 汇总有更新的。'
-    + 'market.error 是最近一次拉取的错误（有缓存时照样列出）；market.off=true = 部署方在 config.json 关掉了市场；market.official=false = 换成了自建市场。refresh=true 强制重拉。',
+    + 'market.error 是最近一次拉取的错误（有缓存时照样列出）；market.off=true = 部署方在 config.json 关掉了市场；market.official=false = 换成了自建市场。refresh=true 强制重拉。'
+    + 'community 是社区市场（任何 bridge 用户投稿、只有自动检查、没有人工审核）：community.plugins 每项另有 publisher（作者的 GitHub 账号）、'
+    + 'latest.kind（page 纯页面，只在沙箱页面里跑 / server 含服务端代码，在这台服务器上以 bridge 全部权限运行）、latest.caps（检测到的能力：process 运行外部程序、network 访问网络、files 读写服务器文件、env 读环境变量、core 调用 bridge 内部模块）、'
+    + 'revoked（已装的这一版被下架了，已自动停用）、report（举报链接）。community.market.empty=true = 社区市场还没有插件。updates 里每项的 channel 说明来自哪边。',
   access: 'read', need: ['server.manage'],
   params: { refresh: { type: 'boolean', desc: '可选：不用缓存，马上重新拉索引' } },
   handler: (ctx, args) => wrap(() => marketOverview(kernel, { refresh: !!args.refresh })),
 });
 
 defineOp({
-  name: 'plugins.market_install', title: '从官方插件市场装 / 更新插件',
+  name: 'plugins.market_install', title: '从插件市场（官方 / 社区）装 / 更新插件',
   desc: '下载、校验（签名 + sha256）并安装；已装的就是更新。builtin 条目 = 装内置功能的市场版（盖住内置实现，起不来会自动退回内置版）。'
-    + 'version 不填 = 这台 bridge 能装的最新版。更新只提示不自动装：用户没点名要装 / 更新时先跟用户确认。restart 插件装完要重启服务端才换上。',
+    + 'version 不填 = 这台 bridge 能装的最新版。更新只提示不自动装：用户没点名要装 / 更新时先跟用户确认。restart 插件装完要重启服务端才换上。'
+    + '社区插件用 channel=community：没有人工审核；kind=server 的会在这台服务器上以 bridge 全部权限运行，必须先把作者、检测到的能力原样告诉用户、用户明确同意后才带 ack=true，否则报 needAck。',
   access: 'danger', need: ['server.manage'],
   params: {
     id: { type: 'string', required: true, desc: '市场里的插件 id' },
     version: { type: 'string', desc: '可选：装指定版本（如 1.2.0），用来降级或钉版本' },
+    channel: { type: 'string', enum: ['official', 'community'], desc: '可选：community = 社区市场；缺省官方' },
+    ack: { type: 'boolean', desc: '社区里含服务端代码的插件必填 true：表示用户看过风险（作者、能力、没人审过）并同意安装' },
   },
   example: { id: 'qq-onebot' },
   handler: (ctx, args) => wrap(async () => {
-    const p = await installFromMarket(kernel, String(args.id || ''), args.version ? String(args.version) : '');
+    let p;
+    try { p = await installFromMarket(kernel, String(args.id || ''), args.version ? String(args.version) : '', { channel: args.channel === 'community' ? 'community' : 'official', ack: args.ack === true }); }
+    catch (e) {
+      if (e?.needAck) throw new OpError('conflict', e.message, { data: { needAck: e.needAck }, hint: '把作者（publisher）、种类与检测到的能力（capLabels）告诉用户，用户同意后带 ack=true 重试' });
+      throw e;
+    }
     changed();
     return { plugin: pluginView(kernel.get(args.id) || p), pendingRestart: !!p?.pendingRestart };
   }),
@@ -282,4 +296,57 @@ defineOp({
     changed();
     return { id: args.id, removed: true };
   }),
+});
+
+defineOp({
+  name: 'plugins.community_account', title: '看发布到社区用的 GitHub 账号',
+  desc: '发布到社区市场要用作者自己的 GitHub 账号。回 { ok, login, via（gh = 这台电脑 gh 登录的账号 / device 设备码登录 / token 粘贴的令牌）, deviceLogin（能不能用设备码登录） }；'
+    + 'ok=false 时让用户去 设置 › 扩展 › 功能扩展 › 插件详情 › 发布到社区 里登录（令牌不经过对话）。',
+  access: 'read', need: ['server.manage'],
+  params: {},
+  handler: () => wrap(() => accountView()),
+});
+
+defineOp({
+  name: 'plugins.community_check', title: '发布到社区前预检一个插件',
+  desc: '用社区市场 CI 的同一份规则检查一个装好的或本机目录里的插件：文件类型与大小、清单、更新说明、服务端代码可读与不许动态执行、插件名归属与版本号。'
+    + '回 report { ok, errors[], warnings[], kind, caps, capLabels, version }。errors 非空时照着改插件目录再查；notes 是这一版的更新说明（没写 market.json 时必填）。',
+  access: 'read', need: ['server.manage'],
+  params: {
+    id: { type: 'string', required: true, desc: '插件 id' },
+    notes: { type: 'string', desc: '这一版的更新说明' },
+    nameEn: { type: 'string', desc: '可选：英文名' },
+    descriptionEn: { type: 'string', desc: '可选：英文说明' },
+  },
+  handler: (ctx, args) => wrap(async () => {
+    must(args.id);
+    const r = await precheck(kernel, args.id, { notes: args.notes || '', nameEn: args.nameEn || '', descriptionEn: args.descriptionEn || '' });
+    return { report: r.report, login: r.login };
+  }),
+});
+
+defineOp({
+  name: 'plugins.community_publish', title: '把插件发布到社区市场',
+  desc: '以用户自己的 GitHub 账号把插件交成市场仓库的拉取请求（公开可见）；自动检查通过后自动上架，所有 bridge 用户都能看到并安装。'
+    + '这是对外公开的动作：用户没亲口要求发布这个插件时先确认。先跑 plugins.community_check 修到通过。回 { pr, number, version, report }，之后用 plugins.community_status 看进度。',
+  access: 'danger', need: ['server.manage'],
+  params: {
+    id: { type: 'string', required: true, desc: '插件 id' },
+    notes: { type: 'string', desc: '这一版的更新说明' },
+    nameEn: { type: 'string', desc: '可选：英文名' },
+    descriptionEn: { type: 'string', desc: '可选：英文说明' },
+  },
+  handler: (ctx, args) => wrap(async () => {
+    must(args.id);
+    try { return await publishToCommunity(kernel, args.id, { notes: args.notes || '', nameEn: args.nameEn || '', descriptionEn: args.descriptionEn || '' }); }
+    catch (e) { if (e?.report) throw new OpError('bad_args', e.message, { data: { report: e.report }, hint: '照 report.errors 改插件目录，再 plugins.community_check' }); throw e; }
+  }),
+});
+
+defineOp({
+  name: 'plugins.community_status', title: '看社区投稿的进度',
+  desc: '回 { status（none 没投过 / checking 自动检查中 / failed 没通过，report 里是原因 / merged 已合并、等索引更新 / live 已上架 / closed 被关掉 / unknown 查不到）, pr, version, report }。',
+  access: 'read', need: ['server.manage'],
+  params: { id: { type: 'string', required: true, desc: '插件 id' } },
+  handler: (ctx, args) => wrap(() => submissionStatus(String(args.id || ''))),
 });

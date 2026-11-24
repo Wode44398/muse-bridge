@@ -18,6 +18,8 @@ import { Sandbox } from "./sandbox.ts";
 import type { AgentEvent, StreamEvent } from "./agent/events.ts";
 import type { ProviderAdapter } from "./providers/types.ts";
 import type { ToolContext } from "./tools/types.ts";
+import { hardenedProfile } from "./agent/profile.ts";
+// 这个文件钉的是加固姿态（hardened）的门禁 / 追问 / 提醒行为：各场景显式在加固档案下跑（lean 默认不设这些）
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dimensio-v1-"));
 after(() => {
@@ -125,7 +127,7 @@ test("验收全绿不附尾注；最后一次检查没过才附（连同通过�
         for (const ev of script(n++)) yield ev;
       },
     };
-    return new AgentState({
+    return new AgentState({ profile: hardenedProfile(),
       adapter,
       system: "t",
       tools: [bashTool.def],

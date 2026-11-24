@@ -61,8 +61,10 @@ const PIDFILE_RE = /\$\(\s*(?:cat\s+|<\s*)[^()\s;|&]+(?:\s+2>\s*[^()\s;|&]+)?\s*
 const SHARED_LIST = ['node', 'nodejs', 'python', 'pythonw', 'py', 'pyw', 'java', 'javaw', 'deno', 'bun', 'dotnet', 'ruby', 'php', 'perl',
   'cloudflared', 'workerd', 'wrangler', 'ngrok', 'nginx', 'httpd', 'caddy', 'redis-server', 'postgres', 'mysqld', 'mongod', 'ollama',
   'llama-server', 'uvicorn', 'gunicorn', 'msedge', 'msedgewebview2', 'chrome', 'chromium', 'firefox', 'electron', 'claude', 'codex',
-  'cmd', 'powershell', 'pwsh', 'bash', 'sh', 'conhost', 'wsl', 'wslhost', 'vmmem', 'docker', 'adb', 'git', 'ssh'];
-const SHARED = String.raw`(?:node(?:js)?|python[\d.]*w?|pyw?|javaw?|deno|bun|dotnet|ruby|php(?:-cgi)?|perl|cloudflared|workerd|wrangler|ngrok|nginx|httpd|caddy|redis-server|postgres|mysqld|mongod|ollama|llama-server|uvicorn|gunicorn|msedge(?:webview2)?|chrome|chromium|firefox|electron|claude|codex|cmd|powershell|pwsh|bash|sh|conhost|wsl(?:host|service)?|vmmem\w*|docker|adb|git|ssh)`;   // 只认 docker CLI（多个会话各跑各的）；Docker Desktop / com.docker.backend 全机一份，按名字停的就是它自己
+  'cmd', 'powershell', 'pwsh', 'bash', 'sh', 'conhost', 'wsl', 'wslhost', 'vmmem', 'docker', 'adb', 'git', 'ssh',
+  // 安卓模拟器：各会话、Android Studio 开的都叫这几个名字，按名字停会连别人的一起关（只按自己记下的 PID 停）
+  'emulator', 'qemu-system-x86_64', 'qemu-system-x86_64-headless', 'qemu-system-aarch64', 'netsimd'];
+const SHARED = String.raw`(?:node(?:js)?|python[\d.]*w?|pyw?|javaw?|deno|bun|dotnet|ruby|php(?:-cgi)?|perl|cloudflared|workerd|wrangler|ngrok|nginx|httpd|caddy|redis-server|postgres|mysqld|mongod|ollama|llama-server|uvicorn|gunicorn|msedge(?:webview2)?|chrome|chromium|firefox|electron|claude|codex|cmd|powershell|pwsh|bash|sh|conhost|wsl(?:host|service)?|vmmem\w*|docker|adb|git|ssh|emulator|qemu-system[\w-]*|netsimd)`;   // 只认 docker CLI（多个会话各跑各的）；Docker Desktop / com.docker.backend 全机一份，按名字停的就是它自己
 const SHARED_NAME_RE = new RegExp(String.raw`^${SHARED}(?:\.exe)?$`, 'i');
 // 文里提到共用进程名（路径里的 \Claude\、node_modules、$node 变量不算）
 const SHARED_WORD_RE = new RegExp(String.raw`(?<![\w\\/.$-])${SHARED}(?:\.exe)?(?![\w\\/-])`, 'i');

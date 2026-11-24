@@ -18,9 +18,7 @@
   import AgyAgentsPanel from './AgyAgentsPanel.svelte';
   import AgyActivityPanel from './AgyActivityPanel.svelte';
 
-  // leftSidebarWidth：会话侧栏此刻占的宽度——工作区再宽也要给对话留够
-  const { wide = true, leftSidebarWidth = 0 } = $props();
-  const MIN_CHAT_W = 380;
+  const { wide = true } = $props();
   const agyDock = agyHost.state;
 
   const agyTheme = $derived.by(() => {
@@ -78,7 +76,11 @@
   });
 </script>
 
-{#snippet icon(key)}<span class="msr4" aria-hidden="true">{tools.find((x) => x.key === key)?.icon}</span>{/snippet}
+{#snippet icon(key)}
+  {@const x = tools.find((y) => y.key === key)}
+  <!-- 插件卡片的图标是 SVG（ctx.ui.workbench 的 icon 名），其余是 Antigravity 自己的符号字 -->
+  {#if x?.iconSvg}<span class="msr4 plg-ic" aria-hidden="true">{@html x.icon}</span>{:else}<span class="msr4" aria-hidden="true">{x?.icon}</span>{/if}
+{/snippet}
 
 {#snippet panel(view)}
   {#if view === 'agents'}<AgyAgentsPanel {wide} />
@@ -100,11 +102,14 @@
 
 <div class="agy-wb" bind:this={root}>
   <Workbench host={agyHost} {tools} {wide} multi={layout.expanded} skin="agy" mobile="page" filesFloat="always"
-    reserve={leftSidebarWidth + MIN_CHAT_W} twoColHost={1020 + leftSidebarWidth} theme={agyTheme} label={t('侧边工作区')}
+    theme={agyTheme} label={t('侧边工作区')}
     {icon} {panel} {empty} keysOn={ui.screen === 'agy'} />
 </div>
 
 <style>
+  /* 插件卡片的 SVG 图标：占符号字同样大小的方格（1em × 1em），线条跟随文字色 */
+  :global(.agy-root .msr4.plg-ic) { display: inline-flex; width: 1em; height: 1em; }
+  :global(.agy-root .msr4.plg-ic svg) { width: 100%; height: 100%; }
   /* 外壳自己是这一行里的弹性项：包一层只为拿到它的 DOM（定位文件用），不参与布局 */
   .agy-wb { display: contents; }
   .agy-wb :global(.agy-file-located) {

@@ -16,6 +16,8 @@ import { replicateAdapter } from './replicate.mjs';
 import { elevenlabsAdapter } from './elevenlabs.mjs';
 import { minimaxAdapter } from './minimax.mjs';
 import { arkAdapter } from './ark.mjs';
+import { recipeAdapter } from '../recipe/run.mjs';
+export { withTrace } from './http.mjs';
 
 const ADAPTERS = {
   vertex: googleAdapter('vertex'),
@@ -34,4 +36,9 @@ export function adapterFor(dialect) {
   const a = ADAPTERS[dialect];
   if (!a) throw Object.assign(new Error('不认识的方言：' + dialect), { status: 400 });
   return a;
+}
+
+/** 这张卡该用哪个适配器：带配方的卡（模型配置层里给这个模型写了配方）一律走配方适配器，不看服务的方言。 */
+export function adapterForCard(provider, card) {
+  return card?.recipe ? recipeAdapter : adapterFor(provider.dialect);
 }

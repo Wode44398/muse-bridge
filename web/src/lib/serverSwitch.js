@@ -6,8 +6,8 @@
 //      同时探一下新服务器在不在（只为提示一句「暂时连不上」，不拦切换——连不上照样进，有本地缓存可看）；
 //   ③ 档案落地（commitSwitch）→ 交接条写进 sessionStorage → 整页重载。
 // 落地（重载后）：index.html 里的脚本第一帧就把同一张封面原样重建（光晕相位按交接条续上），
-//   主页模式交给预载方块张开成新服务器的主页（Preload 等 arrivalHold 再揭幕，揭幕那一拍 dropSwitchCover），
-//   新品牌在方块中央逐行显影（BrandTitle 的 arrive）；单页模式 / 没有预载时由 App 调 finishArrival 收场。
+//   主页模式由开机入场接手（components/BootGate.svelte）：封面停够 arrivalHold、finishArrival 化开，露出底下的
+//   月桥标记再开始入场；单页模式由 App 调 finishArrival 收场。
 // 不支持 View Transitions / 减弱动效：封面直接淡入、跳过化开，其余照旧。
 
 import { tick } from 'svelte';
@@ -137,17 +137,15 @@ function rollName(el, name, color) {
     { duration: 520, delay: 220, easing: EASE.settle, fill: 'backwards' });
 }
 
-/** 预载在揭幕前等一等：交接后封面至少停留这么久，新品牌显影完再张开 */
+/** 开机入场开演前等一等：交接后封面至少停留这么久 */
 export function arrivalHold() {
   if (!arrival) return Promise.resolve();
   const left = 720 - (Date.now() - arrival.at);
   return left > 0 ? sleep(left) : Promise.resolve();
 }
 
-/** 预载揭幕那一拍撤掉封面（它在预载方块之上，留着会挡住张开的窗） */
-export function dropSwitchCover() { cover()?.drop(); }
 
-/** 没有预载接手时（单页模式、减弱动效）由 App 收场：方块放大化开、底色淡去 */
+/** 封面化开收场：方块放大化开、底色淡去（开机入场开演前 / 单页模式由 App 调） */
 export async function finishArrival() {
   const el = cover()?.get();
   if (!el) return;

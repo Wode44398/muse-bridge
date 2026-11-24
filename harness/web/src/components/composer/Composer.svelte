@@ -26,6 +26,7 @@
     runBuiltin,
     send,
     slashCommands,
+    toast,
   } from "../../lib/state.svelte.ts";
   import { completion, paletteItems, parseBuiltin, slashQuery, type Builtin, type PaletteItem } from "../../lib/slash.ts";
   import { pendingCards, replyHint, replyPlaceholder, replyTarget } from "../../lib/card-dock.ts";
@@ -388,17 +389,39 @@
     dragDepth = 0;
   }
 
-  // ── 把侧栏的会话块拖进来 = 引用那个对话（服务端能力位 "session-refs"；自己不能引用自己）───────────────
+  // ── 把侧栏的会话块 / 工作空间拖进来 = 引用对话或文件夹 ────────────────────────────────────────
   const refDropKey = `ref-${paletteId}`;
-  const refDropOk = (p: DragPayload) => p.kind === "session" && canRefSessions() && p.id !== pane.chat.id;
+  const normFolderPath = (raw: string) => raw.replace(/\\/g, "/").replace(/\/+$/, "") + "/";
+  const foldFolderPath = (raw: string) => (app.info?.platform === "win32" ? normFolderPath(raw).toLowerCase() : normFolderPath(raw));
+  const refDropOk = (p: DragPayload) => {
+    if (p.kind === "session") return canRefSessions() && p.id !== pane.chat.id;
+    if (p.kind === "project") return app.features.files && Boolean(p.path);
+    return false;
+  };
+  const refDropLabel = (p: DragPayload) => (p.kind === "project" ? t("引用文件夹「{name}」", { name: p.title }) : t("引用这个对话"));
   function onRefDrop(p: DragPayload) {
+    if (p.kind === "project" && p.path) {
+      const folderPath = normFolderPath(p.path);
+      const key = foldFolderPath(folderPath);
+      if (pane.chat.attachments.some((x) => foldFolderPath(x) === key)) {
+        toast(t("这个文件夹已经引用过了"));
+        return;
+      }
+      pane.chat.attachments = [...pane.chat.attachments, folderPath];
+      haptic("light");
+      toast(t("已引用文件夹「{name}」", { name: p.title }));
+      ta?.focus({ preventScroll: true });
+      return;
+    }
     if (addSessionRef(pane.chat, { id: p.id, title: p.title, ...(p.provider ? { provider: p.provider } : {}) })) {
       haptic("light");
       ta?.focus({ preventScroll: true });
     }
   }
   const refOver = $derived(dnd.on && dnd.overKey === refDropKey);
-  const refCandidate = $derived(dnd.on && dnd.kind === "session" && canRefSessions() && dnd.id !== pane.chat.id);
+  const refCandidate = $derived(
+    dnd.on && ((dnd.kind === "session" && canRefSessions() && dnd.id !== pane.chat.id) || (dnd.kind === "project" && app.features.files)),
+  );
 
   // ── 动作 ──────────────────────────────────────────────────────────────────────────────
   // G8：旧 WebView 没有 field-sizing: content → JS 自增高兜底（程序化清空 / 填入也要重排；新内核直接跳过）
@@ -464,7 +487,7 @@
       bind:this={card}
       use:smoothHeight
       use:cardDrop
-      use:dropTarget={{ key: refDropKey, accept: refDropOk, label: t("引用这个对话"), drop: onRefDrop }}
+      use:dropTarget={{ key: refDropKey, accept: refDropOk, label: refDropLabel, drop: onRefDrop }}
     >
       <div class="inner" use:padFocus>
         {#if target}
@@ -485,6 +508,7 @@
         <textarea
           bind:this={ta}
           bind:value={pane.chat.draft}
+          data-sel-composer
           use:autosize={pane.chat.draft}
           rows="1"
           {placeholder}

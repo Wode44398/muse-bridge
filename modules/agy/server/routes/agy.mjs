@@ -22,14 +22,14 @@ import { registerAgyGuardRoutes } from './agy-guard.mjs';
 import { agyDataDir } from '../acp/binary.mjs';
 import { agyGenKey } from '../agents/agy.mjs';
 import {
-  listAgySessions, loadAgySessionDetail, hideSession, restoreSession,
+  listAgySessions, loadAgySessionDetail, hideSession, hideSessions, restoreSession,
   restoreAllHiddenSessions, countHiddenSessions, renameSession, getSessionMeta,
   rememberSessionConfig, resolveVerifiedSessionCwd,
 } from '../sessions.mjs';
 import {
   loadAgySettings, saveAgySettings, DEFAULT_AGY_SETTINGS,
 } from '../settings.mjs';
-import { listProjects, createProject, getProject, authorizeProjectPath } from '../projects.mjs';
+import { listProjects, projectOrder, setProjectOrder, createProject, pinProject, renameProject, deleteProject, getProject, authorizeProjectPath } from '../projects.mjs';
 import { buildAgySessionTooling } from '../mcp/config.mjs';
 import { answerBridgeQuestion } from '../mcp/ask.mjs';
 import {
@@ -55,8 +55,8 @@ import {
 import { registerAgyInternalRoutes } from './agy-internal.mjs';
 import { registerAgySessionManageRoutes } from './agy-session-manage.mjs';
 import { registerAgySubagentRoutes } from './agy-subagents.mjs';
-import { stopSubagentMonitor } from '../subagent-monitor.mjs';
-import { runView, publishAgySessions } from '../presence.mjs';
+import { stopSubagentMonitor, noteSessionOwner, listBackgroundWaitingSessions } from '../subagent-monitor.mjs';
+import { runView, publishAgySessions, publishAgyProjects } from '../presence.mjs';
 import { listQueue, removeQueued, queueView } from '../queue.mjs';
 import { sessionBrainDir } from '../background.mjs';
 import { isSessionArtifact } from '../deliverables.mjs';
@@ -320,7 +320,19 @@ export function registerAgyRoutes(router, { identify }) {
   // ── 项目管理（cwd 分组）────────────────────────────────────────────────────
   router.on('GET', '/api/agy/projects', (req, res) => {
     const ctx = agyCtx(req, res); if (!ctx) return;
-    sendJson(res, 200, { projects: listProjects(ctx.agyProjects) });
+    sendJson(res, 200, { projects: listProjects(ctx.agyProjects), order: projectOrder(ctx.agyProjects) });
+  });
+
+  router.on('POST', '/api/agy/project/order', async (req, res) => {
+    const ctx = agyCtx(req, res); if (!ctx) return;
+    const body = await parseJsonBody(req, res); if (!body) return;
+    try {
+      const order = setProjectOrder(ctx.agyProjects, ctx, body.paths);
+      publishAgyProjects(ctx, { why: 'order' });
+      sendJson(res, 200, { ok: true, order });
+    } catch (err) {
+      sendJson(res, err?.status || 400, { error: err?.message || '无法保存工作空间顺序' });
+    }
   });
 
   router.on('POST', '/api/agy/project/create', async (req, res) => {
@@ -328,9 +340,65 @@ export function registerAgyRoutes(router, { identify }) {
     const body = await parseJsonBody(req, res); if (!body) return;
     try {
       const project = createProject(ctx.agyProjects, ctx, body);
-      sendJson(res, 200, { ok: true, project });
+      publishAgyProjects(ctx, { projectId: project.id, why: 'create' });
+      sendJson(res, 200, { ok: true, project, projects: listProjects(ctx.agyProjects), order: projectOrder(ctx.agyProjects) });
     } catch (err) {
       sendJson(res, err?.status || 400, { error: err?.message || '无法创建项目' });
+    }
+  });
+
+  router.on('POST', '/api/agy/project/pin', async (req, res) => {
+    const ctx = agyCtx(req, res); if (!ctx) return;
+    const body = await parseJsonBody(req, res); if (!body) return;
+    try {
+      const pinned = body.pinned !== false;
+      const project = pinProject(ctx.agyProjects, ctx, {
+        id: body.id || body.projectId || '',
+        path: body.path || '',
+        pinned,
+      });
+      publishAgyProjects(ctx, { projectId: project?.id || String(body.id || ''), why: pinned ? 'pin' : 'unpin' });
+      sendJson(res, 200, { ok: true, project, projects: listProjects(ctx.agyProjects), order: projectOrder(ctx.agyProjects) });
+    } catch (err) {
+      sendJson(res, err?.status || 400, { error: err?.message || '无法置顶工作空间' });
+    }
+  });
+
+  // 只改侧栏显示名，不动磁盘目录
+  router.on('POST', '/api/agy/project/rename', async (req, res) => {
+    const ctx = agyCtx(req, res); if (!ctx) return;
+    const body = await parseJsonBody(req, res); if (!body) return;
+    try {
+      const project = renameProject(ctx.agyProjects, ctx, {
+        id: body.id || body.projectId || '',
+        path: body.path || '',
+        name: typeof body.name === 'string' ? body.name : '',
+      });
+      publishAgyProjects(ctx, { projectId: project.id, why: 'rename' });
+      sendJson(res, 200, { ok: true, project, projects: listProjects(ctx.agyProjects), order: projectOrder(ctx.agyProjects) });
+    } catch (err) {
+      sendJson(res, err?.status || 400, { error: err?.message || '无法重命名工作空间' });
+    }
+  });
+
+  router.on('POST', '/api/agy/project/delete', async (req, res) => {
+    const ctx = agyCtx(req, res); if (!ctx) return;
+    const body = await parseJsonBody(req, res); if (!body) return;
+    try {
+      const result = deleteProject(ctx.agyProjects, ctx, {
+        id: body.id || body.projectId || '',
+        path: body.path || '',
+      });
+      if (result.project) {
+        const curSettings = loadAgySettings(ctx.agyDir);
+        if (curSettings.defaultProjectId === result.project.id) {
+          saveAgySettings(ctx.agyDir, { defaultProjectId: '', defaultCwd: '' });
+        }
+      }
+      publishAgyProjects(ctx, { projectId: result.project?.id || String(body.id || ''), why: 'delete' });
+      sendJson(res, 200, { ok: true, deleted: result.deleted, projects: listProjects(ctx.agyProjects), order: projectOrder(ctx.agyProjects) });
+    } catch (err) {
+      sendJson(res, err?.status || 400, { error: err?.message || '无法移除工作空间' });
     }
   });
 
@@ -383,6 +451,25 @@ export function registerAgyRoutes(router, { identify }) {
     owner.forgetSession(id);
     publishAgySessions(ctx, { sessionId: id, why: 'hide' });
     sendJson(res, 200, { ok: true, hidden: true });
+  });
+
+  router.on('POST', '/api/agy/sessions/hide', async (req, res) => {
+    const ctx = agyCtx(req, res); if (!ctx) return;
+    const body = await parseJsonBody(req, res); if (!body) return;
+    const rawIds = Array.isArray(body.ids) ? body.ids : [];
+    const ids = [...new Set(rawIds.map((x) => String(x || '').trim()).filter(Boolean))].slice(0, 500);
+    if (!ids.length) { sendJson(res, 400, { error: '缺少会话 id' }); return; }
+    const hidden = hideSessions(ctx.agyDir, ids);
+    for (const id of hidden) {
+      stopSubagentMonitor(ctx.key, id);
+      const owner = acpFor(ctx, id);
+      await owner.closeSession(id).catch(() => {});
+      owner.forgetSession(id);
+    }
+    if (hidden.length > 0) {
+      publishAgySessions(ctx, { why: 'hide' });
+    }
+    sendJson(res, 200, { ok: true, hidden: hidden.length, ids: hidden });
   });
 
   router.on('POST', '/api/agy/session/restore', async (req, res) => {
@@ -441,6 +528,7 @@ export function registerAgyRoutes(router, { identify }) {
 
     try {
       const client = acpFor(ctx, sessionId);
+      noteSessionOwner(ctx, client, sessionId);
       client.noteTooling?.(tooling.toolingSig);   // 改配置也会挂载会话：工具清单变了同样先换进程
       let out;
       if (body.configId) {
@@ -520,6 +608,7 @@ export function registerAgyRoutes(router, { identify }) {
       startedAt: active ? (gen.startedAt || 0) : 0,
       backgroundWake: active ? Boolean(gen.backgroundWake) : false,
       pendingPermission: active ? (gen.pendingPermission || null) : null,
+      pendingPermissions: active ? (Array.isArray(gen.pendingPermissions) ? gen.pendingPermissions : (gen.pendingPermission ? [gen.pendingPermission] : [])) : [],
       pendingQuestion: active ? (gen.pendingQuestion || null) : null,
       // 排着队的消息（这一轮收尾后依次发出，见 queue.mjs）
       queue: active && gen.sessionId ? listQueue(key, gen.sessionId) : [],
@@ -527,6 +616,8 @@ export function registerAgyRoutes(router, { identify }) {
       // 这一轮正等着的后台子代理（agy 自带生图等）：[{ id, typeName, kind, startedAt }]
       background: active && Array.isArray(gen.background) ? gen.background : [],
       activeSessions: liveAll.map((g) => runView(g)),
+      // 这一轮说完了、后台还在跑的会话（侧栏的空心环；之后的变化走总线 agy.subagents 的 bgWaiting）
+      bgSessions: listBackgroundWaitingSessions(ctx.key),
       // 这台服务端会为 agy 发会话消息通知（/api/active 的 notices，带 agent:'agy'）：桌面壳据此不再自己按快照猜「跑完了」
       notices: true,
     });
@@ -634,11 +725,22 @@ export function registerAgyRoutes(router, { identify }) {
         || isPathInside(file, path.join(agyDataDir(), 'log'))
       ) && /\.log$/i.test(file);
 
+      // 会话自己的产物目录（agy 自带生图的成品、用户发图时落盘的 .user_uploaded 原图）与 Swarm 成员登记的进度截图：
+      // 只放行成品 / 上传原图 / 白名单帧，agy 的内部记录（.system_generated）一律拒绝
+      let inArtifactDir = false;
+      if (id) {
+        const dataDir = acpFor(ctx, id).dataDir;
+        try { inArtifactDir = isSessionArtifact(file, realpathSync(sessionBrainDir(dataDir, id))); } catch {}
+        if (!inArtifactDir) {
+          try { inArtifactDir = isSwarmFrameFile(dataDir, id, file); } catch {}
+        }
+      }
+
       const roots = [ctx.uploads].filter(Boolean);
       if (id) {
         const meta = getSessionMeta(ctx.agyDir, id);
         const verifiedCwd = meta?.cwd || await resolveVerifiedSessionCwd(ctx, id);
-        if (!meta && !verifiedCwd) {
+        if (!meta && !verifiedCwd && !inArtifactDir) {
           throw Object.assign(new Error('not found'), { status: 404 });
         }
         if (verifiedCwd) {
@@ -652,17 +754,6 @@ export function registerAgyRoutes(router, { identify }) {
           for (const extraDir of meta.additionalDirectories) {
             try { roots.push(authorizeProjectPath(ctx, extraDir)); } catch {}
           }
-        }
-      }
-
-      // 会话自己的产物目录（agy 自带生图的成品存在这里）与 Swarm 成员在消息板中登记的进度截图：
-      // 只放行成品/白名单帧，agy 的内部记录（.system_generated）一律拒绝
-      let inArtifactDir = false;
-      if (id) {
-        const dataDir = acpFor(ctx, id).dataDir;
-        try { inArtifactDir = isSessionArtifact(file, realpathSync(sessionBrainDir(dataDir, id))); } catch {}
-        if (!inArtifactDir) {
-          try { inArtifactDir = isSwarmFrameFile(dataDir, id, file); } catch {}
         }
       }
       if (!isAgyLogFile && !inArtifactDir && !roots.some((root) => isPathInside(file, root))) {

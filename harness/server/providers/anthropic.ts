@@ -24,6 +24,14 @@ export function resetFastCooldown(): void {
   fastCooldownUntil = 0;
 }
 
+// 以 cache_control 为由拒过请求的自定义服务（服务 id）：本进程里不再给它们打缓存标记。全进程共享——同一个服务的别的会话再撞也是白撞
+const cacheRejected = new Set<string>();
+const CACHE_REFUSED_RE = /cache_control/i;
+// 测试用
+export function resetCacheRejections(): void {
+  cacheRejected.clear();
+}
+
 const DEFAULTS = {
   contextWindow: 200_000,
   maxOutputTokens: 8_192,
@@ -80,8 +88,8 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
     image: modelSupportsImages(cfg.provider, cfg.model),
     // No video input on the Messages API — video falls back to sampled frames.
     video: false,
-    // 自定义服务（第三方的 Anthropic 兼容端点）多半不认 cache_control：按服务的「提示缓存」开关（官方端点默认开）
-    cache: custom ? custom.promptCaching : true,
+    // 自定义服务按服务上的「提示缓存」；开着却被上游以 cache_control 为由拒过的服务，本进程里不再发（见下面 stream 里的退路）
+    cache: custom ? custom.promptCaching && !cacheRejected.has(cfg.provider) : true,
     parallelToolCalls: true,
     compactAt: limits.compactAt,
     mediaBudget: providerMediaBudget(cfg.provider, cfg.model),
@@ -93,13 +101,20 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
   // 主会话（cfg.cacheTtl）走官方端点时给 1 小时（写入 2× 计价、读仍按命中价；对齐 bridge 里 Claude 的官方 API 服务）；
   // 子 agent 一轮里请求间隔只有几秒，5 分钟够用、不多付写入费；第三方兼容端点不一定认 ttl，不动。
   // 四个断点用同一个 TTL——官方要求长 TTL 的断点排在短的前面，统一了就不会撞。
-  const cacheMark: CacheMark | null = !capabilities.cache
+  let cacheMark: CacheMark | null = !capabilities.cache
     ? null
     : cfg.cacheTtl === "1h" && official
       ? { type: "ephemeral", ttl: "1h" }
       : { type: "ephemeral" };
-  // 空闲压缩按它倒推时机（只有 1 小时这一档值得赶：5 分钟的缓存，用户停一停就过期，压了也白压）
-  if (cacheMark) capabilities.cacheTtlMs = cacheMark.ttl === "1h" ? 3_600_000 : 300_000;
+  // 空闲压缩按它倒推时机（只有 1 小时这一档值得赶：5 分钟的缓存，用户停一停就过期，压了也白压）。
+  // 第三方兼容端点打了标记也不一定真缓存（有的只是忽略这个字段）：先不报时长，等响应里真出现缓存读写的 token 再报，
+  // 免得没有缓存的线路也按 5 分钟赶着空闲压缩、误报「缓存冷了」
+  const ttlOnSight = Boolean(custom) && !official;
+  if (cacheMark && !ttlOnSight) capabilities.cacheTtlMs = cacheMark.ttl === "1h" ? 3_600_000 : 300_000;
+  // 第三方端点头一回报出缓存读写：缓存确实在起作用，补上时长（已经有时长的不动）
+  const sawCache = (read: number, write: number) => {
+    if (ttlOnSight && cacheMark && capabilities.cacheTtlMs === undefined && (read > 0 || write > 0)) capabilities.cacheTtlMs = 300_000;
+  };
   // 地址带不带 /v1 都行（以前写死 `${base}/v1/messages`，以 /v1 结尾的自定义地址会拼出 /v1/v1）
   const url = MK.anthropicUrl(baseUrl, "/v1/messages");
 
@@ -108,7 +123,7 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
     model: cfg.model,
     capabilities,
     async *stream(turn: Turn, signal?: AbortSignal): AsyncIterable<StreamEvent> {
-      const body = encode(turn, cfg.model, capabilities, cacheMark, custom);
+      let body = encode(turn, cfg.model, capabilities, cacheMark, custom);
       // fast mode：开关开着、型号支持、且不在退避期才发（不支持的型号带 speed 必 400）。speed 参数离了 beta 头也是 400。
       const fast = cfg.fast?.() === true && modelSupportsFast(cfg.provider, cfg.model) && Date.now() >= fastCooldownUntil;
       // 前缀检查兜底（见 enforcesPrefixCheck）：只对官方端点开，第三方兼容端点不认这个字段
@@ -136,6 +151,7 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
         });
       };
       const errCtx = custom ? { url, name: custom.name, protocol: "anthropic" as const, model: cfg.model } : undefined;
+      let sentFast = fast;
       let res = await send(fast);
       // fast mode 的额度与普通额度分开算（2026-10-14 实测：维护者这个 org 的 fast 额度是每分钟 0 input token，
       // 只有十来个 token 的小请求偶尔放过，真对话一律 429）。撞上 fast 自己的 429 就当场按普通速度重发，
@@ -146,11 +162,29 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
         if (res.status === 429 ? FAST_LIMIT_RE.test(raw) : FAST_REFUSED_RE.test(raw)) {
           fastCooldownUntil = Date.now() + FAST_COOLDOWN_MS;
           yield { e: "notice", code: "fast_fallback", cooldownMs: FAST_COOLDOWN_MS };
+          sentFast = false;
           res = await send(false);
         } else {
           yield httpErrorEvent(res, raw, errCtx);
           return;
         }
+      }
+
+      // 第三方 Anthropic 兼容端点默认也打缓存标记（多数认或忽略）；不认、以 cache_control 为由 400 的，去掉标记当场重发，
+      // 这个服务在本进程里之后都不再发（不让整轮因为一个可有可无的字段失败）
+      if (res.status === 400 && custom && cacheMark) {
+        const raw = await safeText(res);
+        if (!CACHE_REFUSED_RE.test(raw)) {
+          yield httpErrorEvent(res, raw, errCtx);
+          return;
+        }
+        cacheRejected.add(cfg.provider);
+        cacheMark = null;
+        capabilities.cache = false;
+        // Claude 型号不带标记就不缓存；别家（DeepSeek、Kimi……）自己自动缓存，时长照旧
+        if (MK.vendorOf(cfg.model) === "anthropic") delete capabilities.cacheTtlMs;
+        body = encode(turn, cfg.model, capabilities, null, custom);
+        res = await send(sentFast);
       }
 
       if (!res.ok || !res.body) {
@@ -205,6 +239,8 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
             });
             // U3：一知道工具名就报，参数可能还要写好几分钟
             if (cb.type === "tool_use") yield { e: "tool_call_begin", id: cb.id ?? `call_${idNonce}_${ev.index}`, name: cb.name ?? "unknown", chars: 0 };
+            // redacted_thinking 整块在 start 里给齐（没有 delta），原样留着回传
+            else if (cb.type === "redacted_thinking" && typeof cb.data === "string") yield { e: "thinking_delta", text: "", redacted: cb.data, index: ev.index };
             break;
           }
 
@@ -214,10 +250,10 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
             if (d.type === "text_delta") {
               yield { e: "text_delta", text: d.text };
             } else if (d.type === "thinking_delta") {
-              yield { e: "thinking_delta", text: d.thinking };
+              yield { e: "thinking_delta", text: d.thinking, index: ev.index };
             } else if (d.type === "signature_delta" && st) {
-              // Emit the signature so the loop can store it for replay.
-              yield { e: "thinking_delta", text: "", signature: d.signature };
+              // 签名跟着它那一块走（带下标）：一轮里有几块思考，就回传几块、各带各的签名
+              yield { e: "thinking_delta", text: "", signature: d.signature, index: ev.index };
             } else if (d.type === "input_json_delta" && st) {
               st.jsonBuf += d.partial_json;
               // U3：参数写了多少字，节流上报（活动行「生成参数 · N 字」）
@@ -257,6 +293,7 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
             break;
 
           case "message_stop":
+            sawCache(cacheReadTokens, cacheWriteTokens);
             yield { e: "usage", inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens };
             yield { e: "turn_done", stopReason };
             return;
@@ -271,6 +308,7 @@ export function createAnthropicAdapter(cfg: AdapterConfig): ProviderAdapter {
       }
 
       // Stream ended without an explicit message_stop.
+      sawCache(cacheReadTokens, cacheWriteTokens);
       yield { e: "usage", inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens };
       yield { e: "turn_done", stopReason };
     },
@@ -400,7 +438,7 @@ function markMessageCache(messages: any[], cache: CacheMark) {
 
 function encodeMsg(m: Msg, lenient = false, padEmpty = false) {
   const content = m.content.map((b) => encodeBlock(b, lenient)).filter(Boolean);
-  if (padEmpty && m.role === "assistant" && content.some((b: any) => b.type === "tool_use") && !content.some((b: any) => b.type === "thinking")) {
+  if (padEmpty && m.role === "assistant" && content.some((b: any) => b.type === "tool_use") && !content.some((b: any) => b.type === "thinking" || b.type === "redacted_thinking")) {
     content.unshift({ type: "thinking", thinking: "", signature: "" });
   }
   return { role: m.role, content };
@@ -450,8 +488,10 @@ function encodeBlock(b: Block, lenient = false): any {
       // 空文本块 Anthropic 拒收（别家可能留下 content 为空串的回答）
       return b.text ? { type: "text", text: b.text } : null;
     case "thinking":
+      // redacted_thinking 只有验签的上游（Claude）认得；不验签的第三方型号不认这个块，丢掉
+      if (b.redacted !== undefined) return lenient ? null : { type: "redacted_thinking", data: b.redacted };
       // 没有签名的思考来自别家（会话中途换过来的）：Anthropic 验签必拒，丢掉——别家的思考对 Claude 本来也不回放。
-      // 不验签的第三方端点（lenient）照发，签名给空串。
+      // 不验签的第三方端点（lenient）照发，签名给空串。思考原文为空（display 默认 omitted）而有签名的照样回传。
       if (b.signature) return { type: "thinking", thinking: b.text, signature: b.signature };
       return lenient && b.text ? { type: "thinking", thinking: b.text, signature: "" } : null;
     case "image":

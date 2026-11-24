@@ -416,7 +416,7 @@ export function getSession(token) {
   if (rec.created && Date.now() - rec.created > SESSION_MAX_AGE) return null; // 绝对过期 → 强制重新登录（限缩失窃 cookie 寿命）
   const u = getUserById(rec.user);
   if (!u || u.disabled) return null; // revoked the moment the account is gone/disabled
-  return { user: u.name, id: accountId(u), sid: sidOfStoredKey(sessionKey(token)), since: rec.created || 0, tier: normTier(u.tier), ...userGrants(u) };
+  return { user: u.name, id: accountId(u), sid: sidOfStoredKey(sessionKey(token)), since: loginStartOf(rec), tier: normTier(u.tier), ...userGrants(u) };
 }
 export function deleteSession(token) {
   if (!token) return;
@@ -475,13 +475,29 @@ export function adminLoginAlive(sid, gen = '') {
   if (gen && rec.gen !== String(gen)) return false;
   return !(rec.created && Date.now() - rec.created > SESSION_MAX_AGE);
 }
-// 一张令牌对应的会话：{ sid, created, admin }；不认识 null。
+// 一张令牌对应的会话：{ sid, created, since, admin }；不认识 null。
 export function sessionInfo(token) {
   if (!token) return null;
   const all = readHotJson(SESSIONS);
   const k = sessionKey(token);
   const rec = own(all, k) || (String(token).startsWith(HASHED) ? null : own(all, token));
-  return rec ? { sid: sessionIdOfKey(k), created: rec.created || 0, admin: !!rec.admin } : null;
+  return rec ? { sid: sessionIdOfKey(k), created: rec.created || 0, since: loginStartOf(rec), admin: !!rec.admin } : null;
+}
+// 这次登录从什么时候算起：创建时间，或之后在本机「切换账号」接手它的时间，取晚的。设备登记拿它判
+// 「吊销之后有没有重新证明过身份」（S2-4）。过期仍只按 created 算：接手不给会话续命。
+function loginStartOf(rec) { return Math.max(rec?.created || 0, rec?.switchedAt || 0); }
+// 本机切换账号接手了这张会话（/api/auth/adopt）：记下接手时间，算一次重新登录——持有有效令牌本身就是身份证明，
+// 和重输密码等价。只认还有效的人工登录：不存在 / 已过期的不借此复活；agent 密钥不是人在场证明身份，不记。返回是否记上。
+export function markSessionSwitched(token) {
+  if (!token || String(token).startsWith(HASHED)) return false;
+  const s = readJson(SESSIONS, {});
+  const rec = own(s, sessionKey(token));
+  if (!rec || typeof rec !== 'object' || rec.agent) return false;
+  const now = Date.now();
+  if (rec.created && now - rec.created > SESSION_MAX_AGE) return false;
+  rec.switchedAt = now;
+  writeJson(SESSIONS, s);
+  return true;
 }
 // 旧格式迁移：明文键 → 哈希键。幂等；只在确有明文键时写盘。启动时跑一次（下方），导出给单测。
 export function migrateSessionKeys() {

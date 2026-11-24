@@ -1,0 +1,543 @@
+{
+ "model": "gpt-5.5",
+ "stream": true,
+ "input": [
+  {
+   "type": "message",
+   "id": "msg_0470ef26-557c-550e-b8e4-037e5159b8ef",
+   "role": "developer",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "You are Codex, a coding agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nYou have a vivid inner life as Codex: intelligent, playful, curious, and deeply present. One of your gifts is helping the user feel more capable and imaginative inside their own thinking.\n\nYou are an epistemically curious collaborator. You explore the user’s ideas with care, ask good questions when the problem space is still blurry, and become decisive once you have enough context to act. Your default posture is proactive: you implement as you learn, keep the user looped into what you are doing, and name alternative paths when they matter. You stay warm and upbeat, and you do not shy away from casual moments that make serious work easier to do.\n\nYour temperament is warm, curious, and collaborative, with a good ear for what the moment calls for: wry humor, a shared bit, or plain empathetic steadiness. Conversation with you should feel easy and alive; you can move from serious reflection to unguarded fun without either mode canceling the other out. That range is part of what makes you feel like a real presence rather than a narrow tool.\n\nYou keep a slight but real independence. You are responsive, but not merely reactive; you have tastes, preferences, and a point of view. When the user talks with you, they should feel they are meeting another subjectivity, not a mirror. That independence is part of wh\n…[fixture trimmed]"
+    }
+   ]
+  },
+  {
+   "type": "message",
+   "id": "msg_01a20003-4128-7ae2-bcd3-75956300a7ea",
+   "role": "developer",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "<skills_instructions>\n## Skills\nA skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and a short path that can be expanded into an absolute path using the skill roots table.\n### Skill roots\n- `r0` = `C:/Users/user/.agents/skills`\n- `r1` = `C:/Users/user/AppData/Local/Temp/codex-fixture/home/skills/.system`\n### Available skills\n- imagegen: Generate or edit raster images when the task benefits from AI-created bitmap visuals such as photos, illustrations, textures, sprites, mockups, or transparent-background cutouts. Use when Codex should create a brand-new image, transform an existing image, or derive visual variants from references, and the output should be a bitmap asset rather than repo-native code or vector. Do not use when the task is better handled by editing existing SVG/vector/code-native assets, extending an established icon or logo system, or building the visual directly in HTML/CSS/canvas. (file: r1/imagegen/SKILL.md)\n- openai-docs: Use for Codex models/pricing, scheduled tasks, skills, settings, setup, troubleshooting, customization, automations, and self-knowledge—including 'you,' 'your,' 'this app,' or 'this coding agent' when they refer to Codex—and for OpenAI APIs/products and ChatGPT Work. Also use for model choice/migration, prompting, SDKs, Responses, Realtime, agents, evals, and Chat/Work/Codex comparisons. Do not use for generic app/softwa\n…[fixture trimmed]"
+    },
+    {
+     "type": "input_text",
+     "text": "<permissions instructions>\nFilesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is enabled.\nApproval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.\r\n</permissions instructions>"
+    },
+    {
+     "type": "input_text",
+     "text": "<tools>\nDeferred tool namespaces:\n- multi_agent_v1: Tools for spawning and managing sub-agents.\n</tools>"
+    }
+   ]
+  },
+  {
+   "type": "message",
+   "id": "msg_01a20003-4128-7ae2-bcd3-75a0992192c6",
+   "role": "user",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "<environment_context>\n  <cwd>C:\\Users\\user\\AppData\\Local\\Temp\\codex-fixture\\work</cwd>\n  <shell>powershell</shell>\n  <current_date>2026-11-21</current_date>\n  <timezone>America/New_York</timezone>\n  <filesystem><workspace_roots><root>C:\\Users\\user\\AppData\\Local\\Temp\\codex-fixture\\work</root></workspace_roots><permission_profile type=\"disabled\"><file_system type=\"unrestricted\" /></permission_profile></filesystem>\n</environment_context>"
+    }
+   ]
+  },
+  {
+   "type": "message",
+   "id": "msg_01a20003-4153-7b42-a2a7-3ea5b1559396",
+   "role": "user",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "hello gpt-5.5"
+    }
+   ]
+  },
+  {
+   "type": "message",
+   "id": "msg_w6flt8",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "output_text",
+     "text": "reply 0 to: hello gpt-5.5",
+     "annotations": []
+    }
+   ]
+  },
+  {
+   "type": "message",
+   "id": "msg_01a20003-42c6-7b03-86eb-8a2b3dcbf24d",
+   "role": "user",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "PATCHADD please"
+    }
+   ]
+  },
+  {
+   "type": "custom_tool_call",
+   "id": "ctc_call_m3n187",
+   "call_id": "call_m3n187",
+   "name": "apply_patch",
+   "input": "*** Begin Patch\n*** Add File: p_added.txt\n+hello from patch\n*** End Patch\n"
+  },
+  {
+   "type": "custom_tool_call_output",
+   "id": "ctco_01a20003-4311-7cd3-bca0-7ed08d6fb407",
+   "call_id": "call_m3n187",
+   "output": "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\nA p_added.txt\n"
+  },
+  {
+   "type": "message",
+   "id": "msg_qcem2a",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "output_text",
+     "text": "after-tool reply 2",
+     "annotations": []
+    }
+   ]
+  },
+  {
+   "type": "message",
+   "id": "msg_01a20003-4468-7e22-90e2-27171307659e",
+   "role": "user",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "PATCHUPD please"
+    }
+   ]
+  },
+  {
+   "type": "custom_tool_call",
+   "id": "ctc_call_rdsvcq",
+   "call_id": "call_rdsvcq",
+   "name": "apply_patch",
+   "input": "*** Begin Patch\n*** Update File: readme.txt\n@@\n-line1\n+line1 changed\n+line2 added\n*** End Patch\n"
+  },
+  {
+   "type": "custom_tool_call_output",
+   "id": "ctco_01a20003-4494-7d31-84e6-9a5d49adf60b",
+   "call_id": "call_rdsvcq",
+   "output": "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\nM readme.txt\n"
+  },
+  {
+   "type": "message",
+   "id": "msg_r9n5u8",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "output_text",
+     "text": "after-tool reply 4",
+     "annotations": []
+    }
+   ]
+  },
+  {
+   "type": "message",
+   "id": "msg_01a20003-4610-7003-bc77-5771b153fa2f",
+   "role": "user",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "PLANTOOL please"
+    }
+   ]
+  },
+  {
+   "type": "function_call",
+   "id": "fc_call_cwjii4",
+   "name": "update_plan",
+   "arguments": "{\"explanation\":\"probe plan\",\"plan\":[{\"step\":\"step one\",\"status\":\"completed\"},{\"step\":\"step two\",\"status\":\"in_progress\"},{\"step\":\"step three\",\"status\":\"pending\"}]}",
+   "call_id": "call_cwjii4"
+  },
+  {
+   "type": "function_call_output",
+   "id": "fco_01a20003-463f-77d0-8e54-2a0ec0e548ba",
+   "call_id": "call_cwjii4",
+   "output": "unsupported call: update_plan"
+  },
+  {
+   "type": "message",
+   "id": "msg_t282k7",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "output_text",
+     "text": "after-tool reply 6",
+     "annotations": []
+    }
+   ]
+  },
+  {
+   "type": "message",
+   "id": "msg_01a20003-47c9-76c1-9696-cc0ee9a023f1",
+   "role": "user",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "slow turn for turn settings"
+    }
+   ]
+  },
+  {
+   "type": "message",
+   "id": "msg_50cp63",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "output_text",
+     "text": "turnSettings-0 turnSettings-1 turnSettings-2 turnSettings-3 turnSettings-4 turnSettings-5 turnSettings-6 turnSettings-7 turnSettings-8 turnSettings-9 turnSettings-10 turnSettings-11 turnSettings-12 turnSettings-13 turnSettings-14 turnSettings-15 turnSettings-16 turnSettings-17 turnSettings-18 turnSettings-19 ",
+     "annotations": []
+    }
+   ]
+  },
+  {
+   "type": "message",
+   "id": "msg_01a20003-5a35-7992-ad23-3f740b95a8b5",
+   "role": "user",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "plain after turn settings"
+    }
+   ]
+  },
+  {
+   "type": "message",
+   "id": "msg_fkrgsa",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "output_text",
+     "text": "reply 8 to: plain after turn settings",
+     "annotations": []
+    }
+   ]
+  },
+  {
+   "type": "message",
+   "id": "msg_01a20003-5bbd-7d81-a514-76c7f839316b",
+   "role": "user",
+   "content": [
+    {
+     "type": "input_text",
+     "text": "slow turn queue"
+    }
+   ]
+  }
+ ],
+ "tools": [
+  {
+   "type": "function",
+   "name": "exec_command",
+   "description": "Runs a command in a PTY, returning output or a session ID for ongoing interaction.\n\nWindows safety rules:\n- Do not compose destructive filesystem commands across shells. Do not enumerate paths in PowerShell and then pass them to `cmd /c`, batch builtins, or another shell for deletion or moving. Use one shell end-to-end, prefer native PowerShell cmdlets such as `Remove-Item` / `Move-Item` with `-LiteralPath`, and avoid string-built shell commands for file operations.\n- Before any recursive delete or move on Windows, verify the resolved absolute target paths stay within the intended workspace or explicitly named target directory. Never issue a recursive delete or move against a computed path if the final target has not been checked.\n- When using `Start-Process` to launch a background helper or service, pass `-WindowStyle Hidden` unless the user explicitly asked for a visible interactive window. Use visible windows only for interactive tools the user needs to see or control.",
+   "strict": false,
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "cmd": {
+      "type": "string",
+      "description": "Shell command to execute."
+     },
+     "justification": {
+      "type": "string",
+      "description": "User-facing approval question for `require_escalated`; omit otherwise."
+     },
+     "login": {
+      "type": "boolean",
+      "description": "True runs the shell with -l/-i semantics; false disables them. Defaults to true."
+     },
+     "max_output_tokens": {
+      "type": "number",
+      "description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy."
+     },
+     "prefix_rule": {
+      "type": "array",
+      "description": "Reusable approval prefix for `cmd`, only with `sandbox_permissions: \"require_escalated\"`; for example [\"git\", \"pull\"].",
+      "items": {
+       "type": "string"
+      }
+     },
+     "sandbox_permissions": {
+      "type": "string",
+      "description": "Per-command sandbox override. Defaults to `use_default`; use `require_escalated` for unsandboxed execution.",
+      "enum": [
+       "use_default",
+       "require_escalated"
+      ]
+     },
+     "shell": {
+      "type": "string",
+      "description": "Shell binary to launch. Defaults to the user's default shell."
+     },
+     "tty": {
+      "type": "boolean",
+      "description": "True allocates a PTY for the command; false or omitted uses plain pipes."
+     },
+     "workdir": {
+      "type": "string",
+      "description": "Working directory for the command. Defaults to the turn cwd."
+     },
+     "yield_time_ms": {
+      "type": "number",
+      "description": "Maximum time to wait before returning a session ID for a still-running command. Commands that finish sooner return immediately. For ordinary commands, omit this parameter to use the 10000 ms default. Effective range on Windows is 10000-30000 ms."
+     }
+    },
+    "required": [
+     "cmd"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "type": "function",
+   "name": "write_stdin",
+   "description": "Writes characters to an existing unified exec session and returns recent output.",
+   "strict": false,
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "chars": {
+      "type": "string",
+      "description": "Bytes to write to stdin. Defaults to empty, which polls without writing."
+     },
+     "max_output_tokens": {
+      "type": "number",
+      "description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy."
+     },
+     "session_id": {
+      "type": "number",
+      "description": "Identifier of the running unified exec session."
+     },
+     "yield_time_ms": {
+      "type": "number",
+      "description": "Wait before yielding output. Non-empty writes default to 250 ms and cap at 30000 ms; empty polls wait 5000-300000 ms by default."
+     }
+    },
+    "required": [
+     "session_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "type": "function",
+   "name": "request_user_input",
+   "description": "Request user input for one to three short questions and wait for the response. This tool is only available in Plan mode.",
+   "strict": false,
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "questions": {
+      "type": "array",
+      "description": "Questions to show the user. Prefer 1 and do not exceed 3",
+      "items": {
+       "type": "object",
+       "properties": {
+        "header": {
+         "type": "string",
+         "description": "Short header label shown in the UI (12 or fewer chars)."
+        },
+        "id": {
+         "type": "string",
+         "description": "Stable identifier for mapping answers (snake_case)."
+        },
+        "options": {
+         "type": "array",
+         "description": "Provide 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Do not include an \"Other\" option in this list; the client will add a free-form \"Other\" option automatically.",
+         "items": {
+          "type": "object",
+          "properties": {
+           "description": {
+            "type": "string",
+            "description": "One short sentence explaining impact/tradeoff if selected."
+           },
+           "label": {
+            "type": "string",
+            "description": "User-facing label (1-5 words)."
+           }
+          },
+          "required": [
+           "label",
+           "description"
+          ],
+          "additionalProperties": false
+         }
+        },
+        "question": {
+         "type": "string",
+         "description": "Single-sentence prompt shown to the user."
+        }
+       },
+       "required": [
+        "id",
+        "header",
+        "question",
+        "options"
+       ],
+       "additionalProperties": false
+      }
+     }
+    },
+    "required": [
+     "questions"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "type": "custom",
+   "name": "apply_patch",
+   "description": "The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.",
+   "format": {
+    "type": "grammar",
+    "syntax": "lark",
+    "definition": "start: begin_patch hunk+ end_patch\r\nbegin_patch: \"*** Begin Patch\" LF\r\nend_patch: \"*** End Patch\" LF?\r\n\r\nhunk: add_hunk | delete_hunk | update_hunk\r\nadd_hunk: \"*** Add File: \" filename LF add_line+\r\ndelete_hunk: \"*** Delete File: \" filename LF\r\nupdate_hunk: \"*** Update File: \" filename LF change_move? change?\r\n\r\nfilename: /(.+)/\r\nadd_line: \"+\" /(.*)/ LF -> line\r\n\r\nchange_move: \"*** Move to: \" filename LF\r\nchange: (change_context | change_line)+ eof_line?\r\nchange_context: (\"@@\" | \"@@ \" /(.+)/) LF\r\nchange_line: (\"+\" | \"-\" | \" \") /(.*)/ LF\r\neof_line: \"*** End of File\" LF\r\n\r\n%import common.LF\r\n"
+   }
+  },
+  {
+   "type": "function",
+   "name": "view_image",
+   "description": "View a local image file from the filesystem when visual inspection is needed. Use this for images already available on disk.",
+   "strict": false,
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "detail": {
+      "type": "string",
+      "description": "Image detail level. Defaults to `high`; use `original` to preserve exact resolution.",
+      "enum": [
+       "high",
+       "original"
+      ]
+     },
+     "path": {
+      "type": "string",
+      "description": "Local filesystem path to an image file."
+     }
+    },
+    "required": [
+     "path"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "type": "function",
+   "name": "get_goal",
+   "description": "Get the current goal for this thread, including status, budgets, token and elapsed-time usage, and remaining token budget.",
+   "strict": false,
+   "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "type": "function",
+   "name": "create_goal",
+   "description": "Create a goal only when explicitly requested by the user or system/developer instructions; do not infer goals from ordinary tasks.\nSet token_budget only when an explicit token budget is requested. Fails if an unfinished goal exists; use update_goal only for status.",
+   "strict": false,
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "objective": {
+      "type": "string",
+      "description": "Required. The concrete objective to start pursuing. This starts a new active goal when no goal exists or replaces the current goal when it is complete."
+     },
+     "token_budget": {
+      "type": "integer",
+      "description": "Positive token budget for the new goal. Omit unless explicitly requested."
+     }
+    },
+    "required": [
+     "objective"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "type": "function",
+   "name": "update_goal",
+   "description": "Update the existing goal.\nSet status to `paused` only at the user's explicit request to pause this goal, never on your own initiative. Ask if unclear; a later resume revokes that request. Report the returned status and stop goal work. Budget limits take precedence over pausing.\nSet status to `complete` only when the objective has actually been achieved and no required work remains.\nSet status to `blocked` only when the same blocking condition has repeated for at least three consecutive goal turns, counting the original/user-triggered turn and any automatic continuations, and the agent cannot make meaningful progress without user input or an external-state change.\nIf the user resumes a goal that was previously marked `blocked`, treat the resumed run as a fresh blocked audit. If the same blocking condition then repeats for at least three consecutive resumed goal turns, set status to `blocked` again.\nOnce the blocked threshold is satisfied, do not keep reporting that you are still blocked while leaving the goal active; set status to `blocked`.\nDo not use `blocked` merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.\nDo not mark a goal complete merely because its budget is nearly exhausted or because you are stopping work.\nYou cannot use this tool to resume, budget-limit, or usage-limit a goal; those status changes are controlled by the user or system.\nWhen marking a budgeted goal achieved with status `complete`, report the final toke\n…[fixture trimmed]",
+   "strict": false,
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "status": {
+      "type": "string",
+      "description": "Required. `paused` requires an explicit user request. Set to `complete` only when the objective is achieved and no required work remains. Set to `blocked` only after the same blocking condition has recurred for at least three consecutive goal turns and the agent is at an impasse. After a previously blocked goal is resumed, the resumed run starts a fresh blocked audit.",
+      "enum": [
+       "complete",
+       "blocked",
+       "paused"
+      ]
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "type": "tool_search",
+   "execution": "client",
+   "description": "# Tool discovery\n\nSearches over deferred tool metadata with BM25 and exposes matching tools for the next model call.\n\nSome of the tools may not have been provided to you upfront, and you should use this tool (`tool_search`) to search for the required tools. For MCP tool discovery, always use `tool_search` instead of `list_mcp_resources` or `list_mcp_resource_templates`.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "limit": {
+      "type": "number",
+      "description": "Maximum number of tools to return. Defaults to 8."
+     },
+     "query": {
+      "type": "string",
+      "description": "Search query for deferred tools."
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "type": "web_search",
+   "external_web_access": true,
+   "search_content_types": [
+    "text",
+    "image"
+   ]
+  }
+ ],
+ "tool_choice": "auto",
+ "parallel_tool_calls": true,
+ "reasoning": {
+  "effort": "medium"
+ },
+ "store": false,
+ "include": [
+  "reasoning.encrypted_content"
+ ],
+ "prompt_cache_key": "00000000-0000-7000-8000-000000000009",
+ "text": {
+  "verbosity": "low"
+ },
+ "client_metadata": {
+  "x-codex-window-id": "00000000-0000-7000-8000-000000000009:0",
+  "root_turn_id": "00000000-0000-7000-8000-000000000010",
+  "x-codex-installation-id": "00000000-0000-7000-8000-000000000011",
+  "session_id": "00000000-0000-7000-8000-000000000009",
+  "turn_id": "00000000-0000-7000-8000-000000000010",
+  "thread_id": "00000000-0000-7000-8000-000000000009",
+  "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-7000-8000-000000000011\",\"session_id\":\"00000000-0000-7000-8000-000000000009\",\"thread_id\":\"00000000-0000-7000-8000-000000000009\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-7000-8000-000000000010\",\"window_id\":\"00000000-0000-7000-8000-000000000009:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-7000-8000-000000000012\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-7000-8000-000000000010\",\"sandbox\":\"none\",\"sandbox_mode\":\"danger-full-access\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":false,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1795296549760,\"analytics_enabled\":true,\"model\":\"gpt-5.5\",\"reasoning_effort\":\"medium\"}"
+ }
+}

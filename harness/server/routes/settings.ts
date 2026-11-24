@@ -1,7 +1,7 @@
 // 服务信息、设备芯片、配置与偏好、自定义模型服务、本机模型、技能与连接器状态。
 import { outboundProxyStatus } from "../net-proxy.ts";
 import express from "express";
-import { workspaceRoot } from "../session.ts";
+import { sessionWorkspace, workspaceRoot } from "../session.ts";
 import { commandList } from "../commands.ts";
 import { syncConnectors, mcpStatus } from "../mcp.ts";
 import { disabledProviders, tenantInfo, accessLock, tenantMode } from "../tenant.ts";
@@ -197,8 +197,10 @@ export function registerSettingsRoutes(app: express.Express): void {
   });
 
   // E3（G7）：输入框 / 面板的技能清单（扩展中心勾给 dimensio 的；按名现读，新装的马上出现）。内置命令在前端
-  app.get("/api/commands", (_req, res) => {
-    res.json(commandList());
+  // 项目级与用户级的技能、自定义命令也在里面：带 ?session=<id> 按那个会话的工作区列，不带按当前配置的工作区
+  app.get("/api/commands", async (req, res) => {
+    const id = typeof req.query.session === "string" && /^[A-Za-z0-9-]{1,64}$/.test(req.query.session) ? req.query.session : "";
+    res.json(commandList(id ? await sessionWorkspace(id) : workspaceRoot()));
   });
 
   // E1（G6）：MCP 连接器的连接状态（勾给 dimensio 的；不含凭据、命令行与地址）。先对一遍注册表

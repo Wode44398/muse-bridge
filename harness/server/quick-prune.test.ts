@@ -85,7 +85,7 @@ test("按天数：30 天没动的进回收站，列表不再列出；在跑的�
 test("只留最近 N 条：超出的按最后活动从旧到新进回收站；在跑的占名额", async () => {
   isolate();
   const now = Date.now();
-  const bs = [];
+  const bs: Array<{ dir: string; sid: string }> = [];
   for (let i = 1; i <= 5; i++) bs.push(await usedBucket(`cnt${i}`, i * HOUR, now)); // 1 最新 … 5 最老
   const r = await pruneQuick({ retention: "max2", now, busy: (id) => id === bs[4].sid });
   // 在跑的第 5 只占一个名额 → 其余只留最新 1 只（第 1 只）

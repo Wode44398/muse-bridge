@@ -21,6 +21,17 @@ export function anthropicSse(events: readonly StreamEvent[], usage: Record<strin
       out.push({ type: "content_block_delta", index, delta: { type: "text_delta", text: ev.text } });
       out.push({ type: "content_block_stop", index });
       index++;
+    } else if (ev.e === "thinking_delta") {
+      // 一个 thinking_delta 事件 = 一整块思考（带 redacted 的是 redacted_thinking 块，整块在 start 里）
+      if (ev.redacted !== undefined) {
+        out.push({ type: "content_block_start", index, content_block: { type: "redacted_thinking", data: ev.redacted } });
+      } else {
+        out.push({ type: "content_block_start", index, content_block: { type: "thinking", thinking: "", signature: "" } });
+        if (ev.text) out.push({ type: "content_block_delta", index, delta: { type: "thinking_delta", thinking: ev.text } });
+        if (ev.signature) out.push({ type: "content_block_delta", index, delta: { type: "signature_delta", signature: ev.signature } });
+      }
+      out.push({ type: "content_block_stop", index });
+      index++;
     } else if (ev.e === "tool_call") {
       out.push({ type: "content_block_start", index, content_block: { type: "tool_use", id: ev.id, name: ev.name } });
       out.push({ type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: JSON.stringify(ev.args) } });
@@ -44,6 +55,10 @@ export function openaiSse(events: readonly StreamEvent[], usage: Record<string, 
   for (const ev of events) {
     if (ev.e === "text_delta") {
       out.push({ choices: [{ index: 0, delta: { content: ev.text } }] });
+    } else if (ev.e === "thinking_delta") {
+      // 带 details 的按 OpenRouter 的形状发：delta.reasoning（明文）+ delta.reasoning_details（结构化条目的分片）
+      if (ev.details) out.push({ choices: [{ index: 0, delta: { ...(ev.text ? { reasoning: ev.text } : {}), reasoning_details: ev.details } }] });
+      else out.push({ choices: [{ index: 0, delta: { reasoning_content: ev.text } }] });
     } else if (ev.e === "tool_call") {
       out.push({
         choices: [{ index: 0, delta: { tool_calls: [{ index: toolIndex++, id: ev.id, type: "function", function: { name: ev.name, arguments: JSON.stringify(ev.args) } }] } }],
@@ -83,10 +98,16 @@ export interface FakeWire {
   readonly bodies: any[];
 }
 
+export interface FakeHttpError {
+  status: number;
+  body: string;
+}
+
 export interface FakeProviderOptions {
   baseUrl: string;
   shape: WireShape;
-  steps: StreamEvent[][];
+  // 一步 = 一串流事件（回 200 + SSE），或一个 HTTP 错误回应（测上游拒收后的退路）
+  steps: (StreamEvent[] | FakeHttpError)[];
   // 第 n 次请求（0 起）回应里额外带的用量字段
   usage?: (call: number) => Record<string, unknown>;
 }
@@ -108,6 +129,7 @@ export function fakeProviderFetch(t: TestContext, opts: FakeProviderOptions): Fa
     const step = opts.steps[call];
     // 非重试类错误，让 loop 立即收场（而不是按 5xx 重试四次）
     if (!step) return new Response("fake provider script exhausted", { status: 400 });
+    if (!Array.isArray(step)) return new Response(step.body, { status: step.status, headers: { "content-type": "application/json" } });
     return new Response(ENCODERS[opts.shape](step, opts.usage?.(call)), { status: 200, headers: { "content-type": "text/event-stream" } });
   }) as typeof fetch;
   t.after(() => {

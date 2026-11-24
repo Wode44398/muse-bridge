@@ -18,6 +18,8 @@ import { worldBaseline, worldDelta, worldToken, worldTokens } from "./agent/worl
 import { listCheckpoints } from "./checkpoints.ts";
 import { setConfig } from "./config.ts";
 import { inheritedInstructions } from "./project-docs.ts";
+import { saveMemory } from "./memory.ts";
+import { memoryIndexChanges } from "./memory-index.ts";
 import { Sandbox } from "./sandbox.ts";
 import { createSession, dropSession, getOrLoadSession, rollbackSession, setSessionAccess, startRun } from "./session.ts";
 import { contextWindows, isCompactionRequest } from "./test-harness/context-windows.ts";
@@ -217,4 +219,31 @@ test("调试模式：会话中途打开 → 片段带完整调试段；关掉 �
   assert.ok(off && off.text.includes("Debug mode is OFF"));
   assert.equal(worldDelta({ debug: "" }, {}, describe), null);
   assert.match(describeWorldChange("debug", "file", undefined), /harness-feedback/);
+});
+
+// 收口：待确认的笔记也列进索引之后，后台沉淀每存一条就让 memory 节变一次——模型手里那一版找得到时只报差异，不整份重发
+test("收口 记忆索引变了：只报新增 / 去掉的行，不把整份索引再发一遍；段首变了（从没有笔记到有）才整份发", async (t) => {
+  const root = workspace("dimensio-c4-memory-");
+  for (let i = 1; i <= 12; i++) {
+    saveMemory(root, { title: `Existing note ${i}`, description: `what note ${i} is about, in a sentence long enough to matter`, content: `Body of note ${i}.`, lenient: true, origin: { writer: "user", attended: true } });
+  }
+  const adapter = scripted(t).next(say("你好！"));
+  const session = await productionSession(t, root, adapter);
+  assert.match(String(adapter.inputs[0].system), /Existing note 12/);
+  // 后台沉淀存了一条待确认的
+  saveMemory(root, { title: "Freshly extracted fact", content: "The staging DB is on port 5433.", lenient: true, origin: { writer: "model" } });
+  adapter.next(say("好"));
+  await send(session, "继续");
+  const fragment = JSON.stringify(fragmentsIn(adapter.inputs[1]).at(-1)?.content ?? "");
+  assert.match(fragment, /Memory index changed — only the differences/);
+  assert.match(fragment, /Freshly extracted fact/);
+  assert.doesNotMatch(fragment, /Existing note 3/, "没变的行不重发");
+  assert.equal(adapter.inputs[1].system, adapter.inputs[0].system, "system 不改写");
+  dropSession(session.id);
+
+  // 段首变了：整份重发
+  const before = "This workspace — no notes yet; they go in X as Markdown files.\n\nGlobal — g:\n- a · a.md";
+  const after = "This workspace — notes are Markdown files in X:\n- b · b.md\n\nGlobal — g:\n- a · a.md";
+  assert.equal(memoryIndexChanges(before, after), null);
+  assert.equal(memoryIndexChanges(after, after), null, "没变就没有差异");
 });

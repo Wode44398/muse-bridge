@@ -27,6 +27,7 @@ class Node_ {
     return out;
   }
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+  contains(n) { for (let x = n; x; x = x.parentNode) if (x === this) return true; return false; }
 }
 class Text_ extends Node_ {
   constructor(data) { super(); this.nodeType = 3; this.data = data; }
@@ -132,6 +133,7 @@ function win(body, { defined = [] } = {}) {
     title: '测试页',
     body,
     querySelector: (sel) => html.querySelector(sel),
+    querySelectorAll: (sel) => html.querySelectorAll(sel),
   };
   return { document, getComputedStyle: style, customElements: { get: (n) => defined.includes(n) || undefined } };
 }
@@ -315,4 +317,24 @@ test('browserPageText: shadow note, lazy hint, links list with query; older sess
   assert.equal(old, 'url: https://example.com/page\ntitle: T\n取自 <main>\n\n正文');
   const more = (await browserPageText(fake({ ...base, truncated: true, more: true, total: 9000, text: 'x'.repeat(10) }), {})).content[0].text;
   assert.match(more, /共 9000\+ 字/);
+});
+
+// ── 分层（11-22 agy 反馈：阿里云顶栏的抽屉挂着 role=main，收起时 0 宽，正文全被它占了）──────────
+test('layers: hidden role=main drawer is skipped for the real main; an open dialog comes first', () => {
+  const drawer = h('div', { role: 'main' }, h('p', {}, '产品与服务 加入收藏 加入收藏'));
+  const main = h('main', {}, h('p', {}, '正文'));
+  const dlg = h('div', { class: 'x-rc-dialog' }, h('p', {}, '创建 Bucket'));
+  const w = win(h('body', {}, drawer, main, dlg));
+  const r = pageTextInPage({}, w, () => ({ junk: [drawer], dialogs: [dlg] }));
+  assert.equal(r.from, 'main');
+  assert.equal(r.text, '【当前弹窗】\n创建 Bucket\n\n【弹窗底下的页面】\n正文');
+  assert.equal(r.dialogs, 1);
+  // 没有 main 时退回 body：抽屉和弹窗都不进正文（弹窗只在最前出现一次）
+  const w2 = win(h('body', {}, h('div', {}, drawer), h('p', {}, '页面字'), dlg));
+  const r2 = pageTextInPage({}, w2, () => ({ junk: [drawer], dialogs: [dlg] }));
+  assert.equal(r2.from, 'body');
+  assert.equal(r2.text, '【当前弹窗】\n创建 Bucket\n\n【弹窗底下的页面】\n页面字');
+  assert.equal(r2.hidden, 1);
+  // 分层函数抛错：照老办法读
+  assert.equal(pageTextInPage({}, win(h('body', {}, main)), () => { throw new Error('x'); }).text, '正文');
 });

@@ -108,6 +108,20 @@ test('一个号撞墙：只把撞墙的会话换走并原样重发，另一个�
   } finally { upstreamEvents.off('switch', on); behave = {}; router.clearCooldown('a1'); }
 });
 
+test('Fable 请求被拒（没点名桶、共用额度空着）：只挡这个号的 Fable，Opus 照样能用它', async () => {
+  // 11-23 实遇：一个号没有 Fable 额度，一次 Fable 429 把整个号挡到下周，Opus 任务也全绕开它
+  behave.tokA = () => ({ status: 429, headers: { 'anthropic-ratelimit-unified-status': 'rejected', 'anthropic-ratelimit-unified-reset': String(Math.floor(Date.now() / 1000) + 7 * 86400) }, chunks: ['{"type":"error","error":{"type":"rate_limit_error"}}'] });
+  try {
+    await router.noteLimitHit('a1', { kind: 'rate_limit', model: 'claude-fable-5-2', resetsAt: Date.now() + 7 * 86400_000, type: '' });
+    assert.ok(router.accountBlock('a1', 'claude-fable-5-2', { soft: false }), 'Fable 应被挡');
+    assert.equal(router.accountBlock('a1', 'claude-opus-5-5', { soft: false }), null, 'Opus 不该被连累');
+    assert.equal(router.limitScope('a1', 'five_hour', 'claude-fable-5-2'), '*');
+    assert.equal(router.limitScope('a1', 'seven_day_overage_included', 'claude-opus-5-5'), 'fable');
+    assert.equal(router.limitScope('a1', '', 'claude-opus-5-5'), 'opus');
+    assert.equal(router.limitScope('a1', '', 'claude-haiku-4-5'), '*');
+  } finally { behave = {}; router.clearCooldown('a1'); }
+});
+
 test('分派状态落盘（续聊回原号、学到的计量）', async () => {
   await new Promise((ok) => setTimeout(ok, 3300));
   const f = path.join(dir, 'claude-pool-dispatch.json');

@@ -1,0 +1,49 @@
+/* 选区的墨（墨层、颜色、复制小签）。这份也会原样注入 Codex 的 iframe（controller.js 以 ?raw 读进来）。
+   颜色：--ink 是「叠之前」的颜色——暗色滤色、亮色正片叠底叠在字上，叠完正好等于各分页官方选区色叠在它的底上；
+   反推式：暗 C = 1 − (1 − 目标) / (1 − 底)，亮 C = 目标 / 底（逐通道）。--ink-ghost 是复制时浮起的拓印。
+   data-skin / data-theme 由 controller 按所在分页和实际底色写在墨层上。 */
+.sel-ink-layer { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; user-select: none; -webkit-user-select: none; mix-blend-mode: screen; }
+.sel-ink-layer[data-theme="light"] { mix-blend-mode: multiply; }
+.sel-ink-layer .ink-fill { fill: var(--ink); }
+.sel-ink-layer .ink-edge { fill: none; stroke: var(--ink-edge); stroke-width: 1; opacity: 0; }
+.sel-ink-layer .ink-ghost { fill: var(--ink-ghost); transform-box: fill-box; transform-origin: 50% 50%; }
+/* 容器在一层底色透明的层叠上下文里（Codex 克隆页、容器查询外壳）：混合时空白处等于跟透明混、出来就是墨本身，
+   所以直接画「叠好的」颜色——空白处与设计一致，压在字上的部分暗色滤色只把浅色字提亮一点、亮色正片叠底不碰深色字 */
+.sel-ink-layer[data-flat="1"] .ink-fill { fill: var(--ink-flat); }
+.sel-ink-layer[data-flat="1"] .ink-ghost { fill: var(--ink-flat-ghost); }
+/* 背后是磨砂玻璃或背景图（触屏才会画在这种地方：手机上弹层里的可选文字）：混合层会让玻璃采不到底，
+   改成不混合的半透明强调色，字从下面透出来 */
+.sel-ink-layer[data-flat="glass"] { mix-blend-mode: normal; }
+.sel-ink-layer[data-flat="glass"] .ink-fill { fill: var(--ink-glass); }
+.sel-ink-layer[data-flat="glass"] .ink-ghost { fill: var(--ink-glass); }
+.sel-ink-layer[data-skin="claude"] { --ink-glass: rgba(217,119,87,.3); }
+.sel-ink-layer[data-skin="codex"] { --ink-glass: rgba(51,156,255,.3); }
+.sel-ink-layer[data-skin="agy"] { --ink-glass: rgba(74,144,240,.3); }
+.sel-ink-layer[data-skin="dimensio"] { --ink-glass: rgba(228,85,58,.28); }
+.sel-ink-layer[data-skin="bridge"] { --ink-glass: rgba(128,128,128,.32); }
+
+/* Claude：陶土墨（底 #191919 / #fff） */
+.sel-ink-layer[data-skin="claude"][data-theme="dark"]  { --ink: rgb(81,34,19); --ink-ghost: rgb(126,56,32); --ink-edge: rgba(217,119,87,.62); --ink-flat: #62382a; --ink-flat-ghost: #8b4c36; }
+.sel-ink-layer[data-skin="claude"][data-theme="light"] { --ink: #f5dacd; --ink-ghost: #eab9a3; --ink-edge: rgba(194,94,60,.55); --ink-flat: #f5dacd; --ink-flat-ghost: #eab9a3; }
+/* Codex：ChatGPT 自己的选区蓝（暗 blue-200 的 40%、亮 blue-300 的 35%，底 #212121 / #fff） */
+.sel-ink-layer[data-skin="codex"][data-theme="dark"]   { --ink: #123f66; --ink-ghost: #1a5b94; --ink-edge: rgba(72,170,255,.7); --ink-flat: #31587a; --ink-flat-ghost: #3870a2; }
+.sel-ink-layer[data-skin="codex"][data-theme="light"]  { --ink: #b8dcff; --ink-ghost: #8fc9ff; --ink-edge: rgba(2,133,255,.55); --ink-flat: #b8dcff; --ink-flat-ghost: #8fc9ff; }
+/* agy：--ag-sel-bg 那支蓝，量加一点（20% 在 #131313 上看不清） */
+.sel-ink-layer[data-skin="agy"][data-theme="dark"]     { --ink: #102440; --ink-ghost: #193964; --ink-edge: rgba(74,144,240,.7); --ink-flat: #22354f; --ink-flat-ghost: #2a4870; }
+.sel-ink-layer[data-skin="agy"][data-theme="light"]    { --ink: #deebfd; --ink-ghost: #c1dafb; --ink-edge: rgba(47,128,237,.55); --ink-flat: #dae6f8; --ink-flat-ghost: #bdd6f6; }
+/* dimensio：它自己的朱（亮 #EBCFC2、暗朱 30%，底 #131210 / #F4F1EA）——像朱批 */
+.sel-ink-layer[data-skin="dimensio"][data-theme="dark"]  { --ink: #44160d; --ink-ghost: #682115; --ink-edge: rgba(228,85,58,.72); --ink-flat: #52261d; --ink-flat-ghost: #733124; }
+.sel-ink-layer[data-skin="dimensio"][data-theme="light"] { --ink: #f6dbd3; --ink-ghost: #f1c7c1; --ink-edge: rgba(200,65,43,.55); --ink-flat: #ebcfc2; --ink-flat-ghost: #e7bcb1; }
+/* 其他分页：bridge 的墨与象牙 */
+.sel-ink-layer[data-skin="bridge"][data-theme="dark"]  { --ink: rgb(56,55,50); --ink-ghost: rgb(92,90,84); --ink-edge: rgba(255,255,255,.34); --ink-flat: #4a4945; --ink-flat-ghost: #706e68; }
+.sel-ink-layer[data-skin="bridge"][data-theme="light"] { --ink: #e3e0d7; --ink-ghost: #cdc9bd; --ink-edge: rgba(0,0,0,.28); --ink-flat: #dfdcd3; --ink-flat-ghost: #c7c3b6; }
+
+/* 墨画上了，原生选区就藏起来（输入框里的照常） */
+.sel-ink-on :not(input, textarea)::selection { background-color: transparent !important; }
+
+/* 复制后选区末端冒出的小签 */
+.sel-tip { position: absolute; z-index: 5; display: flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px 0 7px; border-radius: 7px;
+  background: #3a3a3a; color: #f2f2f2; font-size: 12px; line-height: 1; white-space: nowrap; pointer-events: none; user-select: none; -webkit-user-select: none;
+  box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+.sel-tip[data-theme="light"] { background: #1f1f1f; }
+.sel-tip svg { width: 13px; height: 13px; flex: none; }

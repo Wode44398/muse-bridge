@@ -107,7 +107,7 @@ export const workflowTool: Tool = {
       "finding, survey many subsystems in parallel, migrate N call sites). The script MUST begin with " +
       "`export const meta = { name, description, phases?: [{title, detail?}] }` as a pure literal (it is " +
       "read without executing the script and shown to the user for confirmation). Body API: " +
-      "`await agent(prompt, {label?, phase?, schema?, tools?:'research'|'coder', model?, effort?, maxTurns?})` " +
+      "`await agent(prompt, {label?, phase?, schema?, tools?:'research'|'coder'|<custom type>, model?, effort?, maxTurns?})` " +
       "→ the sub-agent's final text, or with `schema` the validated object (null if it failed); " +
       "`pipeline(items, stage1, stage2, …)` runs each item through all stages independently (no barrier; a " +
       "failing item becomes null); `parallel([() => agent(…), …])` is a barrier that awaits all (failures → " +

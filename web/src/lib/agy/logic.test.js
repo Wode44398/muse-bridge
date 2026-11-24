@@ -165,6 +165,22 @@ test('applyAgyStreamEvent 与 attach 重放：交错合并思考/工具/正文�
   assert.equal(turn.permissions[0].selectedOptionId, 'allow');
   assert.equal(turn.questions[0].status, 'answered');
   assert.deepEqual(turn.questions[0].answer, { env: 'prod' });
+
+  // 子代理透传的权限申请保留 subagent 来源信息，且不往主会话步骤流里插入假工具行
+  const subTurn = createEmptyAssistantTurn();
+  applyAgyStreamEvent(subTurn, {
+    type: 'permission',
+    requestId: 'sub-1',
+    sessionId: 's1',
+    sourceSessionId: 'sub-conv-1',
+    subagent: { id: 'sub-conv-1', role: 'M1 Worker', depth: 2 },
+    toolCall: { toolCallId: 'sub_cmd_1', name: 'run_command', kind: 'execute', title: 'python fetch.py', args: { CommandLine: 'python fetch.py', BypassSandbox: true } },
+    options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+  });
+  assert.equal(subTurn.blocks.length, 0, '子代理权限不应往主会话步骤流插假工具行');
+  assert.equal(subTurn.permissions.length, 1);
+  assert.equal(subTurn.permissions[0].subagent?.role, 'M1 Worker');
+  assert.equal(subTurn.permissions[0].bypassSandbox, true);
 });
 
 test('normalizeHistoryMessages / groupSessionsByProjectAndTime / resolveAgyLocalLink', () => {
@@ -759,4 +775,51 @@ test('parseAgyModelAndEffort：准确拆出真实 agy 转录中的基础模型�
     modelName: 'Claude Sonnet 4.6',
     effort: '',
   });
+});
+
+test('normalizeHistoryMessages：用户历史图片支持服务端路径与 base64，并与文本前缀附件按路径去重', () => {
+  const msgs = normalizeHistoryMessages([
+    {
+      role: 'user',
+      text: '本轮附加文件路径：\n- C:\\up\\1795000000001-report.pdf\n- C:\\brain\\s1\\.user_uploaded\\a.jpg\n\n帮我看图和文档',
+      images: [
+        { path: 'C:\\brain\\s1\\.user_uploaded\\a.jpg', name: '设计稿.jpg', mimeType: 'image/jpeg', size: 2048 },
+        { mimeType: 'image/png', data: 'AAAA' },
+        { mimeType: 'image/png', data: '' },
+      ],
+    },
+  ], 's1');
+
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].text, '帮我看图和文档');
+  assert.equal(msgs[0].atts.length, 3, '丢弃空 data 条目并按路径去重');
+  assert.deepEqual(msgs[0].atts[0], {
+    path: 'C:\\brain\\s1\\.user_uploaded\\a.jpg',
+    name: '设计稿.jpg',
+    kind: 'image',
+    mime: 'image/jpeg',
+    size: 2048,
+    url: '',
+  });
+  assert.deepEqual(msgs[0].atts[1], {
+    name: 'image-2.png',
+    kind: 'image',
+    mime: 'image/png',
+    url: 'data:image/png;base64,AAAA',
+  });
+  assert.equal(msgs[0].atts[2].name, 'report.pdf');
+
+  // 原图与前缀路径大小写/斜杠不同，或原图缺失退回 .user_uploaded 并带 origPath 时，均不得重复展示
+  const deduped = normalizeHistoryMessages([
+    {
+      role: 'user',
+      text: '本轮附加文件路径：\n- C:\\up\\1795000000001-shot.png\n- C:\\up\\1795000000002-gone.png\n- C:\\up\\1795000000003-doc.pdf\n\n核对',
+      images: [
+        { path: 'c:/up/1795000000001-shot.png', name: 'shot.png', mimeType: 'image/png', size: 100 },
+        { path: 'C:\\brain\\s1\\.user_uploaded\\uploaded_media_1.jpg', origPath: 'C:\\up\\1795000000002-gone.png', name: 'gone.png', mimeType: 'image/jpeg', size: 80 },
+      ],
+    },
+  ], 's1');
+  assert.equal(deduped[0].text, '核对');
+  assert.deepEqual(deduped[0].atts.map((a) => a.name), ['shot.png', 'gone.png', 'doc.pdf']);
 });

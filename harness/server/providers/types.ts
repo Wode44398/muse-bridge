@@ -69,7 +69,7 @@ export interface CustomWire {
   headers: Record<string, string>; // 鉴权 + 自定义请求头，替换适配器默认的鉴权头
   maxTokensField: "max_tokens" | "max_completion_tokens";
   promptCaching: boolean;
-  replayReasoning: boolean;
+  replayReasoning?: boolean; // 没有 = 服务没声明（自动）；false = 明确关掉
   // 请求实际发到的上游主机（模型中心的卡带它；自己填地址的服务是地址里的主机名）
   upstreamHost?: string;
   noRedirect?: boolean; // 成员自己加的服务：不跟随重定向（公网地址 302 到内网一样能绕过地址把关，见 endpoint-guard.ts）

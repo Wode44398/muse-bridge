@@ -5,7 +5,7 @@
 // 例：gemini-omni-1.2-flash → 沿用 gemini-omni-1.1-flash 的卡，时长按参照库放宽到 3–15 秒（1.1 是 3–10）。
 //
 // 族名：id 按 - _ / 切开，丢掉版本样的段（3.8、001、v2、preview、latest、日期）；剩下的段集合算相似度（交集 / 并集），
-// 族根（第一段）必须相同、相似度 ≥ 0.5；并列时版本号最近的胜，再同方言优先、再新的优先。
+// 族根（第一段）必须相同、相似度 ≥ 0.5；同版本的变体（版本号相同、段集合是超集）先胜，其余比相似度，并列时版本号最近的胜，再同方言优先、再新的优先。
 // 精修只放宽 / 收窄「取值域」：首尾帧只收窄（驱动没接的角色不能凭参照库加出来）。
 
 import { applySpecs } from '../cards/spec.mjs';
@@ -48,7 +48,10 @@ export function pickParent(id, candidates, { dialect } = {}) {
     if (sim < 0.5) continue;
     const cv = versionOf(c.id);
     const dist = ver != null && cv != null ? Math.abs(ver - cv) : 99;
-    const score = [sim, -dist, c.dialect && c.dialect === dialect ? 1 : 0, cv ?? 0];
+    // 同版本的变体排最前（版本号相同、段集合是它的超集）：裸 gpt-image-2.6 与 gpt-image-2 段集合一样（相似度 1），
+    // 能力（gif / svg、xhigh / max）跟的是 2.6-sunburst。只放宽到超集：gemini-3-flash-image 不能因为同版本去跟 3-pro-image
+    const variant = dist === 0 && toks.every((t) => ct.includes(t)) ? 1 : 0;
+    const score = [variant, sim, -dist, c.dialect && c.dialect === dialect ? 1 : 0, cv ?? 0];
     if (!best || cmp(score, best.score) > 0) best = { c, score };
   }
   return best ? best.c : null;

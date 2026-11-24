@@ -69,7 +69,7 @@ const desktopAdapter = {
       const alt = outputPath && path.isAbsolute(outputPath) ? outputPath.replace(/(\.[^.\\/]+)?$/, '-' + (i + 2) + '.' + x.ext) : null;
       return { id: id + '-' + (i + 2), file: writeOut(x.bytes, x.ext, alt, tag) };
     });
-    return { id, file, model: r.entry.id, ...(dims ? { width: dims[0], height: dims[1] } : {}), ...(more.length ? { more } : {}) };
+    return { id, file, model: r.entry.id, warnings: r.warnings, ...(dims ? { width: dims[0], height: dims[1] } : {}), ...(more.length ? { more } : {}) };
   },
   models: (args) => mediaModelsText('admin', args),
   emit: () => {},

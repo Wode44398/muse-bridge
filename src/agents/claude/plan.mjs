@@ -52,7 +52,7 @@ import { SPARE_MS } from './warm.mjs';
 // 一轮开跑前把「这一轮怎么起」算清楚：入参归一、各项工具开不开、追加的系统提示、CLI 的环境变量与 settings、
 // 停放复用的签名。算出来的东西装成一个对象（plan）——之后不再变，开跑、接管、收尾都照它。
 // 返回 null = 这一轮不必往下走（预热不适用，或自定义模型已经不在了、错误帧已回）。
-export async function planTurn(req, res, { message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, research, suggest, compactFrac, source, fromPhone, narrow, plain, originDevice, fromComputer, origin, autoRetry, limitReplay, limitResume, restartResume = 0, globalMax, ctx, prewarm, family, permissionMode, permissionPolicy, shape, pluginOrigin }) {
+export async function planTurn(req, res, { message, sessionId, model, effort, ultracode, fast, chatPrefs, attachments, research, suggest, compactFrac, source, fromPhone, narrow, plain, originDevice, fromComputer, origin, autoRetry, limitReplay, limitResume, restartResume = 0, globalMax, ctx, prewarm, family, permissionMode, permissionPolicy, shape, pluginOrigin, viaAgent }) {
   ctx = ctx || { kind: 'admin', sandbox: false, cwd: VAULT, configDir: null, key: 'admin' };
   const snap = ctx.snap || null;   // 聊天快照轮：专属 MCP/提示词/更紧的工具面
   // 新会话预热（见 SPARE_MS）：没有消息、没有 SSE 接收方，建好 query 停在第一轮之前等人接管。
@@ -217,7 +217,7 @@ export async function planTurn(req, res, { message, sessionId, model, effort, ul
       + '即使早前的对话历史里用过这些工具，本轮也没有——不要声称能操作用户的手机。用户需要手机侧操作时，请他改在手机 App 里发起对话' + (phoneCtlAvail && !phoneControlOn ? '（手机操控还需手机 App 设置里开启「手机操控」服务）' : '') + '。'
     : '';
   // 插件的消息改写（ctx.claude.input）：只改发给 Claude 的那份，界面与转录前的用户原话不变
-  const pIn = isSpare || snap ? null : await pluginInput({ kind: 'chat', ctx, snap: null, sessionId: sessionId || null, source }, { message, attachments });
+  const pIn = isSpare || snap ? null : await pluginInput({ kind: 'chat', ctx, snap: null, sessionId: sessionId || null, source, ...(viaAgent ? { via: viaAgent } : {}) }, { message, attachments });
   const { prompt, imageBlocks } = composeTurnPrompt(pIn ? pIn.message : message, pIn ? pIn.attachments : attachments);
   // 恒流式输入 + gate 挂流（见 makeTurnInput 注释）：release 在读循环收轮/finally 时调。
   const turnInput = makeTurnInput(prompt, imageBlocks, isSpare);
@@ -252,7 +252,7 @@ export async function planTurn(req, res, { message, sessionId, model, effort, ul
   // 插件给 Claude 的工具与提示段（plugins/claude-tools.mjs）：工具合成各插件自己的 MCP server，提示段排在内置提示之后、
   // 子 agent 调度说明之前；sig 进下面的停放签名。这一轮的 gen 要等开跑才有（runClaudeChat 把取它的函数填进 lateGen）——工具被调用时它早已就绪。
   const lateGen = { get: null };
-  const plug = pluginClaudeTurn({ kind: 'chat', ctx, snap, getGen: () => lateGen.get(), fromPhone: fromPhone === true, narrow: narrow === true, source, message, sessionId: ownSid });
+  const plug = pluginClaudeTurn({ kind: 'chat', ctx, snap, getGen: () => lateGen.get(), fromPhone: fromPhone === true, narrow: narrow === true, source, message, sessionId: ownSid, ...(viaAgent ? { via: viaAgent } : {}) });
   // 项目对话：开讨论串默认不问（项目设置「开讨论串前先问我」才问）；讨论串的追加段接在子会话那段后面
   const projPolicy = projectShape ? (projectSettings(ctx).askFirst ? 'ask' : 'direct') : null;
   // 调用策略的「发起新会话」范围开着：补一句 start_session 可以写 auto:<档>。项目对话的协调者不补——讨论串的模型、档位按项目设置（方案 D5），
@@ -349,5 +349,6 @@ export async function planTurn(req, res, { message, sessionId, model, effort, ul
     turnLink, deviceOn, chromeOn, chromeSplit, ext, prOn, pIn, turnInput, effModel, plug, projPolicy, appendText, routed, customFast, engineEnv, seamless,
     servedAcct, usageAcct, effortOpts, pauseOnFlag, sdkSettings, coordTools, warmDigest, warmSig, sigDiff, lateGen,
     pageChat: !!pluginOrigin,
+    viaAgent: viaAgent || '',
   };
 }

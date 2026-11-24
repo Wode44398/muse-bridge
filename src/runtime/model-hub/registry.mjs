@@ -26,9 +26,10 @@ import path from 'node:path';
 import { DATA_ROOT } from '../paths.mjs';
 import { readJson, writeJson } from '../../jsonfile.mjs';
 import { readSecrets, writeSecrets } from '../../extension-secrets.mjs';
-import { provideModelService, MODEL_AGENTS } from '../model-services.mjs';
+import { provideModelService, MODEL_AGENTS, DEFAULT_MODEL_AGENTS } from '../model-services.mjs';
 import { guessModel, routeOf, providerOf, vendorOf, MODALITIES, cacheTtl, cacheTtlNote, normalizeCacheTtl } from '../../model-knowledge/index.mjs';
 import { ensureGateway, gatewayUrl, setServiceResolver, registerUpstream } from './gateway.mjs';
+import { setResponsesModelSpec } from './responses.mjs';
 import { makePoolHandler, lineState, forgetService, clearCooldown, defaultAuthStyle, BAD_KEY_RE, BAD_KEY_MSG } from './pool.mjs';
 import { handleVertex, vertexConfigured, detectVertexChat, VERTEX_KNOWN_MODELS, VERTEX_DEFAULT_MODELS } from './vertex.mjs';
 import {
@@ -42,7 +43,7 @@ import {
 } from './studio-link.mjs';
 import { detectModels } from './detect.mjs';
 import { NATIVE_VENDOR_IDS, nativeVendor, nativeVendorOf, nativeEndpoint, hostedForeign } from '../../model-knowledge/dimensio-native.mjs';
-import { cleanOver, cleanParams, cleanCompat, autoCompat, isCustomized } from './advanced.mjs';
+import { cleanOver, cleanParams, cleanCompat, autoCompat, isCustomized, cleanResponsesApi, autoResponsesApi } from './advanced.mjs';
 import { probeLineModel } from './probe.mjs';
 
 export const HUB_PLUGIN = 'model-hub';
@@ -59,10 +60,12 @@ const MAX_PENDING = 200;
 const STUDIO_ID_RE = /^p-[0-9a-f]{6,12}$/;
 const MAX_SERVICES = 40, MAX_LINES = 30, MAX_TEXT = 100, MAX_MEDIA = 1500;   // 媒体上限 = Studio 一个服务的模型上限
 const TEXT_AGENTS = MODEL_AGENTS;
-const ALL_AGENTS = [...MODEL_AGENTS, 'studio'];   // 视图里去向的顺序固定：claude → dimensio → studio
+// 没点名去向时给的（老数据、老接口、收编）：codex 只在用户明确勾了时才有，老数据读进来发布出去的集合不变
+const DEFAULT_TEXT_AGENTS = DEFAULT_MODEL_AGENTS;
+const ALL_AGENTS = [...MODEL_AGENTS, 'studio'];   // 视图里去向的顺序固定：claude → dimensio → codex → studio
 const KIND_NAME = { text: '文本', image: '图像', video: '视频', voice: '配音', music: '音乐' };
 // update 收的字段（模型与去向只走 assign：一个入口校验、一个入口同步 Studio）
-const UPDATE_FIELDS = ['name', 'baseUrl', 'enabled', 'strategy', 'useProxy', 'timeoutSec', 'headers', 'lines', 'members', 'authStyle', 'defaultModel', 'compat', 'retries'];
+const UPDATE_FIELDS = ['name', 'baseUrl', 'enabled', 'strategy', 'useProxy', 'timeoutSec', 'headers', 'lines', 'members', 'authStyle', 'defaultModel', 'compat', 'retries', 'responsesApi'];
 // 改了这些要同步给 Studio 的托管服务（名字、地址、Key、启停、请求头、鉴权、共享给成员）
 const STUDIO_FIELDS = ['name', 'baseUrl', 'enabled', 'headers', 'lines', 'authStyle', 'members'];
 
@@ -103,6 +106,7 @@ function load() {
     vertex: normalizeVertex(raw?.vertex && typeof raw.vertex === 'object' ? raw.vertex : {}, null), services,
     pendingStudioRemovals: cleanPending(raw?.pendingStudioRemovals),
     flags: cleanFlags(raw?.flags),
+    prefs: cleanPrefs(raw?.prefs),
     migrated: cleanMigrated(raw?.migrated),
     vertexDetect: cleanVertexDetect(raw?.vertexDetect),
     // 只在内存：services.json 在却读不出（坏了）/ 有服务没读出来——对账时这些服务的 Studio 托管服务别当孤儿取消托管
@@ -114,11 +118,13 @@ function save() {
   mkdirSync(dir(), { recursive: true });
   const pending = data.pendingStudioRemovals || [];
   const flags = data.flags || {};
+  const prefs = data.prefs || {};
   const migrated = data.migrated || {};
   writeJson(file(), {
     v: 2, vertex: data.vertex, services: data.services,
     ...(pending.length ? { pendingStudioRemovals: pending } : {}),
     ...(Object.keys(flags).length ? { flags } : {}),
+    ...(Object.keys(prefs).length ? { prefs } : {}),
     ...(Object.keys(migrated).length ? { migrated } : {}),
     ...(data.vertexDetect ? { vertexDetect: data.vertexDetect } : {}),
   }, 2);
@@ -174,6 +180,30 @@ export function setHubFlag(name, on = true) {
   if (on === true) d.flags[name] = true; else delete d.flags[name];
   save(); changed();
 }
+// 模型中心的开关（用户能改的设置，不是一次性记号）：
+//   agentMediaConfig  允许 AI 读写媒体模型的调用配置（参数覆盖、调用配方）并预演 / 试跑；默认关。只管 agent 的操作，人在界面里改不受它限制
+export const HUB_PREFS = Object.freeze({ agentMediaConfig: false });
+function cleanPrefs(v) {
+  const out = {};
+  for (const [k, d] of Object.entries(HUB_PREFS)) if (v && typeof v === 'object' && typeof v[k] === typeof d && v[k] !== d) out[k] = v[k];
+  return out;
+}
+/** 全部开关的生效值（没存的按默认）。 */
+export function hubPrefs() { return { ...HUB_PREFS, ...(load().prefs || {}) }; }
+/** 改开关：patch 里不认识的键报错；和默认值一样的不存。回改完的生效值。 */
+export function setHubPrefs(patch) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw bad('开关要是对象');
+  const d = load();
+  const next = { ...(d.prefs || {}) };
+  for (const [k, v] of Object.entries(patch)) {
+    if (!(k in HUB_PREFS)) throw bad('没有这个开关：' + k);
+    if (typeof v !== typeof HUB_PREFS[k]) throw bad(`开关 ${k} 的值类型不对`);
+    if (v === HUB_PREFS[k]) delete next[k]; else next[k] = v;
+  }
+  d.prefs = next;
+  save(); changed();
+  return hubPrefs();
+}
 /** 改动前留一份 services.json 的副本（已有同名副本就不覆盖）。读不到原文件 = 没什么可备份的。 */
 export function backupHubFile(name) {
   if (!/^[a-z0-9.-]{1,40}$/.test(name)) throw bad('备份名不合法');
@@ -195,7 +225,7 @@ function backupV1() {
 function upgradeV1(s0) {
   const s = s0 && typeof s0 === 'object' ? s0 : {};
   const kind = KINDS.includes(s.kind) ? s.kind : 'openai';
-  const agents = Array.isArray(s.agents) ? TEXT_AGENTS.filter((a) => s.agents.includes(a)) : [...TEXT_AGENTS];
+  const agents = Array.isArray(s.agents) ? TEXT_AGENTS.filter((a) => s.agents.includes(a)) : [...DEFAULT_TEXT_AGENTS];
   const { agents: _drop, ...rest } = s;
   return {
     ...rest,
@@ -271,7 +301,7 @@ function cleanHeaders(v) {
     .slice(0, 20).map((h) => ({ name: h.name, value: h.value.replace(/[\r\n]+/g, ' ').slice(0, 2000) }));   // 值里的换行同 Studio 换成空格
 }
 function normalizeVertex(v, prev) {
-  const p = prev || { enabled: true, agents: [...MODEL_AGENTS], members: false, models: [...VERTEX_DEFAULT_MODELS], location: '' };
+  const p = prev || { enabled: true, agents: [...DEFAULT_MODEL_AGENTS], members: false, models: [...VERTEX_DEFAULT_MODELS], location: '' };
   const models = Array.isArray(v.models) ? modelIds(v.models) : p.models;
   return {
     enabled: typeof v.enabled === 'boolean' ? v.enabled : p.enabled,
@@ -323,7 +353,7 @@ function caps(o) {
  * 已添加模型的清单 → [{ id, label?, kind, agents, contextWindow?, maxOutput?, vision? }]。没有去向的不算添加（不存）。
  * dflt = 没带 agents 的模型用的去向（老接口的服务级 agents）；只有模型自己明确带了 agents 且 strict 时去向不对才报错。
  */
-function normalizeModels(v, protocol, { strict = false, dflt = TEXT_AGENTS } = {}) {
+function normalizeModels(v, protocol, { strict = false, dflt = DEFAULT_TEXT_AGENTS } = {}) {
   const seen = new Set(), out = [];
   let nText = 0, nMedia = 0;
   for (const m of Array.isArray(v) ? v : []) {
@@ -379,7 +409,9 @@ function serviceAdv(s, prev, lenient) {
     if (Number.isInteger(n) && n >= 0 && n <= 5) retries = n;
     else if (!lenient) throw bad('失败重试要是 0–5 之间的整数');
   }
-  return { ...(compat ? { compat } : {}), ...(retries !== undefined ? { retries } : {}) };
+  // Responses 接口的走法（给 codex 用）：null = 恢复自动；没给 = 沿用
+  const responsesApi = s.responsesApi === null ? undefined : s.responsesApi !== undefined ? cleanResponsesApi(s.responsesApi, { strict: !lenient }) : prev?.responsesApi;
+  return { ...(compat ? { compat } : {}), ...(retries !== undefined ? { retries } : {}), ...(responsesApi ? { responsesApi } : {}) };
 }
 
 // 读盘（lenient）时线路没有 key 字段；用户提交的线路可带 key（新 Key）——收在 normalizeService 的返回值之外（pendingKeys）。
@@ -391,7 +423,7 @@ function normalizeService(input, prev, { lenient = false, strictModels = true, i
   const name = str(s.name ?? prev?.name, 40);
   if (!name) throw bad('要有名字');
   const baseUrl = normalizeUrl(s.baseUrl ?? prev?.baseUrl, '接口地址');
-  const dflt = Array.isArray(s.agents) ? TEXT_AGENTS.filter((a) => s.agents.includes(a)) : [...TEXT_AGENTS];
+  const dflt = Array.isArray(s.agents) ? TEXT_AGENTS.filter((a) => s.agents.includes(a)) : [...DEFAULT_TEXT_AGENTS];
   const models = prev ? prev.models : normalizeModels(s.models, kind, { strict: !lenient && strictModels, dflt });
   const prevLines = new Map((prev?.lines || []).map((l) => [l.id, l]));
   const lines = [], pendingKeys = [];
@@ -512,10 +544,12 @@ function desiredSpecs() {
     const models = d.vertex.models.map((id) => (found.has(id) ? { id, label: found.get(id) } : { id }));
     // 两边都走原生 Gemini 接口（2026-11-13 起 Claude 的本机代理会翻译它；此前 Claude 走 OpenAI 兼容接口、网关代存思维签名）。
     // 仍登记成两条：Claude 侧的服务 id（p-<vertex-c 的哈希>）老会话还记着，不能变
-    for (const [suffix, agent, proto] of [['c', 'claude', 'gemini'], ['d', 'dimensio', 'gemini']]) {
+    // codex 只认 Responses：它那条的 protocol 只是占位，真正用的是 responsesUrl（网关把它转成 Vertex 的 OpenAI 兼容接口）
+    for (const [suffix, agent, proto] of [['c', 'claude', 'gemini'], ['d', 'dimensio', 'gemini'], ['x', 'codex', 'openai']]) {
       if (!d.vertex.agents.includes(agent)) continue;
       out.set(`${VERTEX_ID}-${suffix}`, {
         id: `${VERTEX_ID}-${suffix}`, name: 'Vertex', protocol: proto, baseUrl: gatewayUrl(VERTEX_ID, proto), authStyle: 'none',
+        responsesUrl: gatewayUrl(VERTEX_ID, 'responses'),
         agents: [agent], members: d.vertex.members, models: models.map((m) => modelSpec(m, proto)), defaultModel: models[0].id, timeoutSec: 900, logo: 'vertexai-color',
         compat: { promptCaching: false, stripBetas: true, stripThinkingHistory: true },
       });
@@ -545,6 +579,8 @@ function desiredSpecs() {
       upstream,
       compat, retries: s.retries ?? null,
       id: s.id, name: s.name, protocol: s.kind, baseUrl: gatewayUrl(s.id, s.kind), authStyle: 'none',
+      // codex 的 provider base_url 填它（Codex 自己在后面拼 /responses）；网关按 responsesApi 透传或转换
+      responsesUrl: gatewayUrl(s.id, 'responses'),
       agents: TEXT_AGENTS.filter((a) => texts.some((m) => m.agents.includes(a))), members: s.members,
       models: texts.map((m) => ({ ...modelSpec(m, s.kind, route), agents: [...m.agents] })),   // 不带 kind：Claude 的 normalizeModel 不认它
       defaultModel: pickDefault(texts, s.defaultModel), timeoutSec: s.timeoutSec, logo: brandLogoOf(s.baseUrl),
@@ -553,6 +589,25 @@ function desiredSpecs() {
   }
   return out;
 }
+// 网关翻译 Responses 时要的型号规格与兼容项（和发布给 agent 的同一份算法）。Gemini 协议的服务翻译时走它的 OpenAI 兼容接口，规格按 OpenAI 协议算
+function responsesProfile(service) {
+  const d = load();
+  if (service.kind === 'vertex') {
+    if (!d.vertex.agents.includes('codex')) return { models: [] };
+    return { upstream: '', compat: { promptCaching: false, stripBetas: true, stripThinkingHistory: true }, models: d.vertex.models.map((id) => modelSpec({ id }, 'openai')) };
+  }
+  const s = d.services.find((x) => x.id === service.id);
+  if (!s) return null;
+  const upstream = upstreamHostOf(s), route = routeOf(upstream);
+  const official = s.kind === 'anthropic' && upstream === 'api.anthropic.com';
+  const proto = s.kind === 'gemini' ? 'openai' : s.kind;
+  return {
+    upstream,
+    compat: { ...(official ? { promptCaching: true, slimBody: false, stripBetas: false } : {}), ...(s.compat || {}) },
+    models: s.models.filter((m) => m.kind === 'text' && m.agents.length).map((m) => ({ ...modelSpec(m, proto, route), agents: [...m.agents] })),
+  };
+}
+
 function publish() {
   if (!gatewayUrl('x', 'openai')) return;   // 网关还没起来：initModelHub 起好后会再发一遍
   const want = desiredSpecs();
@@ -692,8 +747,9 @@ function keepInCatalog(sid, cat, list) {
 function legacyModels(s, p, cat) {
   const texts = s.models.filter((m) => m.kind === 'text');
   const mediaIds = new Set(s.models.filter((m) => m.kind !== 'text').map((m) => m.id));
-  const had = TEXT_AGENTS.filter((a) => texts.some((m) => m.agents.includes(a)));
-  const want = Array.isArray(p.agents) ? TEXT_AGENTS.filter((a) => p.agents.includes(a)) : had;
+  // 老编辑器只认得 claude / dimensio：只按这两家算增减，codex 的去向原样留着（它回传的 agents 里本来就不会有 codex）
+  const had = DEFAULT_TEXT_AGENTS.filter((a) => texts.some((m) => m.agents.includes(a)));
+  const want = Array.isArray(p.agents) ? DEFAULT_TEXT_AGENTS.filter((a) => p.agents.includes(a)) : had;
   const drop = had.filter((a) => !want.includes(a)), add = want.filter((a) => !had.includes(a));
   let given = null;   // 老编辑器给的型号：id → 条目；没给 models = 型号不变、只改去向
   if (Array.isArray(p.models)) {
@@ -827,6 +883,7 @@ export async function initModelHub() {
     const s = d.services.find((x) => x.id === id);
     return s && s.enabled ? s : null;
   });
+  setResponsesModelSpec(responsesProfile);
   registerUpstream('vertex', handleVertex);
   const pool = makePoolHandler(keyOf);
   for (const k of KINDS) registerUpstream(k, pool);
@@ -850,6 +907,8 @@ function serviceView(s, sec = secrets()) {
     id: s.id, name: s.name, kind: s.kind, baseUrl: s.baseUrl, host: hostOf(s.baseUrl),
     // 高级设置：兼容项（compat 是用户改过的那几项，compatAuto 是不改时的值）、失败重试（retries 没有 = 1）
     compat: s.compat || {}, compatAuto: autoCompat({ official }), retries: s.retries ?? null,
+    // Responses 接口（codex 用）：responsesApi 是用户定的（null = 自动），responsesAuto 是自动时的走法
+    responsesApi: s.responsesApi || null, responsesAuto: autoResponsesApi(s),
     brand: brand ? { key: brand.key, name: brand.name, logo: brand.logo } : null,
     authStyle: s.authStyle, headers: s.headers, enabled: s.enabled, members: s.members, strategy: s.strategy, useProxy: s.useProxy, timeoutSec: s.timeoutSec,
     lines: s.lines.map((l) => { const key = k(s.id, l.id); return { ...l, hasKey: !!key, keyTail: tail(key), state: lineState(s.id, l.id) }; }),
@@ -905,6 +964,28 @@ export function setHubModelCache(id, modelId, value) {
 }
 
 /**
+ * 改一个已添加模型的备注 / 显示名（POST /model/label）→ { service }。文本、媒体都行（媒体的跟着同步到 Media Studio）。
+ * label 空（或就是 id）= 恢复默认：用目录里识别到的名字，目录里也没有就只显示 id。
+ */
+export function setHubModelLabel(id, modelId, value) {
+  const s = findService(id);
+  const m = s.models.find((x) => x.id === modelId);
+  if (!m) throw Object.assign(new Error('这个服务里没有这个模型'), { status: 404 });
+  let label = str(value, 80);
+  if (!label || label === m.id) {
+    const entry = readCatalog(s.id).models.find((x) => x.id === m.id);
+    label = entry?.label && entry.label !== m.id ? str(entry.label, 80) : '';
+  }
+  if ((m.label || '') === label) return { service: serviceView(s), warnings: [] };
+  if (label) m.label = label; else delete m.label;
+  save(); publish();
+  // 媒体模型的名字在 Studio 那边也要跟着变（推不过去记 studioDirty，之后补推）
+  const warnings = m.kind !== 'text' && m.agents.includes('studio') ? finishStudioSync(s, null) : [];
+  notify();
+  return { service: serviceView(s), warnings };
+}
+
+/**
  * 改一个文本模型的高级调用配置（POST /model/advanced）→ { service }。
  * over / params 给了就整块替换（null = 恢复自动）；没给的不动。cacheTtl 同 setHubModelCache（给了才改）。
  * 上下文窗口改到 4096 以下而这个模型给着 Claude：400（Claude 用不了，先在去向里去掉 Claude）。
@@ -956,7 +1037,7 @@ export function vertexView() {
   return {
     ...v, configured: vertexConfigured(), known, status,
     detect: det ? { at: det.at, location: det.location, ...(det.error ? { error: det.error } : {}), found: known.filter((k) => k.found).length } : null,
-    published: handles.has(`${VERTEX_ID}-c`) || handles.has(`${VERTEX_ID}-d`),
+    published: handles.has(`${VERTEX_ID}-c`) || handles.has(`${VERTEX_ID}-d`) || handles.has(`${VERTEX_ID}-x`),
   };
 }
 
@@ -1261,7 +1342,7 @@ export function absorbTextModels(id, models, { parked = [], defaultModel } = {})
     if (old && old.kind !== 'text') continue;
     const label = str(m0.label, 80);
     given.set(idm, { id: idm, ...(label && label !== idm ? { label } : {}), kind: 'text', ...caps(m0) });
-    const want = [...new Set([...(old?.agents || []), ...TEXT_AGENTS])];
+    const want = [...new Set([...(old?.agents || []), ...DEFAULT_TEXT_AGENTS])];
     const agents = cleanAgents(idm, 'text', want, s.kind, { strict: false, ctx: old ? ctxOf(old) : caps(m0).contextWindow });
     if (agents.length) changes.push({ id: idm, agents });
   }

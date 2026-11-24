@@ -8,6 +8,7 @@
 // 措辞照搬原来的 system 段落；正文是模板字符串，手写段落里的反引号要转义（prompt-sections.test.ts 有守卫）。
 import { messageKind } from "./injections.ts";
 import type { Msg } from "./turn.ts";
+import { toolArg } from "./tool-input.ts";
 
 export type PlaybookId = "web" | "local-server" | "desktop" | "android";
 
@@ -23,14 +24,19 @@ export interface Playbook {
   userTrigger?: RegExp;
   // 这次工具调用说明工作碰到了这块
   callTrigger(call: { name: string; args: Record<string, unknown> }): boolean;
+  // lean 姿态下加在正文前面的一段：lean 的系统提示词把这些细节挪到了这里（hardened 的系统提示词里本来就有，不重复）
+  leanIntro?: string;
 }
+
+// lean 姿态的工具没有 verify 参数（agent/verify-tools.ts）：正文里点名 verify:true 的写法换成普通调用
+const LEAN_REWRITES: [string, string][] = [["Eval(js, verify:true)", "Eval(js)"]];
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const writtenPath = (call: { name: string; args: Record<string, unknown> }): string =>
-  call.name === "Write" || call.name === "Edit" ? str(call.args.path ?? call.args.file_path) : "";
+  call.name === "Write" || call.name === "Edit" ? str(toolArg(call.name, call.args, "path")) : "";
 const writtenText = (call: { name: string; args: Record<string, unknown> }): string =>
-  call.name === "Write" ? str(call.args.content) : call.name === "Edit" ? str(call.args.new_string) : "";
-const bashCommand = (call: { name: string; args: Record<string, unknown> }): string => (call.name === "Bash" ? str(call.args.command) : "");
+  call.name === "Write" ? str(toolArg("Write", call.args, "content")) : call.name === "Edit" ? str(toolArg("Edit", call.args, "new_string")) : "";
+const bashCommand = (call: { name: string; args: Record<string, unknown> }): string => (call.name === "Bash" ? str(toolArg("Bash", call.args, "command")) : "");
 
 const WEB_FILE_RE = /\.(?:html?|css|scss|less|jsx|tsx|vue|svelte)$/i;
 const DEV_SERVER_RE = /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|preview)\b|\bvite\b|\bnext\s+dev\b|\bhttp\.server\b|\b(?:live|http)-server\b/;
@@ -81,7 +87,11 @@ export const PLAYBOOKS: readonly Playbook[] = [
     needsBrowser: true,
     userTrigger: /electron|桌面(?:应用|程序|端|软件|版|app)|desktop\s+app|\.exe\b|安装包|可执行(?:文件|程序)/i,
     callTrigger: (call) => /\belectron\b/i.test(bashCommand(call)) || ELECTRON_CODE_RE.test(writtenText(call)),
-    body: `1. Launch the app as a background job with a DevTools port: Bash(command:"npx electron . --remote-debugging-port=9223", background:true). A GUI app is the one exception to the no-servers-via-Bash rule — it serves no web port for Preview to wait on.
+    leanIntro:
+      "A desktop app means a real desktop shell (Electron here), not a web page styled to look like one: fake window chrome in a browser tab does not count, and never draw another OS's window chrome. " +
+      "If a real shell is infeasible here or far heavier than the task warrants, ask the user (AskUserQuestion) before building something lighter. " +
+      "When they asked for a clickable or installable app, the deliverable includes the packaged artifact, verified to launch.",
+    body:`1. Launch the app as a background job with a DevTools port: Bash(command:"npx electron . --remote-debugging-port=9223", background:true). A GUI app is the one exception to the no-servers-via-Bash rule — it serves no web port for Preview to wait on.
 2. Browser(action:"attach", port:9223) — this conversation's browser tools now drive the app's real window. From here everything works exactly like the web-app loop: ReadPage for structure and [refN] handles, Browser(click/type/key), Eval(js, verify:true) for DOM assertions, Network for its HTTP traffic, Browser(action:"screenshot") to look at it, Browser(action:"console") for renderer errors.
 3. Exercise the real flow end-to-end and fix-and-repeat — exact checks first, screenshots on top.
 4. Finish: Browser(close) to detach, then Bash(kill:"<job id>") to quit the app. If the user asked for a clickable app, package it (e.g. npx electron-builder) and verify the packaged build too: launch the built exe with --remote-debugging-port and attach again.`,
@@ -104,9 +114,14 @@ Everything after "adb shell" runs on the phone, not here, so workspace path rule
 export const PLAYBOOK_KIND = "playbook";
 export const playbookHeader = (p: Pick<Playbook, "title">): string => `[Playbook: ${p.title}]`;
 
-export function playbookMessage(p: Playbook, why: "request" | "work", browser = true): string {
+// lean = 档案姿态为 lean 的会话（不给 = 加固版的原文）
+export function playbookMessage(p: Playbook, why: "request" | "work", browser = true, lean = false): string {
   const reason = why === "request" ? "your request names this area" : "your work just touched this area";
-  const body = !browser && p.bodyNoBrowser ? p.bodyNoBrowser : p.body;
+  let body = !browser && p.bodyNoBrowser ? p.bodyNoBrowser : p.body;
+  if (lean) {
+    for (const [from, to] of LEAN_REWRITES) body = body.split(from).join(to);
+    if (p.leanIntro) body = `${p.leanIntro}\n\n${body}`;
+  }
   return `${playbookHeader(p)} Attached by the harness because ${reason}. Follow it like the system prompt.\n\n${body}`;
 }
 

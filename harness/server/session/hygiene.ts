@@ -57,7 +57,7 @@ export function compactIdleSession(sessionId: string, minTokens: number, signal:
     const used = contextTokens(session.state);
     if (used < minTokens) return { ok: false, code: "empty", error: `context ${used} below ${minTokens}` };
     try {
-      const r = await compactManually(session.state, signal);
+      const r = await compactManually(session.state, signal, "auto");
       await writeRecord(session);
       traceEvent(session.id, { e: "idle_compaction", before: r.before, after: r.after });
       return { ok: true, ...r };

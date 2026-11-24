@@ -2,6 +2,7 @@
 import { tc } from '../i18n.js';
 import { createDockHost } from './host.svelte.js';
 import { buildTools } from './tools.js';
+import { workbenchKeys } from '../pluginUi.svelte.js';
 
 const KEYS = ['files', 'review', 'term', 'browser', 'agents', 'activity'];
 // agentsFocus = 代理卡定位高亮的目标 { agentId, seq }；agentStack = 压在代理列表之上的嵌套子代理转录栈（多层钻取返回）；
@@ -9,7 +10,7 @@ const KEYS = ['files', 'review', 'term', 'browser', 'agents', 'activity'];
 export const agyHost = createDockHost({
   id: 'agy',
   initialView: 'files',
-  keys: () => KEYS,
+  keys: () => [...KEYS, ...workbenchKeys('agy')],
   sortable: () => ['files', 'review', 'term', 'agents', 'browser', 'activity'],
   colOf: (k) => (k === 'browser' || k === 'activity' ? 'b' : 'a'),
   extra: { agentsFocus: null, agentStack: [], swarmNav: null },
@@ -20,6 +21,7 @@ const state = agyHost.state;
 // 图标是 Antigravity 自己那套符号字（icon = 连字名，由它的宿主片段画）
 export const agyTools = () => buildTools({
   order: KEYS,
+  host: 'agy',
   skip: ['memory'],
   over: {
     files: { label: tc('agy', '文件'), closeLabel: tc('agy', '关闭文件'), icon: 'folder_open' },

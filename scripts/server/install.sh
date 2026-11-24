@@ -9,7 +9,7 @@
 #                            你的 Claude 登录；数据在 ~/.local/share/bridge，systemd 用户单元 + loginctl enable-linger（不登录也跑）
 #
 # 手上没有源码也能装（脚本先把公开仓库克隆下来，再用克隆里同一版本的本脚本接着装）：
-#   curl -fsSL https://raw.githubusercontent.com/Wode44398/claude-bridge/main/scripts/server/install.sh | sudo bash -s -- [选项]
+#   curl -fsSL https://raw.githubusercontent.com/Wode44398/bridge/main/scripts/server/install.sh | sudo bash -s -- [选项]
 # 已经克隆了：
 #   sudo bash scripts/server/install.sh [选项]
 #
@@ -71,7 +71,7 @@ ask() {   # ask <提示> <默认值> → 回答写到标准输出
   printf '%s' "${ans:-$2}"
 }
 
-PUBLIC_REPO="https://github.com/Wode44398/claude-bridge.git"
+PUBLIC_REPO="https://github.com/Wode44398/bridge.git"
 
 main() {
   local ORIG_ARGS=("$@")

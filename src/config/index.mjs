@@ -135,13 +135,13 @@ export const API_KEY_SOURCE = API_KEY_FROM_CONFIG ? 'config'
 // 调用统统 "Native CLI binary not found"。binary 版本升级由我们手动控制（npm update）。
 process.env.DISABLE_AUTOUPDATER = '1';
 
-// Codex CLI binary. On this box codex is the OpenAI *desktop app* build, not the
-// `npm i -g @openai/codex` package resolveCodex() hunts for — so point CODEX_BIN
-// at the real exe (config.toml's CODEX_CLI_PATH). The path carries a version hash
-// that changes on codex updates, so it's config-driven, not hardcoded. The codex
-// subprocess inherits process.env, so setting it here is enough.
-export const CODEX_BIN = process.env.CODEX_BIN || config.codexBin || '';
+// Codex CLI 程序的显式指定（config.json 的 codexBin 或环境变量）。桌面版的路径带版本哈希，
+// 更新后旧目录会被删掉；只有文件还在才写进 process.env，否则留空让 Codex 扩展自己按顺序找，
+// 免得一个失效路径传给所有子进程。
+const CODEX_BIN_WANTED = process.env.CODEX_BIN || config.codexBin || '';
+export const CODEX_BIN = CODEX_BIN_WANTED && existsSync(CODEX_BIN_WANTED) ? CODEX_BIN_WANTED : '';
 if (CODEX_BIN) process.env.CODEX_BIN = CODEX_BIN;
+else if (CODEX_BIN_WANTED) console.warn(`[config] CODEX_BIN 指向的文件不存在，已忽略：${CODEX_BIN_WANTED}`);
 
 // Gemini-via-Vertex: ADC auth (gcloud auth application-default login). Project +
 // location come from config.json / env; the phone picks a model client-side from

@@ -13,6 +13,27 @@ import { applyMe, me } from './state.svelte.js';
 import { storeGet, storeSet } from './store.js';
 import { accountKey, loadVault, upsertAccount, dropAccount, bootCacheTag } from './accountVault.js';
 import { cacheMe } from './cache.js';
+import { isPageWindow } from './windowPage.svelte.js';
+import { showToast } from './toast.svelte.js';
+import { t } from './i18n.js';
+
+// 同源多窗口（主窗口 + 独立分页窗口）账号同步：一扇窗切号或退出登录时，通知其余窗口重载或关闭，防串号。
+const authChan = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('bridge-auth') : null;
+if (authChan) {
+  authChan.onmessage = (ev) => {
+    const kind = ev?.data?.type;
+    if (kind === 'switch') { location.reload(); return; }
+    if (kind === 'logout') {
+      if (isPageWindow()) {
+        try { window.close(); } catch {}
+        setTimeout(() => location.reload(), 120);
+      } else {
+        location.reload();
+      }
+    }
+  };
+}
+function broadcastAuth(type) { try { authChan?.postMessage({ type }); } catch {} }
 
 const RECENT_KEY = 'bridge-recent-users';
 const RECENT_MAX = 5;
@@ -36,14 +57,35 @@ export function forgetUser(name) {
  */
 export function afterSignIn() {
   // 带上此刻的登录令牌：桌面壳按它认人（以前只看 cookie，多账号切换后 cookie 可能还是另一个号，电脑就登记到那个号名下）
-  try { globalThis.BridgeDesktop?.device?.refresh?.({ token: getToken() || '' })?.catch?.(() => {}); } catch {}
+  let p = null;
+  try { p = globalThis.BridgeDesktop?.device?.refresh?.({ token: getToken() || '' }); } catch {}
+  // 兑现为「被吊销」与否：老客户端回 { ok:false } 不带 reason、更老的回 undefined，一律当没被拒，不提示。
+  return Promise.resolve(p).then((r) => {
+    const revoked = !!(r && r.ok === false && r.reason === 'revoked');
+    if (revoked) showDeviceRevoked();
+    return revoked;
+  }, () => false);
 }
+
+// 这台电脑被吊销后服务端不让它按同一次登录自动登记回来（S2-4）。切换账号本身算重新登录、正常不会落到这里；
+// 落到了就得明说，不然界面毫无动静、用户只看到电脑从设备列表里消失。
+// 切换账号紧接着整页重载，当页的提示来不及看：记一笔，重载后启动时（syncDeviceOwner）再提示一次。
+const DEVICE_REVOKED_KEY = 'bridge-device-revoked-notice';
+function showDeviceRevoked() { showToast(t('这台电脑已被吊销，请退出后重新登录一次'), 'err'); }
+function stashDeviceRevoked() { try { sessionStorage.setItem(DEVICE_REVOKED_KEY, '1'); } catch {} }
+function takeDeviceRevoked() {
+  try { if (sessionStorage.getItem(DEVICE_REVOKED_KEY)) { sessionStorage.removeItem(DEVICE_REVOKED_KEY); return true; } } catch {}
+  return false;
+}
+// 切换后重载前最多等登记结果这么久：登记通常很快，等不到就照常重载、不提示（壳那边仍会照常登记）
+const SWITCH_DEVICE_WAIT_MS = 3000;
 
 /**
  * 页面启动拿到身份后调：把此刻的账号报给桌面壳，这台电脑的设备登记跟着它（归属对不上就改登记）。
  * 和 afterSignIn 不同，它不解除「被吊销后暂停登记」。老客户端没有 sync，是空操作。
  */
 export function syncDeviceOwner() {
+  if (takeDeviceRevoked()) showDeviceRevoked();
   try { globalThis.BridgeDesktop?.device?.sync?.({ token: getToken() || '' })?.catch?.(() => {}); } catch {}
 }
 
@@ -56,7 +98,11 @@ export function rememberCurrent() {
 // 登录成功后：换到的账号和页面启动时不是同一个缓存库 → 整页重载，别让上一个号的聊天缓存 / 内存状态混进来
 function reloadIfOtherAccount() {
   const ent = rememberCurrent();
-  if (ent && (ent.tag || '') !== bootCacheTag()) { setTimeout(() => location.reload(), 0); return true; }
+  if (ent && (ent.tag || '') !== bootCacheTag()) {
+    broadcastAuth('switch');
+    setTimeout(() => location.reload(), 0);
+    return true;
+  }
   return false;
 }
 
@@ -102,6 +148,7 @@ export async function signOut() {
   setToken(null);
   applyMe(null);
   syncDeviceOwner();   // 桌面壳忘掉刚退出的那张令牌
+  broadcastAuth('logout');
 }
 
 // —— 快捷切换 ——
@@ -142,7 +189,9 @@ export async function switchTo(key) {
   applyMe(fresh);
   try { cacheMe(fresh); } catch {}
   upsertAccount(fresh, tok);
-  afterSignIn();
+  const revoked = await Promise.race([afterSignIn(), new Promise((r) => setTimeout(() => r(false), SWITCH_DEVICE_WAIT_MS))]);
+  if (revoked) stashDeviceRevoked();
+  broadcastAuth('switch');
   setTimeout(() => location.reload(), 0);
   return true;
 }

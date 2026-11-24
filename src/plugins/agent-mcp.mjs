@@ -25,8 +25,10 @@ export const dimensioContributions = (turn) => agentContributions('dimensio', tu
 // MCP 工具名：<插件>__<工具>（连字符换下划线），dimensio 那边再加连接器前缀
 const toolNameOf = (owner, name) => `${owner.replace(/-/g, '_')}__${name}`.slice(0, 60);
 
+// 端点同时给 dimensio（缺省）与 Codex（?agent=codex，经 modules/codex 的 stdio 转发，六期）
+const ENDPOINT_AGENTS = new Set(['dimensio', 'codex']);
 function buildServer(turn) {
-  const { tools, prompts } = dimensioContributions(turn);
+  const { tools, prompts } = agentContributions(turn.agent, turn);
   const server = new McpServer(
     { name: 'bridge-plugins', version: '1.0.0' },
     { capabilities: { tools: {} }, ...(prompts.length ? { instructions: prompts.join('\n\n').slice(0, 20_000) } : {}) },
@@ -57,7 +59,10 @@ export function registerAgentMcpRoute(router) {
       res.end(JSON.stringify({ error: who === null ? 'forbidden' : 'unauthorized' }));
       return;
     }
-    const turn = { kind: 'chat', agent: 'dimensio', ctx: who.ctx, snap: null, sessionId: String(req.headers['x-dimensio-session'] || '') || null, instance: who.instance };
+    let agent = 'dimensio';
+    try { const a = new URL(req.url, 'http://x').searchParams.get('agent'); if (a && ENDPOINT_AGENTS.has(a)) agent = a; } catch {}
+    const sid = req.headers['x-dimensio-session'] || req.headers['x-bridge-session'] || '';
+    const turn = { kind: 'chat', agent, ctx: who.ctx, snap: null, sessionId: String(sid) || null, instance: who.instance };
     let body;
     if (req.method === 'POST') {
       try { body = JSON.parse((await readBody(req, 4 * 1024 * 1024)) || 'null'); }
@@ -93,6 +98,7 @@ export function registerAgentMcpRoute(router) {
     emitBridgeEvent(b.event, { ...p, agent: 'dimensio', kind: typeof p.kind === 'string' ? p.kind : 'chat', owner: ownerOf(who.ctx) });
     reply(200, { ok: true });
   };
+  // 路由按路径精确匹配（查询串 ?agent= 不影响）
   return [router.on('POST', AGENT_MCP_PATH, handle), router.on('GET', AGENT_MCP_PATH, handle), router.on('DELETE', AGENT_MCP_PATH, handle),
     router.on('POST', '/agent/events', events)];
 }

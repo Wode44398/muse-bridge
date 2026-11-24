@@ -25,6 +25,7 @@
   // 新对话入口 + 临时对话（原「快照」）按时间回收（S1-6，2026-10-22）
   import TempChatBand from '../TempChatBand.svelte';
   import { usePage } from '../../../lib/claudePage/context.js';
+  import { touchGuard } from '../../../lib/selection.js';
 
   const pc = usePage();
   const { saveCurQuick, onScroll, onWheel, onTouchStart, onTouchEnd, keepCurQuick } = pc;
@@ -67,7 +68,7 @@
 {:else}
   <!-- 首尾两条渐隐带 = claude.ai /code 转录滚动区原件（app.css .scroll-fade-strip-*）：sticky + 负 margin
        不占位，不改 scrollHeight，onScroll/atBottom 的粘底判定不受影响；尺寸与底带钉位见下方 .scroll 规则。 -->
-  <div class="scroll" bind:this={pc.scrollEl} onscroll={onScroll} onwheel={onWheel} ontouchstart={onTouchStart} ontouchend={onTouchEnd} ontouchcancel={onTouchEnd}>
+  <div class="scroll" bind:this={pc.scrollEl} use:touchGuard onscroll={onScroll} onwheel={onWheel} ontouchstart={onTouchStart} ontouchend={onTouchEnd} ontouchcancel={onTouchEnd}>
     <div class="scroll-fade-strip-top" aria-hidden="true"></div>
     <Thread />
     <div class="scroll-fade-strip-bottom" aria-hidden="true"></div>

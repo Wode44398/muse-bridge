@@ -3,7 +3,9 @@
 //
 // 两列的顺序（cols.a / cols.b）是全部工具的一份排列，没开的卡也留在里面——下次开出来还在老位置附近。
 
-export type CardTool = "tasks" | "review" | "term" | "browser" | "files" | "memory";
+// plg:<插件>:<id> = bridge 插件的工作区卡片（插件接口六期 ctx.ui.workbench 的 hosts 含 dimensio；卡片表由宿主 bridge 注入）
+export type CardTool = "tasks" | "review" | "term" | "browser" | "files" | "memory" | `plg:${string}`;
+export const PLUGIN_CARD_RE = /^plg:[a-z][a-z0-9-]{0,47}:[a-z][a-z0-9-]{0,47}$/;
 export interface Cols {
   a: CardTool[];
   b: CardTool[];
@@ -16,7 +18,7 @@ export const DEFAULT_COLS: Cols = { a: ["term", "review", "tasks"], b: ["browser
 const W_MIN = 0.15;
 const W_MAX = 8;
 
-export const isTool = (v: unknown): v is CardTool => typeof v === "string" && (CARD_TOOLS as readonly string[]).includes(v);
+export const isTool = (v: unknown): v is CardTool => typeof v === "string" && ((CARD_TOOLS as readonly string[]).includes(v) || PLUGIN_CARD_RE.test(v));
 
 // 去重、去掉不认识的，缺的按默认列补在末尾
 export function normCols(c: unknown): Cols {

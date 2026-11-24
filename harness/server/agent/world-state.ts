@@ -12,14 +12,15 @@
 import { createHash } from "node:crypto";
 import type { Msg } from "./turn.ts";
 
-export type WorldSection = "mode" | "access" | "date" | "guide" | "projectDocs" | "skills" | "knowledge" | "memory" | "jobs" | "debug" | "project";
+export type WorldSection = "mode" | "access" | "date" | "guide" | "projectDocs" | "skills" | "knowledge" | "memory" | "jobs" | "debug" | "project" | "agents";
 export type WorldValues = Partial<Record<WorldSection, string>>;
 export type WorldTokens = Partial<Record<WorldSection, string>>;
 
 // 每轮都看的节；其余（日期、项目知识、记忆）只在一轮开跑时看——它们在一轮里要么不变，要么是模型自己改的
 export const TURN_SECTIONS: readonly WorldSection[] = ["mode", "access", "guide", "projectDocs", "skills", "jobs", "debug"];
 // project = 项目对话与讨论串的项目说明 + 项目记忆索引（project-mode.ts；普通会话不给这一节）
-export const RUN_START_SECTIONS: readonly WorldSection[] = ["date", "knowledge", "memory", "project"];
+// agents = 自定义子 agent 类型的清单（agent/subagent/definitions.ts）
+export const RUN_START_SECTIONS: readonly WorldSection[] = ["date", "knowledge", "memory", "project", "agents"];
 
 const SHORT: ReadonlySet<WorldSection> = new Set(["mode", "access", "date", "jobs", "debug"]);
 const SHORT_MAX = 64; // 短节的值超过这个长度（结束的 job 攒多了）也改记哈希，别让令牌把会话文件撑大
@@ -56,7 +57,9 @@ export interface WorldDelta {
 }
 
 // 变了的节 → 一条片段；都没变 → null。values 里没给的节不看（这一轮不查它）。
-export function worldDelta(values: WorldValues, baseline: WorldTokens, describe: (section: WorldSection, value: string, was: string | undefined) => string): WorldDelta | null {
+// describe 的 was 是给模型看的旧值（只有短节有），wasToken 是基线里的原始令牌（长节据此找回模型手里那一版、只报差异）
+export type WorldDescribe = (section: WorldSection, value: string, was: string | undefined, wasToken?: string) => string;
+export function worldDelta(values: WorldValues, baseline: WorldTokens, describe: WorldDescribe): WorldDelta | null {
   const lines: string[] = [];
   const tokens: WorldTokens = {};
   for (const [section, value] of Object.entries(values) as [WorldSection, string][]) {
@@ -65,7 +68,7 @@ export function worldDelta(values: WorldValues, baseline: WorldTokens, describe:
     if (was === token) continue;
     // 现在是空的，而基线里没有这一节（system 建成时不含它）或者这一节只报新消息：不必说
     if (!value && (was === undefined || NEWS_ONLY.has(section))) continue;
-    lines.push(describe(section, value, readable(was)));
+    lines.push(describe(section, value, readable(was), was));
     tokens[section] = token;
   }
   if (!lines.length) return null;

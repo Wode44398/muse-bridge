@@ -16,7 +16,7 @@
   import { t } from '../../lib/i18n.js';
   import '../ios27/ink.css';
 
-  let { items = [], onpick, onclose, anchor = null } = $props();
+  let { items = [], onpick, onclose, anchor = null, onctx = null } = $props();
 
   const dark = $derived(ui.theme !== 'light');
   setContext('ios27', { get dark() { return dark; }, ink: true });
@@ -74,6 +74,7 @@
       {@const ic = iconOf(it)}
       {@const badge = it.kind === 'app' ? String(it.app?.badge || '') : ''}
       <button class="hm-it" type="button" onclick={(e) => pick(it, e)}
+        oncontextmenu={onctx ? (e) => onctx(e, it) : undefined}
         aria-label={badge ? t('{name}（{badge}）', { name: it.label, badge }) : it.label}>
         <span class="hm-ic" aria-hidden="true">
           {#if ic.img}<img src={ic.img} alt="" draggable="false" />{:else}{@html ic.svg}{/if}

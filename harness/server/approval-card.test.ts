@@ -14,6 +14,7 @@ import test, { after } from "node:test";
 import { runAgent } from "./agent/loop.ts";
 import { approvalPreview, PREVIEW_CAP } from "./agent/approval-preview.ts";
 import { decide, DeniedTargets, TOOL_CONFIRM_RULE } from "./agent/permissions.ts";
+import { hardenedProfile } from "./agent/profile.ts";
 import { pendingInteractions, startRun, watchSession } from "./session.ts";
 import { call, calls, say, scripted } from "./test-harness/scripted-adapter.ts";
 import { attachSession } from "./test-harness/session-fixture.ts";
@@ -137,7 +138,8 @@ test("P11 规划阶段：注定被拦下的调用不弹卡、直接回给模型�
     ),
     say("好"),
   );
-  const session = attachSession(adapter, root, { tools: [probeBash(ran), editTool, writeTool] });
+  // 先读后改的否决是加固档案的行为（lean 的 Edit 不要求先 Read）
+  const session = attachSession(adapter, root, { tools: [probeBash(ran), editTool, writeTool], profile: hardenedProfile() });
   const state = session.state!;
   state.permissionRules = { allow: [], deny: [], ask: ["Bash", "Write"] };
   state.ctx.requestPermission = async () => {

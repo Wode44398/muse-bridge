@@ -364,7 +364,7 @@
   .plabel, .card { transition-timing-function: cubic-bezier(.32, .72, 0, 1); }
   /* 出场动画：随主页露出，整个登录胶囊（玻璃+文字+本体）一起淡入，略晚于入口图标。
      fixed 子元素靠外层 opacity group 一并淡入；外层占满视口、自身不拦事件（子元素各自接管）。 */
-  .lc-fade { position: fixed; inset: 0; z-index: 30; pointer-events: none; opacity: 0; transition: opacity var(--mo-base) var(--ea-fade) var(--mo-quick);
+  .lc-fade { position: fixed; inset: 0; z-index: 30; pointer-events: none; opacity: 0; transition: opacity 180ms var(--ea-fade) 50ms;
     font-family: var(--font-brand-sans), -apple-system, BlinkMacSystemFont, system-ui, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     -webkit-font-smoothing: antialiased; }
   .lc-fade.appeared { opacity: 1; }

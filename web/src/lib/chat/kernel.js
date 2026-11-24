@@ -765,6 +765,7 @@ function reallySend(t, atts, handoff = false) {
   agentStart('Claude');
 
   notePrefsNow(session.id);   // 发送即记忆：本会话（新会话先记 last，id 回来再补绑）+ 新对话默认
+  settings.effortAt = Date.now();   // 这轮按所选档发出：上一轮的实况回报作废，等这轮 Stop hook 再定
   const params = chatParams(t, atts);
   markOutputStyleSent(params.outputStyle);   // 新会话随第一条带的输出风格：id 回来后转记成这个会话的覆盖（lib/outputStyle）
   if (session.id) delete status.suggestions[session.id];   // 这一轮开跑，上一条输入建议随之作废

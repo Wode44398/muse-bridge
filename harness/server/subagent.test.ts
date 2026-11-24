@@ -83,13 +83,13 @@ test("read-only sub-agent finishes without a memory-audit nudge", async () => {
   assert.equal(result.turns, 1);
   assert.equal(result.tier, "research");
   assert.equal(adapter.calls.length, 1);
-  // Research tier: no write tools advertised.
+  // Research tier: no write tools advertised; Bash is there but the permission mode keeps it read-only.
   const names = adapter.calls[0].tools.map((t) => t.name);
-  assert.ok(names.includes("Read") && names.includes("Grep"));
-  assert.ok(!names.includes("Write") && !names.includes("Bash") && !names.includes("Agent"));
+  assert.ok(names.includes("Read") && names.includes("Grep") && names.includes("Bash"));
+  assert.ok(!names.includes("Write") && !names.includes("Edit") && !names.includes("Agent"));
 });
 
-test("research tier blocks writes even if the model asks; coder tier can write and reports edited files", async () => {
+test("research tier blocks writes even if the model asks; coder tier can write and reports edited files", async (t) => {
   const root = tmpRoot();
   // Research: tries Write → unknown tool (not in its toolset), then answers.
   const research = scripted((turn, i) =>
@@ -100,8 +100,10 @@ test("research tier blocks writes even if the model asks; coder tier can write a
   assert.match(r1.text, /Unknown tool "Write"/);
   assert.ok(!fs.existsSync(path.join(root, "x.txt")));
 
-  // Coder in an auto parent: Write lands, then the done-gate wants verification →
+  // Coder in an auto parent, hardened posture: Write lands, then the done-gate wants verification →
   // the model calls VerificationAudit, then answers.
+  process.env.DIMENSIO_PROFILE_OVERRIDES = JSON.stringify({ "*": { posture: "hardened" } });
+  t.after(() => delete process.env.DIMENSIO_PROFILE_OVERRIDES);
   const coder = scripted((turn, i) => {
     if (i === 0) return call("c1", "Write", { path: "x.txt", content: "hi" });
     if (i === 1) return say("done, wrote x.txt");
@@ -299,7 +301,7 @@ test("Agent tool: passes options through, tags events with its call id, persists
     callId: "call-42",
     emit: () => {},
     runSubAgent: async (req) => {
-      seen.push({ tier: req.tier, model: req.model, thinking: req.thinking, toolId: req.toolId, hasEmit: Boolean(req.onEvent), schema: req.schema });
+      seen.push({ type: req.type, model: req.model, thinking: req.thinking, toolId: req.toolId, hasEmit: Boolean(req.onEvent), schema: req.schema });
       return {
         ok: true, id: "sub-1", label: req.label ?? "l", tier: req.tier ?? "research", model: "fake", provider: "openai",
         text: "answer", result: req.schema ? { n: 1 } : undefined, turns: 2, toolCalls: 1, inputTokens: 20, outputTokens: 10,
@@ -307,10 +309,10 @@ test("Agent tool: passes options through, tags events with its call id, persists
       };
     },
   };
-  const r = await agentTool.run({ prompt: "do it", tools: "coder", model: "m2", effort: "xhigh", label: "job" }, ctx);
+  const r = await agentTool.run({ prompt: "do it", subagent_type: "coder", model: "m2", effort: "xhigh", label: "job" }, ctx);
   assert.equal(r.ok, true);
   // xhigh 是真档位（Claude 的 extra），原样传下去，由 runner 按目标型号 clamp——不再在入口折成 max
-  assert.deepEqual(seen[0], { tier: "coder", model: "m2", thinking: "xhigh", toolId: "call-42", hasEmit: true, schema: undefined });
+  assert.deepEqual(seen[0], { type: "coder", model: "m2", thinking: "xhigh", toolId: "call-42", hasEmit: true, schema: undefined });
   assert.equal((r.meta as any).subagent.trail[0].name, "Grep");
   // C3：子 agent 的报告带「数据不是指令」的框定行
   assert.match(r.content.map((b) => (b.t === "text" ? b.text : "")).join(""), /^\[Sub-agent report[^\n]*\]\nanswer/);

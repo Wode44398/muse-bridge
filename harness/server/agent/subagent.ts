@@ -6,59 +6,67 @@ import type { AdapterConfig, ProviderAdapter, ProviderId } from "../providers/ty
 import type { JsonObjectSchema, ThinkingLevel } from "./turn.ts";
 import type { PermissionMode, PermissionRules } from "./permissions.ts";
 import type { AgentEvent, SubAgentTier } from "./events.ts";
-import type { Sandbox } from "../sandbox.ts";
+import { Sandbox } from "../sandbox.ts";
+import { memoryGrantDirs, safeMemoryRoot } from "../memory-files.ts";
+import { externalReadDirs } from "../external-memory.ts";
 import type {
   FileState,
+  SubAgentControl,
   SubAgentRequest,
   SubAgentResult,
+  SubAgentStarted,
   SubAgentStop,
   SubAgentTrailStep,
   Tool,
   ToolContext,
 } from "../tools/types.ts";
-import { fail, ok } from "../tools/types.ts";
-import { readTool } from "../tools/read.ts";
-import { grepTool } from "../tools/grep.ts";
-import { globTool } from "../tools/glob.ts";
-import { webfetchTool } from "../tools/webfetch.ts";
-import { webSearchTool, webSearchAvailable } from "../tools/websearch.ts";
-import { writeTool } from "../tools/write.ts";
-import { editTool } from "../tools/edit.ts";
-import { bashTool, shell } from "../tools/bash.ts";
-import { disabledTools } from "../tenant.ts";
-import { verificationAuditTool } from "../tools/verificationaudit.ts";
 import { allProviders, clampEffort, defaultModel, modelSpec } from "../catalog.ts";
 import { providerEndpoint, resolveKey } from "../config.ts";
-import { coerceToSchema, formatSchemaErrors, validateSchema } from "./schema.ts";
 import type { UsageDelta } from "../usage-ledger.ts";
-import { routeSubAgentModel } from "./dispatch-ladder.ts";
+import { AUTO_RE, routeSubAgentModel } from "./dispatch-ladder.ts";
 import { resolveProfile, type ModelProfile } from "./profile.ts";
+import { describeTools } from "./tool-descriptions.ts";
+import { subSystemPrompt } from "./subagent/prompt.ts";
+import { customTools, forkToolMap, makeSubmitTool, tierTools, type SubmitHolder } from "./subagent/tools.ts";
+import { findAgentDefinition, loadAgentDefinitions, type AgentDefinition } from "./subagent/definitions.ts";
+import { createWorktree, finishWorktree, reopenWorktree, type AgentWorktree } from "./subagent/worktree.ts";
+import { forkBlocker, forkDirective, forkMessages, FORK_KIND } from "./subagent/fork.ts";
+import { wireApprovals } from "./subagent/approvals.ts";
+import {
+  agentIdTaken,
+  describeAgent,
+  dropAgent,
+  getAgent,
+  listAgents,
+  MAX_BACKGROUND,
+  MAX_KEPT,
+  registerAgent,
+  runningBackground,
+  settleAgent,
+  stopAgent,
+  type AgentRecord,
+  type StopCause,
+} from "./subagent/registry.ts";
 
-// A sub-agent is a fresh, bounded agent loop the main agent (or a Workflow
-// script) delegates one self-contained task to. The point is context economy:
-// the child burns its own context on file dumps / build output and hands back
-// only the conclusions — as text, or as a schema-validated object.
+// A sub-agent is a bounded agent loop the main agent (or a Workflow script) delegates one task to. The point is
+// context economy: the child burns its own context on file dumps / build output and hands back only the
+// conclusions — as text, or as a schema-validated object.
 //
-// Two tool tiers:
-//   research — Read/Grep/Glob/WebFetch(/WebSearch), permission mode forced to
-//              read-only. The original Agent tool.
-//   coder    — the research set plus Write/Edit/Bash (+VerificationAudit so the
-//              done-gate's escape hatch exists). Runs in auto mode. Refused
-//              unless the PARENT session is in auto mode: a read-only/plan
-//              parent must never be able to write through a child — and a
-//              parent that switches to read-only/plan mid-run clamps every
-//              running coder from its next tool call on (P2, only tightens).
-// Never inside a child: Agent/Workflow (no recursion), AskUserQuestion (no
-// human attached), memory tools (no durable memory; no MemoryAudit gate).
+// 这个文件是编排：选类型（内置两档 / 自定义定义 / fork）、选型、建上下文（subagent/ 下各模块），然后驱动 loop 跑完一次。
+// 同一个子 agent 可以接着用：上下文（AgentState）留在台账里（subagent/registry.ts），追加一条消息再驱动一次。
+// 后台跑的立刻返回 id，收场时经 env.onBackgroundEnd 交给会话层通知父会话。
 //
-// Structured output: with `schema`, a SubmitResult tool whose parameters ARE
-// the schema is injected; calling it validly is the only way to deliver (the
-// child's loop is stopped right after the accepted call — no wasted "I'm done"
-// turn). Invalid arguments come back as a tool error listing the problems, up
-// to SUBMIT_ATTEMPTS; finishing without calling it earns a nudge, up to
-// SUBMIT_NUDGES. This beats "please answer in JSON" + parse on every provider
-// because the argument schema is enforced by the same tool-call channel every
-// adapter already speaks.
+// Tool tiers:
+//   research — Read/Grep/Glob/WebFetch(/WebSearch) + read-only Bash, permission mode forced to read-only.
+//   coder    — the research set plus Write/Edit/Bash (+VerificationAudit under the hardened posture). Runs in auto
+//              mode. Refused unless the PARENT session is in auto (or bypass) mode, and a parent that switches to
+//              read-only/plan mid-run clamps every running coder from its next tool call on (P2, only tightens).
+// Never inside a child: Agent/Workflow (no recursion), AskUserQuestion (no human attached), memory tools.
+//
+// Structured output: with `schema`, a SubmitResult tool whose parameters ARE the schema is injected; calling it
+// validly is the only way to deliver (the child's loop is stopped right after the accepted call). Invalid
+// arguments come back as a tool error listing the problems, up to SUBMIT_ATTEMPTS; finishing without calling it
+// earns a nudge, up to SUBMIT_NUDGES.
 
 const TIER_DEFAULTS: Record<SubAgentTier, { maxTurns: number; deadlineMs: number }> = {
   research: { maxTurns: 20, deadlineMs: 10 * 60_000 },
@@ -71,8 +79,7 @@ const SUB_MAX_OUTPUT = 65_536;
 export const SUBMIT_ATTEMPTS = 3; // first try + 2 retries
 export const SUBMIT_NUDGES = 2;
 
-// O2（KM-1 第一步）：子 agent 撞上限流 / 上游过载——以前 loop 重试完就记失败，在 Workflow 里变成 null、被脚本的 filter(Boolean)
-// 静默吃掉（「审了 12 个模块」其实只审了 9 个）。现在不记失败：挂起、退避（3 秒起翻倍、封顶 60 秒，可被中止），然后在同一个
+// O2（KM-1 第一步）：子 agent 撞上限流 / 上游过载——不记失败：挂起、退避（3 秒起翻倍、封顶 60 秒，可被中止），然后在同一个
 // state 上接着跑，挂起的那一轮不计轮数；只受这个子 agent 自己的截止时间约束。key、额度、请求本身有问题这类错误照旧失败。
 const SUSPEND_CLASSES = new Set(["rate_limit", "upstream_busy"]);
 const SUSPEND_BASE_MS = 3_000;
@@ -106,6 +113,13 @@ function nextStepFor(stop: SubAgentStop, errorClass: string): string {
       return "It was stopped before finishing.";
   }
 }
+
+const CAUSE_TEXT: Record<StopCause, string> = {
+  model: "stopped by you (Agent action \"stop\")",
+  user: "stopped because the user stopped this session",
+  deleted: "stopped because the session was deleted",
+  restart: "stopped because the server restarted",
+};
 
 function pause(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -142,6 +156,10 @@ const SUBMIT_NUDGE =
   "[Automated check] You have not delivered your result. Call SubmitResult now with arguments that match " +
   "its schema exactly — that call is the only deliverable; plain text is discarded.";
 
+// 父 agent 给一个还在跑的子 agent 追加的话：在它下一步之前注入（kind 见 injections.ts）
+export const AGENT_MESSAGE_KIND = "agent-message";
+const agentMessage = (text: string) => `[Message from the main agent] ${text}`;
+
 export interface SubAgentEnv {
   provider: ProviderId;
   apiKey: string;
@@ -158,125 +176,34 @@ export interface SubAgentEnv {
   permissionRules?: () => PermissionRules;
   // D5：父会话的「这台机器有没有浏览器」（决定子 agent 碰到网页 / 桌面 / 安卓时给哪版 playbook）；不给 = 有
   parentBrowser?: () => boolean;
-  // Session id — tags a coder child's background jobs so stopping the session
-  // reaps them too.
+  // Session id — tags a child's background jobs so stopping the session reaps them too; also the key of the
+  // sub-agent registry (resume / list / stop).
   ownerId?: string;
   // N26：父会话这一轮的轮内快照口——子 agent 的破坏性命令前同样先拍（何时拍由子 agent 自己的 loop 判）
   snapshotFiles?: (label: string) => Promise<void>;
   // 同理：父会话这一轮的「改前备份」口（大工作区只备份改过的文件）——子 agent 的 Write / Edit 同样先备份
   beforeFileWrite?: (abs: string) => Promise<void>;
-  // C6（G3）：继承的项目指令（AGENTS.md、GUIDE.md 两段，已框定好），拼进子 agent 的 system prompt。
-  // C4：每起一个子 agent 现读——会话中途改了 GUIDE / AGENTS.md，之后起的子 agent 拿到的是新的
+  // C6（G3）：继承的项目指令（AGENTS.md、GUIDE.md 两段，已框定好），拼进子 agent 的 system prompt。每起一个子 agent 现读
   projectInstructions?: () => string | undefined;
   // O8（N39）：父会话的用量账本——子 agent 的每次请求也记进去（任务标 subagent；工作流里起的标 workflow）
   usageSink?: (d: UsageDelta) => void;
+  // 父会话此刻的状态（fork 的前缀、批准卡转交、后台子 agent 的实况事件都现取）；没有 = 不能 fork、要批准的一律拒
+  parent?: () => AgentState | undefined;
+  // fork 的适配器与父会话同样的缓存时长（前缀才对得上）
+  cacheTtl?: "1h";
+  // 后台子 agent 收场（完成 / 失败 / 被停）：会话层据此通知父会话、更新发起那次调用的卡片
+  onBackgroundEnd?: (end: BackgroundEnd) => void;
+  // 用户 hooks 的子 agent 视图（父会话配了 hooks 才有）
+  hooks?: () => ToolContext["hooks"];
 }
 
-interface SubmitHolder {
-  value: unknown;
-  attempts: number;
-  maxAttempts: number; // 校验失败的总机会数（档案 loop.submitAttempts）
-  exhausted: boolean;
-  lastErrors: string;
-}
-
-function tierTools(tier: SubAgentTier): Tool[] {
-  const tools: Tool[] = [readTool, grepTool, globTool, webfetchTool];
-  if (webSearchAvailable()) tools.push(webSearchTool);
-  if (tier === "coder") tools.push(writeTool, editTool, bashTool, verificationAuditTool);
-  // 关掉的工具子 agent 也不许有（没有命令行的租户，coder 子 agent 同样没有 Bash），见 tenant.ts。
-  const off = disabledTools();
-  return tools.filter((t) => !off.has(t.def.name));
-}
-
-function makeSubmitTool(schema: JsonObjectSchema, holder: SubmitHolder): Tool {
-  return {
-    effect: "read",
-    concurrencySafe: false,
-    def: {
-      name: "SubmitResult",
-      description:
-        "Deliver your final result. The arguments MUST match this schema exactly — it is what the caller " +
-        "consumes programmatically. Call it once, when you have the data; text outside this call is discarded. " +
-        "If the call is rejected, fix the listed problems and call it again.",
-      parameters: schema,
-    },
-    async run(rawArgs) {
-      // O5（H4）：先按 schema 宽容修正（JSON 字符串包着的对象 / 数组 parse 一次，数字 / 布尔字符串转回来）——修正本身不算
-      // 一次修复机会；修正后还不对，报的是修正后对象上的问题
-      const args = coerceToSchema(schema, rawArgs).value as Record<string, unknown>;
-      const errors = validateSchema(schema, args);
-      if (errors.length) {
-        holder.attempts++;
-        holder.lastErrors = formatSchemaErrors(errors);
-        const left = holder.maxAttempts - holder.attempts;
-        if (left <= 0) {
-          holder.exhausted = true;
-          return fail("result rejected", `Result rejected (no attempts left):\n${holder.lastErrors}`);
-        }
-        return fail(
-          "result rejected",
-          `Result rejected (${left} attempt${left === 1 ? "" : "s"} left). Fix these and call SubmitResult again:\n${holder.lastErrors}`,
-        );
-      }
-      holder.value = args;
-      return ok("result accepted", "Result accepted. You are done — stop now.");
-    },
-  };
-}
-
-interface PromptEnv {
-  root: string;
-  platform: string;
-  tier: SubAgentTier;
-  toolNames: string[];
-  fullAccess: boolean;
+export interface BackgroundEnd {
+  id: string;
+  toolId?: string;
+  prompt: string;
+  result: SubAgentResult;
+  cause?: StopCause;
   schema: boolean;
-  extra?: string;
-  // C6（G3）：从父会话继承的项目指令（AGENTS.md、GUIDE.md），框定与主会话一致
-  inherited?: string;
-  // 模型档案（按路由后的目标型号解析）：提示词变体 / 补丁的挂点，P0 只收不用
-  profile?: ModelProfile;
-}
-
-function subSystemPrompt(env: PromptEnv): string {
-  const reach = env.fullAccess
-    ? " — you may also work on other paths on this machine (absolute paths) when the task points there."
-    : " — stay inside it.";
-  const role = env.tier === "coder"
-    ? "You are a coding sub-agent inside a coding-agent harness. A main agent delegated ONE self-contained implementation task to you; it sees nothing of your work except your final deliverable."
-    : "You are a read-only research sub-agent inside a coding-agent harness. A main agent delegated ONE focused task to you; it sees nothing of your work except your final deliverable.";
-  const toolsLine = env.tier === "coder"
-    ? `${env.toolNames.join(", ")}. You can edit files and run commands. Read a file before you Edit it. Never start a web server or any long-lived process; Bash(background:true) is only for finite long commands. Shell: ${shell.kind}.`
-    : `${env.toolNames.join(", ")}. You canNOT edit files or run commands. If the task seems to require an action, report precisely what the caller should do instead.`;
-  const work = env.tier === "coder"
-    ? `1. Work autonomously. Never ask questions — make reasonable assumptions and state them in your deliverable.
-2. Scope first: Grep with mode:"files" or Glob to locate what matters, Read it, then make focused changes (prefer Edit over rewriting files).
-3. VERIFY before you finish: run the relevant test/build/program with Bash(verify:true) and read the output. If no executable check exists or the environment blocks it, call VerificationAudit with a concrete reason.
-4. Stay on the task. No gold-plating, no unrelated cleanups.`
-    : `1. Work autonomously. Never ask questions — make reasonable assumptions and state them in your deliverable.
-2. Scope first, then read: Grep with mode:"files" or Glob to locate candidates, then Read what matters. Batch independent lookups into ONE turn — they execute in parallel.
-3. Be thorough on the task, and only the task. Stop as soon as you can answer it.`;
-  const deliverable = env.schema
-    ? `## Deliverable (IMPORTANT)
-You MUST deliver by calling the SubmitResult tool — its parameters are the exact schema the caller consumes. Anything you write outside that call is discarded. Gather the data first, then call it once with complete, valid arguments; if it is rejected, fix the listed problems and call it again.`
-    : `## Deliverable (IMPORTANT)
-Your FINAL message is the entire deliverable, returned verbatim to the caller. Pack it with everything needed to act: concrete file paths with line numbers, exact names/signatures, short verbatim snippets where they matter, ${env.tier === "coder" ? "exactly which files you changed and what you verified (command + outcome), " : ""}and a direct answer to what was asked. No preamble, no questions, no offers of further help.`;
-  const extra = env.extra?.trim() ? `\n\n## Additional instructions from the caller\n${env.extra.trim()}` : "";
-  const inherited = env.inherited?.trim() ? `\n\n${env.inherited.trim()}` : "";
-  return `${role}
-
-## Environment
-- Working directory (sandbox root): ${env.root}${reach}
-- Platform: ${env.platform}
-
-## Tools
-${toolsLine}
-
-## How to work
-${work}
-
-${deliverable}${inherited}${extra}`;
 }
 
 function providerForModel(model: string): ProviderId | undefined {
@@ -320,6 +247,15 @@ function resolveTarget(env: SubAgentEnv, req: SubAgentRequest): Target | { error
   return { provider, model, apiKey, baseUrl, thinking: clampEffort(provider, model, req.thinking ?? env.thinking) };
 }
 
+// 定义文件里写的型号认不认得：auto:<档>、「服务:型号」、目录里有的 id
+function knownModel(env: SubAgentEnv, model: string): boolean {
+  if (AUTO_RE.test(model) || model === env.model) return true;
+  const at = model.indexOf(":");
+  const spec = at > 0 ? allProviders().find((p) => p.id === model.slice(0, at)) : undefined;
+  if (spec) return Boolean(modelSpec(spec.id, model.slice(at + 1)));
+  return Boolean(providerForModel(model));
+}
+
 const ARG_KEYS = ["command", "pattern", "path", "url", "query", "prompt", "poll", "kill", "action"];
 function argPreview(args: Record<string, unknown>): string {
   for (const k of ARG_KEYS) {
@@ -338,78 +274,203 @@ function clampInt(v: number | undefined, fallback: number, cap: number): number 
   return Math.min(Math.floor(v), cap);
 }
 
-// The session wires the returned closure into ToolContext.runSubAgent. The
+// ── 类型解析 ─────────────────────────────────────────────────────────────────
+// 内置两档的名字固定；别家 harness 的名字（Explore、Plan、general-purpose）是别名——除非工作区 / 用户级定义了同名的自定义类型
+const ALIASES: Record<string, SubAgentTier> = {
+  explore: "research",
+  plan: "research",
+  "general-purpose": "coder",
+  general: "coder",
+  code: "coder",
+};
+
+type Resolved = { tier: SubAgentTier; type: string; def?: AgentDefinition; alias?: boolean } | { error: string };
+
+function resolveType(req: SubAgentRequest, root: string): Resolved {
+  const raw = req.type?.trim();
+  if (!raw) {
+    const tier: SubAgentTier = req.tier === "coder" ? "coder" : "research";
+    return { tier, type: tier };
+  }
+  const lower = raw.toLowerCase();
+  if (lower === "research" || lower === "coder") return { tier: lower, type: lower };
+  const def = findAgentDefinition(root, raw);
+  if (def) return { tier: "research", type: def.name, def };
+  if (ALIASES[lower]) return { tier: ALIASES[lower], type: ALIASES[lower], alias: true };
+  const custom = loadAgentDefinitions(root).map((d) => d.name);
+  return { error: `unknown subagent_type "${raw}". Available: research, coder${custom.length ? `, ${custom.join(", ")}` : ""}` };
+}
+
+// ── 一个子 agent 的上下文（接着用时原样复用）───────────────────────────────────
+interface Child {
+  id: string;
+  label: string;
+  tier: SubAgentTier;
+  type: string;
+  notes: string[];
+  target: Target;
+  profile: ModelProfile;
+  adapter: ProviderAdapter;
+  state: AgentState;
+  ctx: ToolContext;
+  holder: SubmitHolder | null;
+  schema?: JsonObjectSchema;
+  fork: boolean;
+  worktree?: AgentWorktree;
+  runs: number;
+}
+
+interface Failed {
+  error: string;
+  model: string;
+  provider: string;
+  tier: SubAgentTier;
+}
+
+interface DriveOpts {
+  signal?: AbortSignal;
+  onEvent?: (ev: AgentEvent) => void;
+  toolId?: string;
+  phase?: string;
+  workflowId?: string;
+  rec?: AgentRecord;
+  maxTurns?: number;
+  deadlineMs?: number;
+  onSuspend?: (reason: string) => void;
+}
+
+// The session wires host.run into ToolContext.runSubAgent and host.control into ToolContext.subAgents. The
 // optional adapterFactory exists for tests (inject a scripted fake adapter).
-export function makeSubAgentRunner(
+export function makeSubAgentHost(
   env: SubAgentEnv,
   adapterFactory: (cfg: AdapterConfig) => ProviderAdapter = createAdapter,
-): (req: SubAgentRequest) => Promise<SubAgentResult> {
-  return async function runSubAgent(req: SubAgentRequest): Promise<SubAgentResult> {
-    const id = req.id ?? randomUUID();
-    const tier: SubAgentTier = req.tier === "coder" ? "coder" : "research";
-    const label = (req.label?.trim() || firstLine(req.prompt) || "sub-agent").slice(0, 80);
-    const emit = req.onEvent;
-    const startedAt = Date.now();
+): { run: (req: SubAgentRequest) => Promise<SubAgentResult>; control: SubAgentControl } {
+  const owner = env.ownerId ?? `local-${randomUUID()}`;
+  const newId = (): string => {
+    let id: string;
+    do id = randomUUID().replace(/-/g, "").slice(0, 8);
+    while (agentIdTaken(owner, id));
+    return id;
+  };
+  const canWrite = (): { ok: boolean; mode: PermissionMode } => {
+    const mode = env.parentMode?.() ?? "auto";
+    return { ok: !env.parentMode || mode === "auto" || mode === "bypass", mode };
+  };
 
-    // Early refusals still announce themselves on the event stream, so the UI
-    // shows a failed card instead of a tool row that silently errored.
-    const bail = (error: string, model = env.model, provider: string = env.provider): SubAgentResult => {
-      emit?.({
-        e: "subagent_start", id, label, tier, model, provider, prompt: req.prompt.slice(0, PROMPT_EVENT_CAP),
-        phase: req.phase, workflowId: req.workflowId, toolId: req.toolId, startedAt,
-      });
-      const durationMs = Date.now() - startedAt;
-      emit?.({ e: "subagent_end", id, ok: false, error, turns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, text: "", durationMs });
-      return {
-        ok: false, id, label, tier, model, provider, text: "", error,
-        turns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, editedFiles: [], trail: [], startedAt, durationMs,
-      };
-    };
+  // 共用父工作区的子 agent 的沙箱跟着父会话此刻的那一份走：父会话换型号 / 回滚后重建了状态（新的 Sandbox），用户之后切访问范围
+  // 改的是新的那一份——在跑的后台子 agent 下一次工具调用就按新的边界判。工作区换了（根不同）就留在原来那一份上。
+  function followParentSandbox(ctx: ToolContext, own: Sandbox): void {
+    if (!env.parent) return;
+    Object.defineProperty(ctx, "sandbox", {
+      configurable: true,
+      enumerable: true,
+      get(): Sandbox {
+        const live = env.parent?.()?.ctx.sandbox;
+        return live && live.root === own.root ? live : own;
+      },
+      // loop 按调用派生的上下文（以它为原型）会给这一次调用换一个沙箱视图（P13「允许这一次」的只读目录）：落成派生对象自己的属性；
+      // 子 agent 自己的上下文不接受赋值（它的沙箱由父会话此刻的状态决定）
+      set(this: ToolContext, value: Sandbox) {
+        if (this !== ctx) Object.defineProperty(this, "sandbox", { value, writable: true, configurable: true, enumerable: true });
+      },
+    });
+  }
 
-    if (tier === "coder" && env.parentMode) {
-      const mode = env.parentMode();
-      // bypass（管理员全权档）与 auto 一样可以派 coder；只读 / plan 不行。
-      if (mode !== "auto" && mode !== "bypass") {
-        return bail(`coder sub-agents need the parent session in auto or bypass mode (it is in ${mode}); use tools:"research" or switch the session mode first`);
+  async function prepare(req: SubAgentRequest, id: string, label: string): Promise<Child | Failed> {
+    const notes: string[] = [];
+    const resolved = resolveType(req, env.sandbox.root);
+    if ("error" in resolved) return { error: resolved.error, model: env.model, provider: env.provider, tier: "research" };
+    let { tier } = resolved;
+    const def = resolved.def;
+
+    if (req.context === "fork") {
+      const parent = env.parent?.();
+      const why = !parent
+        ? "there is no parent conversation to copy here"
+        : req.schema
+          ? "a fork cannot return a schema result"
+          : def
+            ? "a fork always runs as the main agent, not as a custom type"
+            : req.isolation
+              ? "a fork works in the main agent's workspace, not in a separate worktree"
+              : req.model || req.provider
+                ? "a fork runs on this session's model"
+                : forkBlocker(parent);
+      if (!why) return prepareFork(req, id, label, parent!);
+      notes.push(`Not forked (${why}); it ran as a fresh sub-agent that sees only its prompt.`);
+    }
+
+    const write = canWrite();
+    if (!def && tier === "coder" && !write.ok) {
+      if (!resolved.alias) {
+        return {
+          error: `coder sub-agents need the parent session in auto or bypass mode (it is in ${write.mode}); use tools:"research" or switch the session mode first`,
+          model: env.model, provider: env.provider, tier,
+        };
       }
+      tier = "research";
+      notes.push(`"${req.type}" ran as a read-only research agent because this session is in ${write.mode} mode.`);
+    }
+
+    let wantModel = req.model?.trim() || undefined;
+    if (!wantModel && !req.provider && def?.model) {
+      if (knownModel(env, def.model)) wantModel = def.model;
+      else notes.push(`The definition of "${def.name}" asks for model "${def.model}", which this harness does not know; it ran on ${env.model}.`);
     }
     // 选型阶梯：model 写 auto:<档> 或「服务:型号」时先换成具体的 provider / 型号（auto 连档位一起，压过调用方写的 effort）
     // via：Workflow 的 agent() 带 workflowId，Agent 工具不带——调用策略按这条路看生效范围
-    const routed = await routeSubAgentModel(req.model, { provider: env.provider, model: env.model }, undefined, { via: req.workflowId ? "workflow" : "agent" });
-    if ("error" in routed) return bail(routed.error, req.model ?? env.model, req.provider ?? env.provider);
-    if (routed.model) {
-      req = { ...req, model: routed.model, provider: routed.provider, ...(routed.thinking ? { thinking: routed.thinking } : {}) };
-    }
-    const target = resolveTarget(env, req);
-    if ("error" in target) return bail(target.error, req.model ?? env.model, req.provider ?? env.provider);
+    let routedReq: SubAgentRequest = { ...req, model: wantModel };
+    const routed = await routeSubAgentModel(wantModel, { provider: env.provider, model: env.model }, undefined, { via: req.workflowId ? "workflow" : "agent" });
+    if ("error" in routed) return { error: routed.error, model: wantModel ?? env.model, provider: req.provider ?? env.provider, tier };
+    if (routed.model) routedReq = { ...routedReq, model: routed.model, provider: routed.provider, ...(routed.thinking ? { thinking: routed.thinking } : {}) };
+    const target = resolveTarget(env, routedReq);
+    if ("error" in target) return { error: target.error, model: wantModel ?? env.model, provider: req.provider ?? env.provider, tier };
     // 模型档案按实际答话的型号解析（auto:<档> / 「服务:型号」都已换成具体型号）——Workflow 的 agent() 也走这里
     const profile = resolveProfile(target.provider, target.model, { effort: target.thinking });
 
-    // A fresh adapter per child: adapters may carry per-session state, and
-    // parallel children must never share streams.
-    const adapter = adapterFactory({
-      provider: target.provider,
-      apiKey: target.apiKey,
-      model: target.model,
-      baseUrl: target.baseUrl,
-      fast: env.fast,
-    });
+    let tools: Tool[];
+    if (def) {
+      const picked = customTools(def.tools, write.ok ? "coder" : "research", profile.tools.verifyTools);
+      tools = picked.tools;
+      if (picked.unknown.length) notes.push(`These tools in the definition of "${def.name}" are not available to sub-agents and were skipped: ${picked.unknown.join(", ")}.`);
+      tier = picked.writes && write.ok ? "coder" : "research";
+      if (picked.writes && !write.ok) notes.push(`"${def.name}" ran read-only because this session is in ${write.mode} mode.`);
+    } else {
+      tools = tierTools(tier, profile.tools.verifyTools);
+    }
 
-    const tools = tierTools(tier);
-    const holder: SubmitHolder = { value: undefined, attempts: 0, maxAttempts: profile.loop.submitAttempts, exhausted: false, lastErrors: "" };
-    if (req.schema) tools.push(makeSubmitTool(req.schema, holder));
+    tools = describeTools(tools, profile.tools.descriptions);
+
+    let sandbox = env.sandbox;
+    let worktree: AgentWorktree | undefined;
+    if (req.isolation === "worktree") {
+      if (tier !== "coder" || req.permissionMode === "read-only") {
+        notes.push("isolation \"worktree\" was not used: this agent does not write files.");
+      } else {
+        const wt = await createWorktree(env.sandbox.root, id, env.ownerId);
+        if ("error" in wt) notes.push(`Worktree isolation is not available (${wt.error}); it worked in the shared workspace.`);
+        else {
+          worktree = wt;
+          sandbox = new Sandbox(wt.root, "workspace");
+          // 记忆目录与外挂库按父会话的工作区挂（记忆按工作区路径分目录，worktree 的路径不是它的键）：能读本工作区的记忆，
+          // 写照旧由 Write / Edit 拒（子 agent 的上下文没有 memoryWriter）与权限判定拒
+          const parentRoot = env.sandbox.root;
+          sandbox.setOwnStateDirs(memoryGrantDirs(parentRoot), safeMemoryRoot());
+          sandbox.setExtraReadDirs(externalReadDirs(parentRoot));
+        }
+      }
+    }
+
+    const holder: SubmitHolder | null = req.schema
+      ? { value: undefined, attempts: 0, maxAttempts: profile.loop.submitAttempts, exhausted: false, lastErrors: "" }
+      : null;
+    if (req.schema && holder) tools.push(makeSubmitTool(req.schema, holder));
     const toolMap = new Map<string, Tool>(tools.map((t) => [t.def.name, t]));
 
-    // Own abort controller: the parent's signal flows in; the runner also
-    // pulls it itself once SubmitResult has been accepted (no wasted turn).
-    const ctrl = new AbortController();
-    const onParentAbort = () => ctrl.abort();
-    if (req.signal?.aborted) ctrl.abort();
-    else req.signal?.addEventListener("abort", onParentAbort, { once: true });
-    let selfAborted = false;
-
+    // A fresh adapter per child: adapters may carry per-session state, and parallel children must never share streams.
+    const adapter = adapterFactory({ provider: target.provider, apiKey: target.apiKey, model: target.model, baseUrl: target.baseUrl, fast: env.fast });
     const ctx: ToolContext = {
-      sandbox: env.sandbox,
+      sandbox,
       // Own read-state: child Reads must not satisfy the parent's Edit gate.
       readFileState: new Map<string, FileState>(),
       setTodos: () => {},
@@ -418,70 +479,164 @@ export function makeSubAgentRunner(
       agentSeesVideo: adapter.capabilities.video,
       agentHearsAudio: adapter.capabilities.audio === true,
       provider: target.provider,
-      signal: ctrl.signal,
       ownerId: env.ownerId,
-      snapshotFiles: env.snapshotFiles,
-      beforeFileWrite: env.beforeFileWrite,
+      // worktree 里的改动不在父工作区的检查点范围里：不接父会话这一轮的快照与改前备份
+      ...(worktree ? {} : { snapshotFiles: env.snapshotFiles, beforeFileWrite: env.beforeFileWrite }),
+      ...(env.hooks ? { hooks: env.hooks() } : {}),
     };
+    if (!worktree) followParentSandbox(ctx, sandbox);
+    wireApprovals(ctx, env.parent, label);
 
-    // coder 子 agent 继承父会话的全权档：父会话在 bypass 时子 agent 也 bypass（它们共用 env.sandbox，
-    // 沙箱此刻就是 bypass——整机 + 跳过密钥守卫；判定层也得 bypass 才不会被卡片 / 规则挡住，而子 agent 身边没有人能点卡）。
-    const parentMode = env.parentMode?.() ?? "auto";
+    // coder 子 agent 继承父会话的全权档：父会话在 bypass 时子 agent 也 bypass（沙箱此刻就是 bypass——整机 + 跳过密钥守卫；
+    // 判定层也得 bypass 才不会被卡片 / 规则挡住）。
     const permissionMode: PermissionMode =
-      tier === "research"
-        ? "read-only"
-        : req.permissionMode === "read-only"
-          ? "read-only"
-          : parentMode === "bypass"
-            ? "bypass"
-            : "auto";
+      tier === "research" ? "read-only" : req.permissionMode === "read-only" ? "read-only" : write.mode === "bypass" ? "bypass" : "auto";
     const state = new AgentState({
       adapter,
       system: subSystemPrompt({
-        root: env.sandbox.root,
+        root: sandbox.root,
         platform: process.platform,
         tier,
         toolNames: tools.map((t) => t.def.name),
-        fullAccess: env.sandbox.access !== "workspace",
+        fullAccess: sandbox.access !== "workspace",
         schema: Boolean(req.schema),
         extra: req.system,
         inherited: env.projectInstructions?.(),
         profile,
+        ...(def ? { custom: { name: def.name, prompt: def.prompt } } : {}),
+        ...(worktree ? { isolation: { path: worktree.path, branch: worktree.branch, base: worktree.base } } : {}),
       }),
       tools: tools.map((t) => t.def),
-      budget: {
-        maxOutputTokens: Math.min(adapter.capabilities.maxOutputTokens, SUB_MAX_OUTPUT),
-        thinking: target.thinking,
-      },
+      budget: { maxOutputTokens: Math.min(adapter.capabilities.maxOutputTokens, SUB_MAX_OUTPUT), thinking: target.thinking },
       ctx,
       toolMap,
       permissionMode,
       // P2（#18）：父会话运行中切只读/计划，已派出的 coder 下一次工具调用就按只读判（只收紧）。
       modeCeiling: env.parentMode,
-      // The parent's deny/ask rules apply to the child too (ask degrades to
-      // deny — no human is attached to a child).
+      // 父会话的 deny/ask 规则对子 agent 同样生效；ask 在父会话有人在场时经它弹卡，否则按拒绝
       permissionRules: env.permissionRules?.(),
-      // This helper cannot write durable memory and intentionally has no
-      // Remember/MemoryAudit tools. Do not run the main-agent lifecycle gate.
+      // This helper cannot write durable memory and intentionally has no Remember/MemoryAudit tools.
       memoryAuditRequired: false,
       browser: env.parentBrowser?.(),
       profile,
     });
     ctx.completeVerificationAudit = (decision, reason) => state.completeVerificationAudit(decision, reason);
-    // O8：子 agent 的用量记进父会话的账本
     state.usageSink = env.usageSink;
     state.usageTask = req.workflowId ? "workflow" : "subagent";
-    state.addUserMessage(req.prompt);
+    return { id, label, tier, type: def?.name ?? tier, notes, target, profile, adapter, state, ctx, holder, schema: req.schema, fork: false, worktree, runs: 0 };
+  }
+
+  // fork：父会话的 system、工具表（不能用的换成拒绝）、历史副本；同一个型号与缓存时长
+  function prepareFork(req: SubAgentRequest, id: string, label: string, parent: AgentState): Child {
+    const mode = parent.effectiveMode();
+    const permissionMode: PermissionMode = mode === "plan" ? "read-only" : mode;
+    const tier: SubAgentTier = permissionMode === "auto" || permissionMode === "bypass" ? "coder" : "research";
+    const adapter = adapterFactory({
+      provider: env.provider, apiKey: env.apiKey, model: env.model, baseUrl: env.baseUrl, fast: env.fast,
+      ...(env.cacheTtl ? { cacheTtl: env.cacheTtl } : {}),
+    });
+    const target: Target = { provider: env.provider, model: env.model, apiKey: env.apiKey, baseUrl: env.baseUrl, thinking: parent.budget.thinking ?? env.thinking };
+    const ctx: ToolContext = {
+      sandbox: parent.ctx.sandbox,
+      // 它看得见父会话读过的内容：已读状态一并带上（之后各记各的）
+      readFileState: new Map(parent.ctx.readFileState),
+      setTodos: () => {},
+      limits: env.limits,
+      agentSeesImages: adapter.capabilities.image,
+      agentSeesVideo: adapter.capabilities.video,
+      agentHearsAudio: adapter.capabilities.audio === true,
+      provider: env.provider,
+      ownerId: env.ownerId,
+      snapshotFiles: env.snapshotFiles,
+      beforeFileWrite: env.beforeFileWrite,
+      ...(parent.ctx.deferredTools ? { deferredTools: parent.ctx.deferredTools } : {}),
+      // 用户 hooks：fork 里的工具调用同样过 PreToolUse / PostToolUse，收尾报 SubagentStop
+      ...(env.hooks ? { hooks: env.hooks() } : {}),
+    };
+    followParentSandbox(ctx, parent.ctx.sandbox);
+    wireApprovals(ctx, env.parent, label);
+    const state = new AgentState({
+      adapter,
+      system: parent.system,
+      tools: [...parent.tools],
+      budget: { ...parent.budget },
+      ctx,
+      toolMap: forkToolMap(parent.toolMap),
+      permissionMode,
+      modeCeiling: env.parentMode,
+      permissionRules: parent.effectiveRules(),
+      memoryAuditRequired: false,
+      browser: parent.browser,
+      profile: parent.profile,
+    });
+    state.messages = forkMessages(parent, req.toolId);
+    state.loadedTools = new Set(parent.loadedTools);
+    ctx.completeVerificationAudit = (decision, reason) => state.completeVerificationAudit(decision, reason);
+    state.usageSink = env.usageSink;
+    state.usageTask = "subagent";
+    return { id, label, tier, type: "fork", notes: [], target, profile: parent.profile, adapter, state, ctx, holder: null, fork: true, runs: 0 };
+  }
+
+  // Early refusals still announce themselves on the event stream, so the UI shows a failed card instead of a
+  // tool row that silently errored.
+  function bail(id: string, label: string, req: SubAgentRequest, f: Failed, emit?: (ev: AgentEvent) => void, toolId = req.toolId, background = false): SubAgentResult {
+    const startedAt = Date.now();
+    emit?.({
+      e: "subagent_start", id, label, tier: f.tier, model: f.model, provider: f.provider, prompt: req.prompt.slice(0, PROMPT_EVENT_CAP),
+      phase: req.phase, workflowId: req.workflowId, toolId, startedAt, ...(background ? { background: true } : {}),
+    });
+    emit?.({ e: "subagent_end", id, ok: false, error: f.error, turns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, text: "", durationMs: 0 });
+    return {
+      ok: false, id, label, tier: f.tier, model: f.model, provider: f.provider, text: "", error: f.error,
+      turns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, editedFiles: [], trail: [], startedAt, durationMs: 0,
+    };
+  }
+
+  async function drive(child: Child, prompt: string, o: DriveOpts): Promise<SubAgentResult> {
+    const { state, holder, profile, target, id, label, tier } = child;
+    const emit = o.onEvent;
+    const startedAt = Date.now();
+    // Own abort controller: the caller's signal flows in; the runner also pulls it itself once SubmitResult has
+    // been accepted (no wasted turn).
+    const ctrl = new AbortController();
+    const onCallerAbort = () => ctrl.abort(o.signal?.reason);
+    if (o.signal?.aborted) ctrl.abort(o.signal.reason);
+    else o.signal?.addEventListener("abort", onCallerAbort, { once: true });
+    if (o.rec) {
+      o.rec.ctrl = ctrl;
+      o.rec.status = "running";
+      o.rec.startedAt = startedAt;
+      o.rec.closing = false;
+    }
+    child.ctx.signal = ctrl.signal;
+    let selfAborted = false;
+    if (holder) Object.assign(holder, { value: undefined, attempts: 0, exhausted: false, lastErrors: "" });
+    const firstRun = child.runs === 0;
+    child.runs++;
+
+    const in0 = state.totalInputTokens;
+    const out0 = state.totalOutputTokens;
+    if (child.fork && firstRun) {
+      state.addUserMessage(forkDirective(prompt));
+      const head = state.messages[state.messages.length - 1];
+      head.origin = "harness";
+      head.kind = FORK_KIND;
+    } else {
+      state.addUserMessage(prompt);
+    }
+    const head = state.messages[state.messages.length - 1];
+    // 还在准备时收到的追加消息
+    for (const m of o.rec?.inbox.splice(0) ?? []) state.queueFamily(m, AGENT_MESSAGE_KIND);
     const defaults = TIER_DEFAULTS[tier];
     state.setRunBudget({
-      maxTurns: clampInt(req.maxTurns, defaults.maxTurns, MAX_TURNS_CAP),
-      deadlineMs: clampInt(req.deadlineMs, defaults.deadlineMs, DEADLINE_CAP_MS),
+      maxTurns: clampInt(o.maxTurns, defaults.maxTurns, MAX_TURNS_CAP),
+      deadlineMs: clampInt(o.deadlineMs, defaults.deadlineMs, DEADLINE_CAP_MS),
     });
 
     emit?.({
       e: "subagent_start", id, label, tier, model: target.model, provider: target.provider,
-      prompt: req.prompt.slice(0, PROMPT_EVENT_CAP), phase: req.phase, workflowId: req.workflowId, toolId: req.toolId,
-      startedAt,
+      prompt: prompt.slice(0, PROMPT_EVENT_CAP), phase: o.phase, workflowId: o.workflowId, toolId: o.toolId, startedAt,
+      ...(o.rec?.background ? { background: true } : {}),
     });
 
     const trail: SubAgentTrailStep[] = [];
@@ -496,9 +651,8 @@ export function makeSubAgentRunner(
     let nudges = 0;
     let suspensions = 0;
     try {
-      // Outer loop = SubmitResult nudges: runAgent on the same state continues
-      // the conversation (the run budget carries across; a user message reset
-      // would zero it). O2: also the resume point after a rate-limit suspension.
+      // Outer loop = SubmitResult nudges: runAgent on the same state continues the conversation (the run budget
+      // carries across). O2: also the resume point after a rate-limit suspension.
       while (true) {
         for await (const ev of runAgent(state, ctrl.signal)) {
           switch (ev.e) {
@@ -524,9 +678,8 @@ export function makeSubAgentRunner(
               break;
             }
             case "error": {
-              // Our own post-submit abort is not an error — report the run as
-              // done instead of relaying "aborted".
-              if (selfAborted && holder.value !== undefined) {
+              // Our own post-submit abort is not an error — report the run as done instead of relaying "aborted".
+              if (selfAborted && holder?.value !== undefined) {
                 forward({ e: "done", stopReason: "end" });
                 continue;
               }
@@ -538,7 +691,7 @@ export function makeSubAgentRunner(
             }
           }
           forward(ev);
-          if (ev.e === "tool_end" && ev.name === "SubmitResult") {
+          if (ev.e === "tool_end" && ev.name === "SubmitResult" && holder) {
             if (ev.ok && holder.value !== undefined) {
               selfAborted = true;
               ctrl.abort();
@@ -555,7 +708,7 @@ export function makeSubAgentRunner(
           if (state.deadlineAt === null || Date.now() + wait < state.deadlineAt) {
             suspensions++;
             emit?.({ e: "subagent_suspended", id, reason: errorClass, waitMs: wait, attempt: suspensions });
-            req.onSuspend?.(errorClass);
+            o.onSuspend?.(errorClass);
             await pause(wait, ctrl.signal);
             if (!ctrl.signal.aborted) {
               state.runTurns = Math.max(0, state.runTurns - 1);
@@ -566,7 +719,9 @@ export function makeSubAgentRunner(
             }
           }
         }
-        if (!req.schema || holder.value !== undefined || error || ctrl.signal.aborted) break;
+        // 父 agent 追加的话在它最后一步之后才到（loop 收尾前已看过一遍队列）：还能接着跑就再跑一轮读它
+        if (!error && !ctrl.signal.aborted && !state.budgetExhausted && holder?.value === undefined && state.hasSteer()) continue;
+        if (!child.schema || holder?.value !== undefined || error || ctrl.signal.aborted) break;
         if (state.budgetExhausted) {
           error = "run budget exhausted before SubmitResult was called";
           break;
@@ -579,13 +734,20 @@ export function makeSubAgentRunner(
         state.appendUserBlocks([{ t: "text", text: SUBMIT_NUDGE }], false, { origin: "harness", kind: "submit-nudge" });
       }
     } finally {
-      req.signal?.removeEventListener("abort", onParentAbort);
+      o.signal?.removeEventListener("abort", onCallerAbort);
     }
+    // 从这里起不再读追加的话（resume 据此明说「它正在收尾」）；已经排着、没读到的如实交代
+    if (o.rec) o.rec.closing = true;
+    const unread = state.takeFamilyKind(AGENT_MESSAGE_KIND).length;
 
+    // 这一次运行从它收到的那条消息起（fork 的前面是父会话的历史；接着用的前面是上一次）；中途压缩把它摘掉了就看整段
+    let from = state.messages.indexOf(head);
+    if (from < 0) from = 0;
+    const mine = state.messages.slice(from);
     // The text deliverable = text of the last assistant message that has any.
     let text = "";
-    for (let i = state.messages.length - 1; i >= 0; i--) {
-      const m = state.messages[i];
+    for (let i = mine.length - 1; i >= 0; i--) {
+      const m = mine[i];
       if (m.role !== "assistant") continue;
       const t = m.content
         .filter((b) => b.t === "text")
@@ -598,15 +760,16 @@ export function makeSubAgentRunner(
       }
     }
 
-    // O3（K62）：交接单。预算用尽不再报成功（以前非 schema 的调用会以 ok:true 交回一段更早的中间文本）；每种收场给父 agent
-    // 一句下一步怎么办（以前一律「写具体点再试」，被限流时这话是误导）。
-    if (!error && state.budgetExhausted && !(req.schema && holder.value !== undefined)) {
+    const stopped = ctrl.signal.aborted && !selfAborted;
+    const cause = o.rec?.stoppedBy;
+    if (stopped && cause) error = CAUSE_TEXT[cause];
+    // O3（K62）：交接单。预算用尽不再报成功；每种收场给父 agent 一句下一步怎么办。
+    if (!error && state.budgetExhausted && !(child.schema && holder?.value !== undefined)) {
       error = `run budget exhausted before the task was finished (${state.runTurns} turns)`;
     }
-    const parentStopped = Boolean(req.signal?.aborted) && !selfAborted;
     const stopReason: SubAgentStop = !error
       ? "completed"
-      : parentStopped
+      : stopped
         ? "aborted"
         : SUSPEND_CLASSES.has(errorClass)
           ? "rate_limited"
@@ -614,49 +777,211 @@ export function makeSubAgentRunner(
             ? "provider_error"
             : state.budgetExhausted
               ? "budget_exhausted"
-              : req.schema && holder.value === undefined
+              : child.schema && holder?.value === undefined
                 ? "no_result"
                 : "provider_error";
     const nextStep = nextStepFor(stopReason, errorClass);
 
     let toolCalls = 0;
-    for (const m of state.messages) {
-      for (const b of m.content) if (b.t === "tool_call") toolCalls++;
-    }
+    for (const m of mine) for (const b of m.content) if (b.t === "tool_call") toolCalls++;
     if (trailOverflow) trail.push({ name: "…", arg: `${trailOverflow} more calls`, ok: true, summary: "" });
 
+    // worktree：没改动就删掉，有改动就保留（报告里给路径、分支、改动概要）
+    let worktree: SubAgentResult["worktree"];
+    if (child.worktree) {
+      const out = await finishWorktree(child.worktree, { touched: [...state.editedFiles, ...state.createdFiles] });
+      worktree = { path: child.worktree.path, branch: child.worktree.branch, kept: out.kept, summary: out.summary };
+    }
+
+    const notes = [
+      ...(firstRun ? child.notes : []),
+      ...(unread ? [`${unread} message${unread === 1 ? "" : "s"} you sent it arrived after it stopped reading and ${unread === 1 ? "was" : "were"} not read; send ${unread === 1 ? "it" : "them"} again with Agent(id, prompt) if still relevant.`] : []),
+    ];
     const result: SubAgentResult = {
       ok: !error,
       id,
       label,
       tier,
+      type: child.type,
       model: target.model,
       provider: target.provider,
       text,
-      result: holder.value,
+      result: holder?.value,
       error: error || undefined,
       ...(error && errorClass ? { errorClass } : {}),
       stopReason,
       ...(nextStep ? { nextStep } : {}),
       turns: state.runTurns,
       toolCalls,
-      inputTokens: state.totalInputTokens,
-      outputTokens: state.totalOutputTokens,
+      inputTokens: state.totalInputTokens - in0,
+      outputTokens: state.totalOutputTokens - out0,
       editedFiles: [...new Set([...state.editedFiles, ...state.createdFiles])],
       trail,
       startedAt,
       durationMs: Date.now() - startedAt,
       // K9（X55）：子 agent 读过网页 / 浏览器内容，它交回的报告就带着外部内容——随结果交给父会话
       ...(state.externalContentSeen ? { externalContent: true } : {}),
+      ...(notes.length ? { notes } : {}),
+      ...(worktree ? { worktree } : {}),
+      ...(o.rec ? { resumable: true } : {}),
     };
     emit?.({
       e: "subagent_end", id, ok: result.ok, error: result.error, turns: result.turns, toolCalls,
       inputTokens: result.inputTokens, outputTokens: result.outputTokens,
-      text: text.slice(0, EVENT_TEXT_CAP), result: holder.value, durationMs: result.durationMs,
+      text: text.slice(0, EVENT_TEXT_CAP), result: holder?.value, durationMs: result.durationMs,
       // 子 agent 面板：改过哪些文件、没做完的原因（历史走 tool_result.meta.subagent 的同名字段）
       ...(result.editedFiles.length ? { editedFiles: result.editedFiles } : {}),
       ...(stopReason !== "completed" ? { stopReason } : {}),
     });
     return result;
+  }
+
+  const labelOf = (req: SubAgentRequest) => (req.label?.trim() || firstLine(req.prompt) || "sub-agent").slice(0, 80);
+  const newRecord = (id: string, label: string, req: SubAgentRequest, background: boolean): AgentRecord => ({
+    id, owner, label, type: req.context === "fork" ? "fork" : req.type?.trim() || (req.tier === "coder" ? "coder" : "research"),
+    tier: req.tier === "coder" ? "coder" : "research", background, status: "running", startedAt: Date.now(), runs: 0,
+    ctrl: null, done: null, inbox: [],
+  });
+  // 后台子 agent 的实况事件：送到父会话此刻挂着的事件口（父会话这一轮跑着才有；收工之后的实况不发，结局随卡片记录更新）
+  const liveEmit = (fallback?: (ev: AgentEvent) => void) => (env.parent ? (ev: AgentEvent) => env.parent!()?.ctx.emit?.(ev) : fallback);
+
+  async function run(req: SubAgentRequest): Promise<SubAgentResult> {
+    const id = req.id ?? newId();
+    const label = labelOf(req);
+    // Agent 工具起的记进台账（可以接着用）；工作流里的 agent() 不记
+    const rec = req.workflowId ? undefined : newRecord(id, label, req, false);
+    if (rec) registerAgent(rec);
+    const prepared = await prepare(req, id, label);
+    if ("error" in prepared) {
+      if (rec) dropAgent(owner, id);
+      return bail(id, label, req, prepared, req.onEvent);
+    }
+    if (rec) {
+      rec.child = prepared;
+      rec.type = prepared.type;
+      rec.tier = prepared.tier;
+    }
+    const r = await drive(prepared, req.prompt, {
+      signal: req.signal, onEvent: req.onEvent, toolId: req.toolId, phase: req.phase, workflowId: req.workflowId, rec,
+      maxTurns: req.maxTurns, deadlineMs: req.deadlineMs, onSuspend: req.onSuspend,
+    });
+    if (rec) settleAgent(rec, r);
+    return r;
+  }
+
+  // 后台跑：先登记、立刻返回；准备（选型、建 worktree）与运行都在后面
+  function background(rec: AgentRecord, req: SubAgentRequest, work: (signal: AbortSignal, emit?: (ev: AgentEvent) => void) => Promise<SubAgentResult>): SubAgentStarted {
+    const outer = new AbortController();
+    rec.ctrl = outer;
+    rec.status = "running";
+    rec.background = true;
+    rec.stoppedBy = undefined;
+    rec.closing = false;
+    const emit = liveEmit(req.onEvent);
+    const fail = (e: unknown): SubAgentResult => ({
+      ok: false, id: rec.id, label: rec.label, tier: rec.tier, model: env.model, provider: env.provider, text: "",
+      error: `sub-agent threw: ${(e as Error)?.message ?? String(e)}`, stopReason: "provider_error",
+      turns: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, editedFiles: [], trail: [], startedAt: rec.startedAt, durationMs: 0,
+    });
+    rec.done = work(outer.signal, emit)
+      .catch(fail)
+      .then((r) => {
+        const cause = rec.stoppedBy;
+        settleAgent(rec, r);
+        try {
+          env.onBackgroundEnd?.({ id: rec.id, toolId: req.toolId, prompt: req.prompt, result: r, ...(cause ? { cause } : {}), schema: Boolean(req.schema) });
+        } catch (e) {
+          console.error(`[subagent] background end hook: ${(e as Error).message}`);
+        }
+        return r;
+      });
+    return { id: rec.id, label: rec.label };
+  }
+
+  const control: SubAgentControl = {
+    start(req) {
+      if (runningBackground(owner) >= MAX_BACKGROUND) {
+        return { error: `${MAX_BACKGROUND} background sub-agents are already running in this session. Wait for one to finish (its report arrives as a notification) or stop one with Agent(action:"stop", id).` };
+      }
+      const id = newId();
+      const label = labelOf(req);
+      const rec = newRecord(id, label, req, true);
+      registerAgent(rec);
+      return background(rec, req, async (signal, emit) => {
+        const prepared = await prepare(req, id, label);
+        if ("error" in prepared) {
+          dropAgent(owner, id);
+          return bail(id, label, req, prepared, emit, req.toolId, true);
+        }
+        rec.child = prepared;
+        rec.type = prepared.type;
+        rec.tier = prepared.tier;
+        return drive(prepared, req.prompt, { signal, onEvent: emit, toolId: req.toolId, rec, maxTurns: req.maxTurns, deadlineMs: req.deadlineMs });
+      });
+    },
+
+    resume(id, prompt, opts) {
+      const rec = getAgent(owner, id);
+      if (!rec) {
+        return { error: `No sub-agent "${id}" in this session. Contexts of the ${MAX_KEPT} most recent sub-agents are kept in memory and are lost when the server restarts — start a new one with the full task.` };
+      }
+      if (rec.status === "running") {
+        if (rec.closing) {
+          return { error: `Sub-agent ${rec.id} is finishing up and no longer reads messages; its report is on the way. Send this again with Agent(id, prompt) after it arrives.` };
+        }
+        const child = rec.child as Child | undefined;
+        if (child) child.state.queueFamily(agentMessage(prompt), AGENT_MESSAGE_KIND);
+        else rec.inbox.push(agentMessage(prompt));
+        return { queued: `Sent to ${rec.id}, which is still running; it reads the message at its next step.` };
+      }
+      const child = rec.child as Child | undefined;
+      if (!child) return { error: `The context of sub-agent "${rec.id}" is no longer available; start a new one with the full task.` };
+      const req: SubAgentRequest = { prompt, toolId: opts.toolId, onEvent: opts.onEvent };
+      const go = async (signal: AbortSignal | undefined, emit?: (ev: AgentEvent) => void): Promise<SubAgentResult> => {
+        if (child.worktree) {
+          const wt = await reopenWorktree(child.worktree, env.ownerId);
+          if ("error" in wt) return bail(rec.id, rec.label, req, { error: `its worktree could not be recreated: ${wt.error}`, model: child.target.model, provider: child.target.provider, tier: child.tier }, emit, opts.toolId, rec.background);
+          child.worktree = wt;
+        }
+        return drive(child, prompt, { signal, onEvent: emit, toolId: opts.toolId, rec });
+      };
+      if (opts.background) {
+        if (runningBackground(owner) >= MAX_BACKGROUND) {
+          return { error: `${MAX_BACKGROUND} background sub-agents are already running in this session; wait for one or stop one first.` };
+        }
+        return background(rec, req, go);
+      }
+      rec.status = "running";
+      rec.background = false;
+      rec.stoppedBy = undefined;
+      rec.closing = false;
+      return go(opts.signal, opts.onEvent).then((r) => {
+        settleAgent(rec, r);
+        return r;
+      });
+    },
+
+    list() {
+      const all = listAgents(owner);
+      if (!all.length) return "No sub-agents in this session yet.";
+      return `${all.map((r) => describeAgent(r)).join("\n")}\nAgent(id, prompt) continues one in its own context; Agent(action:"stop", id) stops a running one.`;
+    },
+
+    stop(id) {
+      const rec = getAgent(owner, id);
+      if (!rec) return { ok: false, message: `No sub-agent "${id}" in this session.` };
+      if (!stopAgent(rec, "model")) return { ok: false, message: `Sub-agent ${rec.id} is not running (${rec.status}).` };
+      return { ok: true, message: `Stopping ${rec.id} (${rec.label}); it ends at its next step.${rec.background ? " No notification follows for it." : ""}` };
+    },
   };
+
+  return { run, control };
+}
+
+// 只要前台运行的地方（测试、旧调用方）：同一个 host 的 run
+export function makeSubAgentRunner(
+  env: SubAgentEnv,
+  adapterFactory: (cfg: AdapterConfig) => ProviderAdapter = createAdapter,
+): (req: SubAgentRequest) => Promise<SubAgentResult> {
+  return makeSubAgentHost(env, adapterFactory).run;
 }

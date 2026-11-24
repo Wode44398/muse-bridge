@@ -47,7 +47,14 @@ export const agyApi = {
   uninstallPlugin: (name) => api.post('/api/agy/plugins/uninstall', { name }),
 
   listProjects: () => api.get('/api/agy/projects'),
+  setProjectOrder: (paths) => api.post('/api/agy/project/order', { paths }),
   createProject: (dirPath, name = '') => api.post('/api/agy/project/create', { path: dirPath, ...(name ? { name } : {}) }),
+  pinProject: ({ id = '', path = '', pinned = true } = {}) =>
+    api.post('/api/agy/project/pin', { ...(id ? { id } : {}), ...(path ? { path } : {}), pinned: !!pinned }),
+  renameProject: ({ id = '', path = '', name = '' } = {}) =>
+    api.post('/api/agy/project/rename', { ...(id ? { id } : {}), ...(path ? { path } : {}), name: String(name || '') }),
+  deleteProject: ({ id = '', path = '' } = {}) =>
+    api.post('/api/agy/project/delete', { ...(id ? { id } : {}), ...(path ? { path } : {}) }),
 
   listSessions: ({ cwd = '', projectId = '', q = '', includeHidden = false, refresh = false } = {}) => {
     const qs = new URLSearchParams();
@@ -61,12 +68,15 @@ export const agyApi = {
   },
   getSession: (id, cwd = '') => api.get('/api/agy/session/' + encodeURIComponent(id) + (cwd ? '?cwd=' + encodeURIComponent(cwd) : '')),
   hideSession: (id) => api.post('/api/agy/session/delete', { id }),
+  hideSessions: (ids) => api.post('/api/agy/sessions/hide', { ids }),
   restoreSession: (id) => api.post('/api/agy/session/restore', { id }),
   restoreAllSessions: () => api.post('/api/agy/sessions/restore-all', {}),
   renameSession: (id, title) => api.post('/api/agy/session/rename', { id, title }),
   favoriteSession: (id, favorite) => api.post('/api/agy/session/favorite', { id, favorite: !!favorite }),
   // 彻底删除（不可恢复）；hideSession 那条是可恢复的隐藏
   purgeSession: (id) => api.post('/api/agy/session/purge', { id }),
+  quoteSession: ({ id, title = '', cwd = '' } = {}) =>
+    api.post('/api/agy/session/quote', { id, ...(title ? { title } : {}), ...(cwd ? { cwd } : {}) }),
   searchContent: (q, { limit = 20, includeHidden = false } = {}) => {
     const qs = new URLSearchParams({ q, limit: String(limit) });
     if (includeHidden) qs.set('includeHidden', '1');

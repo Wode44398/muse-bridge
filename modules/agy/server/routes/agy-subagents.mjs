@@ -23,7 +23,7 @@ export function registerAgySubagentRoutes(router, { agyCtx, parseJsonBody, sendJ
     const client = acpFor(ctx, sid);
     const tree = readSubagentTree(client.dataDir, sid);
     if (tree.hasActive || tree.hasAliveNonImage) {
-      armSubagentMonitor(ctx, client, sid);
+      armSubagentMonitor(ctx, client, sid, { pollNow: tree.waitingAgents?.length > 0 });
     }
     sendJson(res, 200, {
       ...tree,

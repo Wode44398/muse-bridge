@@ -7,7 +7,7 @@
 // Claude 订阅号池的账号与用量由前端直接打 /api/admin/claude-accounts(+/usage)。
 import { listProviders, HOST_OWNER } from '../claude-providers.mjs';
 import { modelServices } from '../model-services.mjs';
-import { listHubServices, vertexView, hubFlag, migratedOf, HUB_PLUGIN } from './registry.mjs';
+import { listHubServices, vertexView, hubFlag, hubPrefs, migratedOf, HUB_PLUGIN } from './registry.mjs';
 import { studioList, studioBuiltins, fromStudioKind } from './studio-link.mjs';
 
 let dimensioReader = null;
@@ -21,6 +21,16 @@ let dimensioExporter = null;
  */
 export function setDimensioProviderExporter(fn) { dimensioExporter = fn; }
 export function exportDimensioProvider(id) { return dimensioExporter ? dimensioExporter(id) : null; }
+
+let codexHubProbe = null;
+/**
+ * codex 扩展启动时注入：() => boolean——它这一侧能接模型中心的模型（hub home 起得来、会读 modelServices('codex')）。
+ * 没注入 = false：前端不给「Codex」这个去向，免得勾了却哪儿都不出现。
+ */
+export function setCodexHubProbe(fn) { codexHubProbe = typeof fn === 'function' ? fn : null; }
+function codexHub() {
+  try { return codexHubProbe ? codexHubProbe() === true : false; } catch (e) { console.error('[model-hub] codex 去向读不出来：', e?.message || e); return false; }
+}
 
 const host = (u) => { try { return new URL(u).host; } catch { return ''; } };
 const count = (v) => (Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
@@ -78,6 +88,10 @@ export function hubOverview() {
     claudeGemini: true,
     // dimensio 自带适配的厂商已经交给模型中心（它们是普通的模型中心服务了）：前端不再单列「dimensio 内置厂商」
     dimensioNative: hubFlag('dimensioNative'),
+    // 用户能改的开关（registry HUB_PREFS）：agentMediaConfig = 允许 AI 配置媒体接口
+    prefs: hubPrefs(),
+    // codex 这一侧接得上模型中心：前端据此给文本模型多一个「Codex」去向
+    codexHub: codexHub(),
     vertex: vertexView(),
     services: listHubServices(),
     // 已经并进模型中心的 Claude 服务不再单列（原服务藏在菜单外、老会话照常能跑）

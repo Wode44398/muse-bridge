@@ -37,7 +37,7 @@
   const autoBlocked = $derived(tools.some((t) => t.denied === 'classifier' || t.denied === 'auto'));
   // 工具结果已回但后台任务（后台 Bash）仍在跑 → 用任务状态（官方 U）
   const U = $derived(!anyRunning && task ? task.status : undefined);
-  const H = $derived(!!live && (anyRunning || taskRunning(U)));
+  const H = $derived((!!live && anyRunning) || taskRunning(U));   // 后台任务态不受本轮结束影响（同 WorkflowCard）
   // 官方 Wh(…, 650)：运行态切换稳定 650ms 后才落到显示（快工具不闪）；首帧取当前值
   let V = $state(untrack(() => H));
   $effect(() => {

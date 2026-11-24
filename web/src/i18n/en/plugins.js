@@ -215,6 +215,9 @@ export default {
   '拦截与改写 Claude 的每一步（钩子、审批策略、发出的消息、每轮参数）': 'Intercept and rewrite Claude’s every step (hooks, approval policy, outgoing messages, per-turn options)',
   '往 bridge 的界面里加卡片、菜单项、命令和工作台标签': 'Add cards, menu items, commands and workbench tabs to bridge’s interface',
   '提供外部登录方式': 'Provide an external sign-in method',
+  '查看 Claude 记忆目录的位置与篇数（不读内容）': 'See where Claude’s memory folder is and how many notes it has (without reading them)',
+  '以你的身份查看 bridge 里的会话、项目等（只读）': 'See your sessions, projects and the like in bridge, as you (read only)',
+  '把文件夹加成你的 Claude 项目（只加不删）': 'Add folders as your Claude projects (adds only, never removes)',
 
   // —— 服务端：子进程健康检查（plugins/process.mjs，tr()）——
   '检查没通过': 'Check failed',

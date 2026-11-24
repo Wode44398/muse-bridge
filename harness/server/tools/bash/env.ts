@@ -2,7 +2,7 @@
 import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { grantedSkillDirs } from "../../extensions.ts";
+import { registrySkillDirs } from "../../extensions.ts";
 import { isSensitiveEnvName } from "../../helper-proc.ts";
 import { tenantMode } from "../../tenant.ts";
 
@@ -46,7 +46,8 @@ function explicitChildEnvNames(): Set<string> {
 // 扩展前 harness 可能已在跑，注册表出现即生效，不吃启动时快照。S3 起只到各技能自己的
 // 目录：没勾给 dimensio 的技能与注册表（连接器令牌）都不在白名单里。
 const SANCTIONED_TOOL_DIRS = [path.resolve(import.meta.dirname, "..", "..", "..", "tools")];
-export const sanctionedToolDirs = (): string[] => [...SANCTIONED_TOOL_DIRS, ...grantedSkillDirs()];
+// 用户级技能根（~/.claude/skills 这类）不在这里：它们对 Bash 只读（policy.ts 按 userSkillReadRoots 另判）
+export const sanctionedToolDirs = (): string[] => [...SANCTIONED_TOOL_DIRS, ...registrySkillDirs()];
 
 function mirrorAgentGwCred(isolatedHome: string): void {
   // 租户实例不给：那是管理员的 kimi 数据插件凭据。

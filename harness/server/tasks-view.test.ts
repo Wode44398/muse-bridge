@@ -35,6 +35,22 @@ test("task status: the run record wins; interrupted / aborted runs read as stopp
   assert.equal(toolTaskStatus({ name: "Workflow", status: "fail", summary: "bad workflow meta" }), "failed");
 });
 
+test("background sub-agent: still running after its Agent call returned ok and the turn ended", async () => {
+  const { agentRunFromMeta } = await import("../web/src/lib/timeline-reducer.ts");
+  // 刚起时落盘的卡片记录（tools/agent.ts 的 launched）：工具行 ok、这一轮也收工了，卡片仍是「在跑」
+  const live = agentRunFromMeta({ id: "bg1", label: "survey", tier: "research", ok: true, status: "running", background: true, trail: [] });
+  assert.equal(live.status, "running");
+  assert.equal(live.background, true);
+  const tool = { name: "Agent", status: "ok", agent: live };
+  assert.equal(toolTaskStatus(tool), "running");
+  assert.equal(agentView(tool, { now: Date.now(), chatRunning: false }).status, "running");
+  // 服务端改写成最终结果之后照常是终态
+  const done = agentRunFromMeta({ id: "bg1", label: "survey", tier: "research", ok: true, background: true, trail: [] });
+  assert.equal(toolTaskStatus({ name: "Agent", status: "ok", agent: done }), "completed");
+  // 前台的照旧：工具行结束了还挂着 running = 被打断
+  assert.equal(agentView({ name: "Agent", status: "ok", agent: run("a", "running") }, { now: Date.now(), chatRunning: false }).status, "stopped");
+});
+
 test("titles fall back to the script's meta name / label / the prompt's first line", () => {
   assert.equal(workflowNameFromScript("export const meta = {\n  name: 'review-changes',\n  description: 'x' }"), "review-changes");
   assert.equal(workflowNameFromScript("log(1)"), "");

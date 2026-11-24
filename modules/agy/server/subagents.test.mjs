@@ -389,3 +389,70 @@ test('主会话后台命令（step_type=132, status=2）已被后续 PLANNER_RES
   stopSubagentMonitor('admin', sid);
   db.close();
 });
+
+test('Teamwork 深层子代理权限申请：完全放行（bypass）模式下自动接通并秒批，不弹审批卡也不超时', async () => {
+  const raw = await startChat({
+    cwd: projectDir,
+    agyMode: 'bypass',
+    message: '全自动跑 Teamwork 抓取 [TEAMWORK_SUB_PERM]',
+  });
+  const sid = parseSseFrames(raw).find((f) => f.type === 'done')?.sessionId;
+  assert.ok(sid);
+
+  // 监视器应检测到第 2 层 worker 的 steps.status=9，对其 session/resume 接通权限流并按主会话 bypass 自动允许
+  const detail = await waitFor(async () => {
+    const det = await jget(`/api/agy/session/${encodeURIComponent(sid)}`);
+    const allText = (det.body?.messages || []).filter((m) => m.role === 'assistant').map((m) => m.text).join('\n');
+    return allText.includes('子代理权限结果：allow') ? det.body : null;
+  });
+  assert.ok(detail, 'bypass 模式下子代理权限应被自动放行');
+
+  // 确认没有残留挂起的审批卡
+  const act = await jget(`/api/agy/active?session=${encodeURIComponent(sid)}`);
+  assert.equal(act.body?.pendingPermission || null, null);
+});
+
+test('Teamwork 深层子代理权限申请：非放行模式下透传到主对话屏幕与 active/overview，允许后子代理继续执行', async () => {
+  const raw = await startChat({
+    cwd: projectDir,
+    agyMode: 'default',
+    message: '逐项确认跑 Teamwork 抓取 [TEAMWORK_SUB_PERM]',
+  });
+  const sid = parseSseFrames(raw).find((f) => f.type === 'done')?.sessionId;
+  assert.ok(sid);
+
+  // 等待第 2 层 worker 的权限申请经 session/resume 透传到主会话的被动 gen
+  const activeWithPerm = await waitFor(async () => {
+    const r = await jget(`/api/agy/active?session=${encodeURIComponent(sid)}`);
+    return r.body?.pendingPermission ? r.body : null;
+  });
+  assert.equal(activeWithPerm.backgroundWake, true);
+  assert.equal(activeWithPerm.pendingPermission.sessionId, sid);
+  assert.equal(activeWithPerm.pendingPermission.subagent?.role, 'M1 Live Sync Worker');
+  assert.equal(activeWithPerm.pendingPermission.subagent?.depth, 2);
+  assert.equal(activeWithPerm.pendingPermission.toolCall?.name, 'run_command');
+  assert.equal(activeWithPerm.pendingPermissions.length, 1);
+
+  // /api/active 的 ext（供通知 / 桌面壳 / agent overview 消费）里也能看到这条来自子代理的待审批条目
+  const ov = await jget('/api/active');
+  const agyAgent = (ov.body?.ext || []).find((a) => a.agent === 'agy');
+  assert.ok(agyAgent?.asks?.some((a) => a.sessionId === sid && a.kind === 'permission' && a.question.includes('M1 Live Sync Worker')));
+
+  // 用户在主对话点击允许
+  const ans = await jpost('/api/agy/permission', {
+    requestId: activeWithPerm.pendingPermission.requestId,
+    optionId: 'allow',
+    outcome: 'selected',
+  });
+  assert.equal(ans.status, 200);
+  assert.equal(ans.body.ok, true);
+
+  // 子代理拿到允许结果后继续跑完并同步回主对话
+  const detail = await waitFor(async () => {
+    const det = await jget(`/api/agy/session/${encodeURIComponent(sid)}`);
+    if (det.body?.live) return null;
+    const allText = (det.body?.messages || []).filter((m) => m.role === 'assistant').map((m) => m.text).join('\n');
+    return allText.includes('子代理权限结果：allow') ? det.body : null;
+  });
+  assert.ok(detail);
+});

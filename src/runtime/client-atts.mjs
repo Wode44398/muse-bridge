@@ -1,5 +1,6 @@
 // 用户消息附件：从注入进 prompt 的「[用户上传了以下附件…]」清单里抽出附件，并换成前端能取图的形态。
 // 历史重开（routes/sessions.mjs）与直播插话（agents/claude.mjs 的 steer 事件）共用，两边气泡同形。
+import { statSync } from 'node:fs';
 import path from 'node:path';
 import { parseDeviceRefNote, basenameOf, parseDeviceRef } from './device-refs.mjs';
 
@@ -17,9 +18,10 @@ export function splitAttachments(text) {
   let m;
   while ((m = re.exec(text.slice(mi)))) {
     // 行尾可能带 claude.mjs 加的标注（「  ← 文件夹」「  ← 引用的对话」），不属于路径
+    const note = (/\s+←\s*(.*)$/.exec(m[1]) || [])[1] || '';
     const raw = m[1].replace(/\s+←.*$/, '').trim();
     // 用户电脑上的文件夹（只引用、没上传，runtime/device-refs.mjs）：路径是他电脑上的，名字不剥时间戳前缀
-    const dev = parseDeviceRefNote((/\s+←\s*(.*)$/.exec(m[1]) || [])[1]);
+    const dev = parseDeviceRefNote(note);
     if (dev) {
       const p = raw.replace(/^`(.*)`$/, '$1');   // 提示词里这条路径包着反引号
       attachments.push({ file: basenameOf(p), name: basenameOf(p), raw: p, kind: 'folder', device: { id: dev.deviceId, name: dev.deviceName } });
@@ -28,7 +30,9 @@ export function splitAttachments(text) {
     const file = raw.split(/[\\/]/).pop() || '';
     if (!file) continue;
     const q = parseQuoteFile(file);
-    attachments.push(q ? { file, name: q.title, raw, kind: 'chat', quoteId: q.id } : { file, name: file.replace(/^\d+-/, ''), raw });
+    if (q) attachments.push({ file, name: q.title, raw, kind: 'chat', quoteId: q.id });
+    else if (/^文件夹/.test(note.trim())) attachments.push({ file, name: file, raw, kind: 'folder' });
+    else attachments.push({ file, name: file.replace(/^\d+-/, ''), raw });
   }
   return { text: clean, attachments };
 }
@@ -52,7 +56,10 @@ export function liveUserAtts(list, ctx) {
     const file = p.split(/[\\/]/).pop() || '';
     if (!file) continue;
     const q = parseQuoteFile(file);
-    out.push(toClientAtt(q ? { file, name: q.title, raw: p, kind: 'chat', quoteId: q.id } : { file, name: file.replace(/^\d+-/, ''), raw: p }, ctx));
+    if (q) { out.push(toClientAtt({ file, name: q.title, raw: p, kind: 'chat', quoteId: q.id }, ctx)); continue; }
+    let isDir = false;
+    try { isDir = statSync(p).isDirectory(); } catch {}
+    out.push(toClientAtt(isDir ? { file, name: file, raw: p, kind: 'folder' } : { file, name: file.replace(/^\d+-/, ''), raw: p }, ctx));
   }
   return out;
 }
@@ -60,6 +67,11 @@ export function toClientAtt(a, ctx) {
   if (a.device) return { name: a.name, kind: 'folder', device: a.device };   // 电脑上的路径不必回传，卡上只写名字与哪台电脑
   const raw = a.raw || '';
   const under = (dir) => dir && raw && path.resolve(raw).startsWith(path.resolve(dir) + path.sep);
+  if (a.kind === 'folder') {
+    return under(ctx.cwd)
+      ? { rel: path.relative(ctx.cwd, raw).split(path.sep).join('/'), name: a.name, kind: 'folder' }
+      : { name: a.name, kind: 'folder' };
+  }
   if (under(ctx.uploads)) return a.kind === 'chat' ? { file: a.file, name: a.name, kind: 'chat', quoteId: a.quoteId } : { file: a.file, name: a.name };
   if (under(ctx.cwd)) return { rel: path.relative(ctx.cwd, raw).split(path.sep).join('/'), name: a.file };
   return { name: a.name };

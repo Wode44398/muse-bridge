@@ -3,24 +3,37 @@
 import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
 import { applyPromptPatches, PROMPT_PATCHES, unknownPatches } from "./agent/prompt-patches.ts";
-import { defaultProfile, resolveProfile } from "./agent/profile.ts";
+import { defaultProfile, hardenedProfile, resolveProfile } from "./agent/profile.ts";
 import { systemPrompt } from "./agent/prompt.ts";
 
 const ENV = { root: "C:/ws", shell: "bash", platform: "win32", provider: "kimi", model: "k3.1-pro" };
-const withPatches = (patches: string[]) => ({ ...defaultProfile(), prompt: { variant: "default" as const, patches } });
+const withPatches = (patches: string[], base = hardenedProfile()) => ({ ...base, prompt: { variant: "default" as const, patches } });
 
 afterEach(() => {
   delete process.env.DIMENSIO_PROFILE_OVERRIDES;
 });
 
-test("补丁：没点名时提示词与不给档案逐字节相同", () => {
+test("补丁：没点名时提示词不变（不给档案 = lean 档案）", () => {
   const plain = systemPrompt(ENV);
   assert.equal(systemPrompt({ ...ENV, profile: defaultProfile() }), plain);
-  assert.equal(systemPrompt({ ...ENV, profile: withPatches([]) }), plain);
+  assert.equal(systemPrompt({ ...ENV, profile: withPatches([], defaultProfile()) }), plain);
+  const hardened = systemPrompt({ ...ENV, profile: hardenedProfile() });
+  assert.equal(systemPrompt({ ...ENV, profile: withPatches([]) }), hardened);
 });
 
-test("补丁：completion_audit 插在 How to work 之后、VerificationAudit 段之前，只插一次，其余不动", () => {
-  const plain = systemPrompt(ENV);
+test("补丁：lean 正文里 completion_audit 插在 Working 之后、Playbooks 之前，只插一次，其余不动", () => {
+  const plain = systemPrompt({ ...ENV, profile: defaultProfile() });
+  const patched = systemPrompt({ ...ENV, profile: withPatches(["completion_audit"], defaultProfile()) });
+  const text = PROMPT_PATCHES.completion_audit.text;
+  assert.equal(patched.split(text).length, 2);
+  assert.equal(patched.replace(`\n\n${text}`, ""), plain);
+  const at = patched.indexOf(text);
+  assert.ok(patched.lastIndexOf("## Working", at) >= 0);
+  assert.ok(patched.indexOf("## Playbooks", at) > at);
+});
+
+test("补丁：加固正文里 completion_audit 插在 How to work 之后、VerificationAudit 段之前，只插一次，其余不动", () => {
+  const plain = systemPrompt({ ...ENV, profile: hardenedProfile() });
   const patched = systemPrompt({ ...ENV, profile: withPatches(["completion_audit"]) });
   const text = PROMPT_PATCHES.completion_audit.text;
   assert.equal(patched.split(text).length, 2);
@@ -31,10 +44,14 @@ test("补丁：completion_audit 插在 How to work 之后、VerificationAudit �
   assert.ok(patched.indexOf("## Staying current (web)") > at);
 });
 
-test("补丁：所有补丁的挂点在默认提示词里都恰好出现一次；未知 id 与挂点缺失都抛", () => {
+test("补丁：所有补丁在两版正文里都有恰好出现一次的挂点；未知 id 与挂点缺失都抛", () => {
   const plain = systemPrompt(ENV);
-  for (const [id, p] of Object.entries(PROMPT_PATCHES)) {
-    assert.equal(plain.split(p.before).length, 2, `${id} 的挂点`);
+  for (const base of [systemPrompt({ ...ENV, profile: hardenedProfile() }), plain]) {
+    for (const [id, p] of Object.entries(PROMPT_PATCHES)) {
+      const anchor = p.before.find((b) => base.includes(b));
+      assert.ok(anchor, `${id} 的挂点`);
+      assert.equal(base.split(anchor).length, 2, `${id} 的挂点`);
+    }
   }
   assert.deepEqual(unknownPatches(["completion_audit", "nope"]), ["nope"]);
   assert.throws(() => applyPromptPatches(plain, ["nope"]), /未知的提示词补丁/);
@@ -60,7 +77,7 @@ test("评测覆盖：按家族与 * 叠加，只影响点名的家族；写错�
 });
 
 test("变体 kimi：换掉主体正文，保留 dimensio 的产品契约，拼在后面的段落照旧", () => {
-  const plain = systemPrompt({ ...ENV, bridge: true });
+  const plain = systemPrompt({ ...ENV, bridge: true, profile: hardenedProfile() });
   const profile = { ...defaultProfile(), prompt: { variant: "kimi" as const, patches: [] } };
   const kimi = systemPrompt({ ...ENV, bridge: true, profile });
   const words = (s: string) => s.split(/\s+/).filter(Boolean).length;

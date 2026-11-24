@@ -6,7 +6,7 @@
   // 结构：字标 · 主页（嵌入时）· 新对话 · 搜索 · 快照对话 · 项目（可折叠，会话缩进挂下面）· 正文命中（搜索时，K10）·
   //       加载更多 · 已隐藏的项目（唯一的回收入口）· 设置。
   // 删会话是两步：桌面点一下垃圾桶 → 变成「删除」再点一次；手机左滑露出「删除」再点。服务端删除不可撤销。
-  import { onMount, type Snippet } from "svelte";
+  import { onMount, untrack, type Snippet } from "svelte";
   import {
     app,
     openSettings,
@@ -216,8 +216,16 @@
   // ── 项目块长按（鼠标按住拖）排序（能力位 "project-order"；搜索过滤时不排——列表不全）────────────────────────
   // 置顶区、非置顶区各排各的（lib/reorder.ts）；插入线画在项目块的上下沿（伪元素，不占位——占位会把列表挤动、落点来回跳）。
   const canReorder = $derived(canReorderProjects() && !q);
+  let navEl: HTMLElement | undefined = $state();
   let listEl: HTMLDivElement | undefined = $state();
   let dropAt = $state<number | null>(null);
+  // 抽屉模式下拖工作空间：在抽屉内上下拖仍用于排序，拖出右缘自动收起抽屉露出身后的输入框以便直接引用
+  $effect(() => {
+    if (docked || !dnd.on || dnd.kind !== "project" || !navEl) return;
+    const x = dnd.x;
+    const r = untrack(() => navEl!.getBoundingClientRect());
+    if (x > r.right + 6) untrack(leave);
+  });
   const zoneItems = () => projects.map((p) => ({ id: p.id, pinned: Boolean(p.pinned) }));
   function headRects(): { top: number; bottom: number }[] {
     if (!listEl) return [];
@@ -513,7 +521,7 @@
   <SessionRow {s} {rows} />
 {/snippet}
 
-<nav class="sb" class:docked class:drawer={!docked} aria-label={t("项目与会话")}>
+<nav class="sb" bind:this={navEl} class:docked class:drawer={!docked} aria-label={t("项目与会话")}>
   <header class="band">
     <span class="brand"><ThemeMark size={19} /><Wordmark height={17} /></span>
     {#if docked}
@@ -618,7 +626,11 @@
           <div
             class="prow"
             oncontextmenu={(e) => projectCtx(project, e)}
-            use:dragSource={{ key: `p:${project.id}`, payload: () => projectPayload(project), disabled: !canReorder || renaming === pathKey(project.path) }}
+            use:dragSource={{
+              key: `p:${project.id}`,
+              payload: () => projectPayload(project),
+              disabled: (!canReorder && !(app.features.files && project.exists)) || renaming === pathKey(project.path),
+            }}
           >
             {#if renaming === pathKey(project.path)}
               <div class="prow-main renaming" data-no-drag>

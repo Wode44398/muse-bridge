@@ -12,6 +12,7 @@ import { dropSession, persistNow, sessionRecord } from "./session.ts";
 import { loadSessionResult, SESSION_RECORD_VERSION, type PersistedSession } from "./store.ts";
 import { say, scripted, useTool } from "./test-harness/scripted-adapter.ts";
 import { attachSession, send } from "./test-harness/session-fixture.ts";
+import { hardenedProfile } from "./agent/profile.ts";
 
 const roots: string[] = [];
 after(() => {
@@ -64,6 +65,17 @@ test("Q5 查得出：配对坏、压缩切断、末尾悬空（可愈合，只�
     codes(record([user(text("task")), user(text("[Earlier context summary]\nread a.ts")), user(result("gone")), assistant(text("x"))])),
     ["error:compaction-cut"],
     "摘要后面紧跟找不到调用的结果",
+  );
+  const restore: Msg = { role: "user", internal: true, content: [text("[Context restored after compaction] Working state as of the compaction.\n\n## Todo list\n[ ] x")] };
+  assert.deepEqual(
+    codes(record([user(text("task")), user(text("[Earlier context summary]\nread a.ts")), restore, user(result("gone")), assistant(text("x"))])),
+    ["error:compaction-cut"],
+    "摘要与孤儿结果之间隔着一条回填的工作现场：照样认成压缩切断",
+  );
+  assert.deepEqual(
+    codes(record([user(text("go")), restore, user(result("gone")), assistant(text("x"))])),
+    ["error:pairing"],
+    "回填前面不是摘要：普通的配对问题",
   );
   assert.deepEqual(codes(record([user(text("go")), assistant(toolCall("a"))])), ["info:dangling-tail"], "被中断的那一轮，恢复时会愈合");
   assert.deepEqual(
@@ -153,7 +165,8 @@ test("Q5 真会话：生产路径跑出来的转录（工具往返、召回、�
     else process.env.KNOWLEDGE_AUTO_SEMANTIC = saved;
   });
   const adapter = scripted(t).next(useTool("r1", "Read", { path: "src/api.ts" }), say("看完了"), say("好"));
-  const session = attachSession(adapter, root);
+  // 每轮自动召回是档案开关（lean 关、hardened 开，m 线）：这里要转录里有召回，用 hardened 档案
+  const session = attachSession(adapter, root, { profile: hardenedProfile() });
   await send(session, "看一下 src/api.ts 的 /health 路由");
   await send(session, "再确认一下");
   await persistNow(session);

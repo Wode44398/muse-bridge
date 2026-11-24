@@ -79,13 +79,14 @@ function setup() {
 
 const text = (r: Awaited<ReturnType<typeof rememberTool.run>>) => r.content.map((b) => (b.t === "text" ? b.text : "")).join("");
 
-test("verified 的证据只是自由文本：降为 observed + proposed，并说明原因", async () => {
+// 记忆放宽（m 线）：可信度不够只改可信度标签，不再把笔记压成 proposed（以前钉的是「降为 observed + proposed」）
+test("verified 的证据只是自由文本：可信度记成 observed，照常生效，并说明原因", async () => {
   const { ctx, note, stored } = setup();
   const r = await rememberTool.run(note({ evidence: ["./gradlew assembleDebug 在 JDK21 下 BUILD SUCCESSFUL"] }), ctx);
   assert.equal(r.ok, true, text(r));
-  assert.match(text(r), /saved as observed \+ proposed/);
+  assert.match(text(r), /confidence recorded as "observed"/);
   const m = stored("podstream 构建环境")!;
-  assert.equal(m.declaredStatus ?? m.status, "proposed");
+  assert.equal(m.status, "active");
   assert.equal(m.confidence, "observed");
 });
 
@@ -107,7 +108,9 @@ test("引用失败的调用、不存在的调用、记忆类工具：都不算�
   }
 });
 
-test("关于 harness 自身工具的结论（MiMo 那条）：就算引用了成功调用也只存成 proposed；用户确认过的除外", async () => {
+// 记忆放宽（m 线）：关于 harness 自身工具的结论不再在写入时特殊对待（以前一律存成 proposed）——它照常进索引，错的由离线
+// 整理拿原始对话核对、由用户在面板里驳回
+test("关于 harness 自身工具的结论（MiMo 那条）：写入时不再特殊对待，可信度照证据记", async () => {
   const { ctx, note, stored } = setup();
   const mimo = note({
     title: "harness 工具限制：Grep 不支持中文文件名",
@@ -117,18 +120,8 @@ test("关于 harness 自身工具的结论（MiMo 那条）：就算引用了成
   });
   const r = await rememberTool.run(mimo, ctx);
   assert.equal(r.ok, true, text(r));
-  assert.match(text(r), /conclusions about the harness's own tools/);
-  assert.equal(stored("harness 工具限制：Grep 不支持中文文件名")!.status, "proposed");
-
-  const confirmed = note({
-    title: "dimensio 默认用中文回答",
-    description: "回答语言。",
-    topic: "harness.language",
-    type: "user",
-    confidence: "user_confirmed",
-    content: "用户要求 dimensio 一律用中文回答。",
-  });
-  const r2 = await rememberTool.run(confirmed, ctx);
-  assert.equal(r2.ok, true, text(r2));
-  assert.equal(stored("dimensio 默认用中文回答")!.status, "active", "用户确认过的不受这条限制");
+  const m = stored("harness 工具限制：Grep 不支持中文文件名")!;
+  assert.equal(m.status, "active");
+  assert.equal(m.confidence, "verified");
+  assert.equal(m.origin, "model", "来源照旧记着是模型写的，离线整理据此复核");
 });

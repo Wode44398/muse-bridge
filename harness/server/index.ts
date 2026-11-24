@@ -79,6 +79,8 @@ import "./protocol.ts";
 import "./sse-backlog.ts";
 import { startLoopDelayMonitor } from "./loop-delay.ts";
 import { startJobNotify } from "./job-notify.ts";
+import { startWakeups } from "./wakeup.ts";
+import { sweepLeftoverWorktrees } from "./session/subagents.ts";
 import { startIdleCompact } from "./idle-compact.ts";
 import { startMemoryDream } from "./memory-dream.ts";
 import "./session-search.ts";
@@ -223,6 +225,8 @@ startLoopDelayMonitor();
 
 // 后台任务通知：后台命令跑完 / watch 命中而会话已收工时，开一轮把结果交给它（job-notify.ts）
 startJobNotify();
+// 会话内定时唤醒（ScheduleWakeup）：读回盘上待触发的、到点开轮或在两步之间注入（wakeup/scheduler.ts）
+startWakeups();
 // 空闲压缩：长对话空闲到 1 小时提示缓存快过期时先压一次（idle-compact.ts）
 startIdleCompact();
 // 离线记忆整理：所有会话都空闲一阵之后，按工作区把还没复核的记忆拿回写它时的原始对话核对（memory-dream.ts）。
@@ -273,9 +277,14 @@ const httpServer = app.listen(PORT, HOST, () => {
   // 测试里拉起的 harness 不做（各测试文件共用一个会话目录，别的进程被切断的轮不该在这儿续；要测就显式开 DIMENSIO_AUTO_RESUME）
   if (process.env.DIMENSIO_TEST_ISOLATION !== "1" || process.env.DIMENSIO_AUTO_RESUME === "1") {
     setTimeout(() => {
-      resumeInterruptedRuns().catch((e) => console.error(`[resume] ${(e as Error).message}`));
-      // 会话协作：重启前没送达的会话消息该唤醒的唤醒、发往 bridge 的接着发（续跑先起来，被续的会话照常排队）
-      startFamily();
+      // 子 agent 的 worktree：上一个进程没来得及收尾的先收掉（有改动的保留、写进所属会话），再续跑
+      void sweepLeftoverWorktrees()
+        .catch((e) => console.error(`[subagent] leftover worktrees: ${(e as Error).message}`))
+        .finally(() => {
+          resumeInterruptedRuns().catch((e) => console.error(`[resume] ${(e as Error).message}`));
+          // 会话协作：重启前没送达的会话消息该唤醒的唤醒、发往 bridge 的接着发（续跑先起来，被续的会话照常排队）
+          startFamily();
+        });
     }, 1500).unref();
   }
   // E1：MCP 连接器起来就开始连（新会话建基线时多半已经连好）

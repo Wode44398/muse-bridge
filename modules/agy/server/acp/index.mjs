@@ -3,7 +3,7 @@
 import path from 'node:path';
 import { DATA_ROOT } from '@bridge/core/runtime/paths.mjs';
 import { AcpClient } from './client.mjs';
-import { agySessionStore, agyDataDir, agyDesktopDataDir, AGY_DESKTOP_APP_DATA_DIR } from './binary.mjs';
+import { agySessionStore, agyDataDir, agyDesktopDataDir, AGY_DESKTOP_APP_DATA_DIR, defaultDaemonCwd } from './binary.mjs';
 import { isAgyTenant, tenantClient, peekTenantClient, tenantDataDir, shutdownTenants } from '../tenants.mjs';
 
 export { AcpClient } from './client.mjs';
@@ -30,8 +30,8 @@ function ensureDesktopClient() {
     desktopClient = new AcpClient({
       label: 'desktop',
       extraArgs: ['--app-data-dir', AGY_DESKTOP_APP_DATA_DIR],
-      // 占位目录必须叫 daemon-cwd（prepareReadOnlyDaemonDir 只认这个名字），且不能和主进程共用：shutdown 会解锁它
-      daemonCwd: path.join(DATA_ROOT, 'agy', 'desktop', 'daemon-cwd'),
+      // 占位目录落在系统临时目录下、远离仓库且末级仍叫 daemon-cwd（prepareReadOnlyDaemonDir 只认这个名字），与主进程分槽防解锁冲突
+      daemonCwd: defaultDaemonCwd('desktop', DATA_ROOT),
       logFile: path.join(DATA_ROOT, 'agy', 'acp-desktop.log'),
       dataDir: agyDesktopDataDir(),
     });

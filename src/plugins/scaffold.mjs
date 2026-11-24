@@ -22,6 +22,7 @@ export const EXAMPLES = Object.freeze({
   'qq-onebot': 'QQ 机器人（OneBot 11）：以授权账号跑 Claude（ctx.chat）、收外部推送（ctx.webhook）、托管外部程序（ctx.process）、分组表单 / 按群设置、状态块与动作按钮、控制面板',
   'power-tools': '改到核心：订阅事件、钩子拦命令、审批策略、消息改写、每轮参数、两个 agent 都能用的卡片工具、主页卡片、「/」命令、消息菜单、通知渠道',
   'hello-view': '声明式应用的示例：不写页面，index.mjs 里 ctx.ui.app 登记 view 与 actions，bridge 按积木画（统计、列表、表单、图表、标签页、按钮），数据存 ctx.store',
+  'workspace-demo': '工作区插槽的示例：把文件夹标成 Antigravity 与 Claude 共用（ctx.ui.workspaceDecor 的全部字段）、文件夹菜单项带开关的确认框与撤销（workspaceAction）、refreshDecor、记忆目录、两个 agent 的轮次事件',
 });
 // 应用模板（与 EXAMPLES 分开：不是拷目录，而是按 id / 标题内联生成干净的起点；'basic' = 上面的最小骨架）
 export const TEMPLATES = Object.freeze({

@@ -375,6 +375,25 @@ test('提示缓存时长（11-14）：自动值随服务视图下发；手动填
   assert.throws(() => R.setHubModelCache(X.id, 'nope', 5), /没有这个模型/);
 });
 
+test('备注名（11-23）：改了进服务视图与两边的发布规格；清空 / 填回 id 恢复目录原名；没这个模型 404', () => {
+  const orig = R.getHubService(X.id).models.find((m) => m.id === 'gpt-x').label || '';
+  let v = R.setHubModelLabel(X.id, 'gpt-x', '  我的 GPT\nX  ').service;
+  assert.equal(v.models.find((m) => m.id === 'gpt-x').label, '我的 GPT X', '去掉换行与首尾空白');
+  assert.equal(pubOf(X.id, 'claude').models.find((m) => m.id === 'gpt-x').label, '我的 GPT X');
+  assert.equal(pubOf(X.id, 'dimensio').models.find((m) => m.id === 'gpt-x').label, '我的 GPT X');
+  // 改去向不丢备注
+  R.assignHubModels(X.id, [{ id: 'gpt-x', agents: ['claude', 'dimensio'] }]);
+  assert.equal(R.getHubService(X.id).models.find((m) => m.id === 'gpt-x').label, '我的 GPT X');
+  for (const back of ['', 'gpt-x']) {
+    R.setHubModelLabel(X.id, 'gpt-x', '临时');
+    v = R.setHubModelLabel(X.id, 'gpt-x', back).service;
+    assert.equal(v.models.find((m) => m.id === 'gpt-x').label || '', orig === 'gpt-x' ? '' : orig);
+  }
+  assert.equal(R.setHubModelLabel(X.id, 'gpt-x', 'x'.repeat(200)).service.models.find((m) => m.id === 'gpt-x').label.length, 80);
+  R.setHubModelLabel(X.id, 'gpt-x', '');
+  assert.throws(() => R.setHubModelLabel(X.id, 'nope', 'a'), /没有这个模型/);
+});
+
 test('高级调用配置（11-15）：能力 / 思考写法 / 调用参数按模型覆盖，进两边的发布规格；兼容项与重试按服务；null 回到自动', () => {
   const claudeOf = () => P.findProvider('p-' + S.serviceHash(R.HUB_PLUGIN, X.id, 10), P.HOST_OWNER);
   const m0 = R.getHubService(X.id).models.find((m) => m.id === 'gpt-x');
@@ -434,6 +453,8 @@ test('高级调用配置（11-15）：能力 / 思考写法 / 调用参数按模
   // 服务级：兼容项与重试
   const s0 = R.getHubService(X.id);
   assert.equal(s0.compatAuto.slimBody, true, '非官方上游：默认精简请求');
+  assert.equal(s0.compatAuto.promptCaching, false, '非官方上游：Claude 外接默认不打缓存标记');
+  assert.equal(s0.compatAuto.agents.dimensio.promptCaching, true, 'dimensio 的自动值单独标出：Anthropic 协议默认打缓存标记');
   assert.deepEqual(s0.compat, {});
   R.updateHubV2(X.id, { compat: { slimBody: false, replayReasoning: true, maxTokensField: 'max_completion_tokens' }, retries: 3 });
   assert.deepEqual(pubOf(X.id, 'claude').compat, { slimBody: false, replayReasoning: true, maxTokensField: 'max_completion_tokens' });
@@ -472,7 +493,7 @@ test('assign：交叉校验（400 + 人话），一条不对整批不生效', ()
   bad([{ id: 'gpt-image-1', agents: ['claude'] }], /图像模型只能添加到 Media Studio/);
   bad([{ id: 'text-embedding-3-small', agents: ['dimensio'] }], /不能添加/);
   bad([{ id: 'suno-v4', agents: ['studio'] }], /做不了音乐/);
-  bad([{ id: 'gpt-x', agents: ['codex'] }], /不认识的去向/);
+  bad([{ id: 'gpt-x', agents: ['agy'] }], /不认识的去向/);
   bad([{ id: 'gpt-x', agents: 'claude' }], /去向要是数组/);
   bad([{ id: 'not-in-catalog', agents: ['dimensio'] }], /目录里没有/);
   bad({ id: 'gpt-x' }, /数组/);

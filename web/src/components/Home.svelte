@@ -197,7 +197,8 @@
   let fluxOk = $state(false);
   $effect(() => {
     if (!curWp.dyn) { fluxOk = false; return; }
-    if (ui.booted && !ui.themeTransition && !ui.morphing) fluxOk = true;   // 开机揭幕 / 换场的快照动画跑完再挂
+    // 开机入场时一开始就挂：门洞里看到的就是它，推镜也由它自己做（lib/boot/intro.js）；换场的快照动画跑完再挂
+    if ((ui.booted || ui.bootStage === 'gate') && !ui.themeTransition && !ui.morphing) fluxOk = true;
   });
   // 维护者的「Orange set」预设（Steam 3670899003，深蓝近黑流体）——colormode Poolside +
   // 流体参数，套在依赖引擎(3562672741)上才是要的那个背景。之前漏套预设、错用了引擎默认
@@ -400,7 +401,7 @@
     {#if fluxOk}
       <!-- 流光(flux)：预载结束(booted)才挂载，让流体在主页里「从黑浮现」开场完整可见，不在预载/转场覆盖层下被提前播掉。
            主题换场（明→暗）期间也先不挂：WASM 初始化压在揭幕动画上会整段掉帧；夜色铺满后再挂，流体照旧从黑浮现 -->
-      <iframe class="wp" bind:this={wpEl} src={BASE + 'wallpaper/drift.html?v=6'} title={t('背景')} scrolling="no" tabindex="-1" onload={onWpLoad}></iframe>
+      <iframe class="wp" bind:this={wpEl} src={BASE + 'wallpaper/drift.html?v=7'} title={t('背景')} scrolling="no" tabindex="-1" onload={onWpLoad}></iframe>
     {/if}
   {:else if spatialOn}
     <!-- 空间壁纸：深度视差 canvas 替代静态图（电脑指针 / 手机重力跟随），玻璃仍折射它 -->
@@ -509,6 +510,9 @@
     display: grid; grid-template-columns: repeat(2, auto); justify-content: center; gap: 22px; padding: 0 24px;   /* 行距同列距：方块簇四边等距才成一块 */
   }
   .grid.lift { top: calc(50% - min(110px, 13vh)); }
+  /* 开机入场：门洞透明（流光）时，门开着的那一段藏着，之后由 lib/boot/landing.js 落位。
+     门洞里是不透明的风景时不藏：入口在门后面照常画好，玻璃第一次渲染的开销落在开演前，不压在门出画那一帧 */
+  :global(html[data-boot='hide']) .grid { visibility: hidden; }
   /* 浮现入场：仅明亮主题(多洛米蒂 B)。玻璃框(.tile)带折射全程在、不淡入；只让框里的 logo(.ico)
      原地纯透明度 0→1 浮现——折射在 .tile 上、不被 opacity 破坏(全程可见)，logo 柔和浮现。轻微 stagger。
      暗主题(flux)logo 直接显示。触发见 Home $effect：明亮主页露出后才浮现，确保可见。 */

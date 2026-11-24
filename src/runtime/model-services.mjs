@@ -14,7 +14,9 @@
 //   protocol    'anthropic' | 'openai' | 'gemini'（gemini = Google 原生 generateContent；2026-11-13 起 Claude 的本机代理也会翻译它）
 //   baseUrl     端点根地址（http / https；插件是主机装的，本机地址也行）
 //   apiKey      可选；authStyle 'x-api-key' | 'bearer' | 'goog' | 'none'（缺省：有 key 按协议，没有 = none）；headers [{ name, value }]
-//   agents      ['claude', 'dimensio'] 的子集（缺省两个都给）
+//   agents      ['claude', 'dimensio', 'codex'] 的子集（缺省给 claude 与 dimensio；codex 只认 Responses 协议，只有带了 responsesUrl 才留得下）
+//   responsesUrl 可选：同一个服务的 OpenAI Responses 端点根地址（Codex 的 provider base_url 填它，Codex 自己在后面拼 /responses）。
+//               模型中心的服务都带（指向网关的 responses 段，网关按需转成 Chat Completions / Anthropic Messages）
 //   members     true = 多用户服务端的成员也能用（缺省只给服务器主机）
 //   models      [{ id, label?, agents?, contextWindow?, maxOutput?, vision?, thinking?, efforts?: [{ id, name, value }], effortDefault?, alwaysThinks?, cacheTtl? }]
 //               models[i].cacheTtl（2026-11-14）：提示缓存多久变冷（分钟；0 = 不缓存 / 不提示）。不给 = 各 agent 按 model-knowledge/cache-ttl.mjs 自己算
@@ -28,7 +30,9 @@
 //   models[i].params（2026-11-15）：调用参数 { maxTokens, temperature, topP, topK, thinking, thinkingBudget, stop, extraBody }，形状同 Claude 外接服务的模型级 params
 import { createHash } from 'node:crypto';
 
-export const MODEL_AGENTS = Object.freeze(['claude', 'dimensio']);
+export const MODEL_AGENTS = Object.freeze(['claude', 'dimensio', 'codex']);
+// 不点名时给的去向：插件与老数据只知道这两家，codex 要明确勾（它只走 Responses，见 responsesUrl）
+export const DEFAULT_MODEL_AGENTS = Object.freeze(['claude', 'dimensio']);
 const SID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const LOGO_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;   // 品牌标的键（web/src/lib/brandLogos.js 里的文件基名）
 const MODEL_ID_RE = /^[^\s\u0000-\u001f]{1,200}$/;
@@ -38,6 +42,9 @@ let rev = 0;
 const listeners = new Set();
 
 const bad = (msg) => Object.assign(new Error(msg), { status: 400 });
+const httpUrl = (v) => {
+  try { const u = new URL(String(v || '')); return u.protocol === 'http:' || u.protocol === 'https:' ? u.toString().replace(/\/+$/, '') : ''; } catch { return ''; }
+};
 const str = (v, max) => (typeof v === 'string' ? v.replace(/[\r\n\t]+/g, ' ').trim().slice(0, max) : '');
 
 /** 服务的稳定短哈希（各 agent 据此造自己的服务 id：同一个插件服务每次启动 id 不变，会话里记着的模型照样认得）。 */
@@ -60,7 +67,9 @@ function normalize(plugin, pluginName, spec) {
   const headers = (Array.isArray(s.headers) ? s.headers : [])
     .filter((h) => h && typeof h.name === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(h.name) && typeof h.value === 'string')
     .slice(0, 20).map((h) => ({ name: h.name, value: h.value.slice(0, 2000) }));
-  const agents = (Array.isArray(s.agents) ? MODEL_AGENTS.filter((a) => s.agents.includes(a)) : [...MODEL_AGENTS]);
+  const responsesUrl = httpUrl(s.responsesUrl);
+  const agents = (Array.isArray(s.agents) ? MODEL_AGENTS.filter((a) => s.agents.includes(a)) : [...DEFAULT_MODEL_AGENTS])
+    .filter((a) => a !== 'codex' || !!responsesUrl);
   const seen = new Set();
   const models = [];
   for (const m of Array.isArray(s.models) ? s.models : []) {
@@ -82,7 +91,7 @@ function normalize(plugin, pluginName, spec) {
   return {
     key: `${plugin}/${sid}`, plugin, pluginName: str(pluginName, 40) || plugin, sid,
     name: str(s.name, 40) || str(pluginName, 40) || plugin,
-    protocol, baseUrl, apiKey, authStyle, headers, agents, members: s.members === true,
+    protocol, baseUrl, ...(responsesUrl ? { responsesUrl } : {}), apiKey, authStyle, headers, agents, members: s.members === true,
     models, defaultModel,
     logo: typeof s.logo === 'string' && LOGO_RE.test(s.logo) ? s.logo : '',
     ...(native ? { native } : {}),

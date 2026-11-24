@@ -1,15 +1,15 @@
 <script>
-  // 模型列表上方：搜索 + 厂商筛选 + 「已添加 n」，再下面一行是列表头（三态全选、数量、上次识别 + 重新识别）。
-  // 宽屏一行排开工具，窄屏搜索独占一行；厂商胶囊横滑、两端渐隐。「已添加 n」是另一个维度的筛选：固定在最右、描边不填底，不混进厂商里。
+  // 模型列表上方：搜索 + 厂商筛选（下拉弹层，支持鼠轮竖滚与搜索厂商）+ 「已添加 n」，再下面一行是列表头（三态全选、数量、上次识别 + 重新识别）。
+  // 宽屏一行排开工具，窄屏搜索独占一行；「已添加 n」固定在最右、描边不填底，与厂商筛选分开。
   // nudge：连接改过、目录可能是旧的——「重新识别」垫一层底色提醒。
-  import BrandLogo from './BrandLogo.svelte';
-  import { G, svg, CHECK, ago, edgeFade } from './HsKit.js';
+  import HsVendorPicker from './HsVendorPicker.svelte';
+  import { G, svg, CHECK, ago } from './HsKit.js';
   import { DUR, EASE, reduced } from '../../lib/motion.js';
-  import { t, tc, tr } from '../../lib/i18n.js';
+  import { t, tc } from '../../lib/i18n.js';
 
   let {
     qIn = $bindable(''), searchEl = $bindable(null),
-    vendors = [], vf = '', onvendor,
+    vendors = [], vf = '', allN = 0, onvendor,
     onlyAdded = false, addedN = 0, onadded,
     total = 0, allState = 'none', selectableN = 0, onall,
     catAt = 0, now = Date.now(), detecting = false, canDetect = true, ondetect, nudge = false,
@@ -27,6 +27,8 @@
     if (e.key === 'Escape' && !e.isComposing && qIn) { e.preventDefault(); e.stopPropagation(); qIn = ''; }
   }
   const when = $derived(catAt ? ago(catAt, now) : '');
+  // 只有一家厂商且覆盖全部模型时，筛与不筛结果相同，隐藏厂商选择器避免占位
+  const showVendor = $derived(vendors.length > 1 || (vendors.length === 1 && allN > vendors[0].n) || !!vf);
 </script>
 
 <div class="tools" class:narrow>
@@ -39,18 +41,10 @@
     {/if}
   </label>
   <div class="frow">
-    <div class="vends" use:edgeFade role="group" aria-label={t('按模型厂筛选')}>
-      <button type="button" class="chip" class:on={!vf} aria-pressed={!vf} onclick={() => onvendor?.('')}>{t('全部')}</button>
-      {#each vendors as v (v.key)}
-        <button type="button" class="chip" class:on={vf === v.key} aria-pressed={vf === v.key} title={tr(v.name)}
-          onclick={() => onvendor?.(vf === v.key ? '' : v.key)}>
-          <BrandLogo plain size={14} logo={v.logo} name={v.name} />
-          <span class="cn">{tr(v.name)}</span>
-          <span class="cc">{v.n}</span>
-        </button>
-      {/each}
-    </div>
-    <button type="button" class="chip added" class:on={onlyAdded} aria-pressed={onlyAdded} disabled={!addedN && !onlyAdded} onclick={() => onadded?.(!onlyAdded)}>
+    {#if showVendor}
+      <HsVendorPicker {vendors} {vf} {allN} {onvendor} {narrow} />
+    {/if}
+    <button type="button" class="fbtn added" class:on={onlyAdded} aria-pressed={onlyAdded} disabled={!addedN && !onlyAdded} onclick={() => onadded?.(!onlyAdded)}>
       {t('已添加 {n}', { n: addedN })}
     </button>
   </div>
@@ -71,12 +65,12 @@
 </div>
 
 <style>
-  .tools { display: flex; align-items: center; gap: 10px; padding: 12px 0 8px; }
-  .tools.narrow { flex-direction: column; align-items: stretch; gap: 10px; padding: 12px 0 6px; }
-  .search { position: relative; flex: none; width: 240px; display: flex; align-items: center; height: 34px; border-radius: 10px; background: var(--st-field);
+  .tools { display: flex; align-items: center; gap: 8px; padding: 12px 0 8px; }
+  .tools.narrow { flex-direction: column; align-items: stretch; gap: 8px; padding: 12px 0 6px; }
+  .search { position: relative; flex: 1; min-width: 180px; display: flex; align-items: center; height: 34px; border-radius: 10px; background: var(--st-field);
     box-shadow: inset 0 0 0 1px var(--st-line); transition: box-shadow var(--mo-micro) var(--ea-fade); cursor: text; }
   .search:focus-within { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text) 50%, transparent); }
-  .narrow .search { width: auto; height: 44px; border-radius: 13px; background: var(--st-surface); box-shadow: none; }
+  .narrow .search { flex: none; min-width: 0; width: auto; height: 44px; border-radius: 13px; background: var(--st-surface); box-shadow: none; }
   .narrow .search:focus-within { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text) 40%, transparent); }
   .sic { flex: none; display: grid; place-items: center; width: 34px; color: var(--st-muted); }
   .sic :global(svg) { width: 16px; height: 16px; }
@@ -93,34 +87,26 @@
   .sx:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--text); }
   .narrow .sx { width: 44px; height: 44px; margin-right: 0; border-radius: 13px; }
 
-  /* 厂商胶囊在左（横滑），「已添加 n」固定在最右——宽窄两端同一个顺序 */
-  .frow { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
-  .vends { flex: 1; min-width: 0; display: flex; gap: 6px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; padding: 2px;
-    -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--fl, 0px), #000 calc(100% - var(--fr, 0px)), transparent);
-    mask-image: linear-gradient(to right, transparent, #000 var(--fl, 0px), #000 calc(100% - var(--fr, 0px)), transparent); }
-  .vends::-webkit-scrollbar { display: none; }
-  .chip { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border: 0; border-radius: 15px;
-    background: var(--st-seg); color: var(--st-text2); font: inherit; font-size: 12.5px; font-weight: 500; white-space: nowrap; cursor: pointer;
+  /* 筛选区：厂商下拉在左，「已添加 n」固定在最右——与搜索框同高同圆角 */
+  .frow { flex: none; display: flex; align-items: center; gap: 8px; }
+  .narrow .frow { flex: none; width: 100%; }
+  .fbtn { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border: 0; border-radius: 10px;
+    background: var(--st-seg); color: var(--st-text2); font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer;
     transition: background-color var(--mo-micro) var(--ea-fade), color var(--mo-micro) var(--ea-fade), transform var(--mo-tap) var(--ea-std), opacity var(--mo-micro) var(--ea-fade); }
-  @media (hover: hover) { .chip:hover:not(.on):not(:disabled) { background: color-mix(in srgb, var(--text) 11%, transparent); color: var(--text); } }
-  .chip:active:not(:disabled) { transform: scale(.96); }
-  .chip.on { background: var(--st-primary); color: var(--st-primary-ink); }
-  .chip:disabled { opacity: .4; cursor: default; }
-  .cn { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
-  .cc { font-variant-numeric: tabular-nums; opacity: .62; }
-  /* 「已添加 n」：描边、不填底——和灰底的厂商胶囊分开（它筛的是另一个维度）；选中才填 */
+  @media (hover: hover) { .fbtn:hover:not(.on):not(:disabled) { background: color-mix(in srgb, var(--text) 11%, transparent); color: var(--text); } }
+  .fbtn:active:not(:disabled) { transform: scale(.96); }
+  .fbtn.on { background: var(--st-primary); color: var(--st-primary-ink); }
+  .fbtn:disabled { opacity: .4; cursor: default; }
+  /* 「已添加 n」：描边、不填底——与厂商筛选区分维度；选中才填 */
   .added { font-variant-numeric: tabular-nums; background: transparent; box-shadow: inset 0 0 0 1px var(--st-line); }
   .added.on { background: var(--st-primary); box-shadow: none; }
-  .narrow .chip { height: 36px; padding: 0 14px; border-radius: 18px; font-size: 13.5px; background: var(--st-surface); }
+  .narrow .fbtn { height: 38px; padding: 0 14px; border-radius: 11px; font-size: 13.5px; }
   .narrow .added:not(.on) { background: transparent; }
-  /* 窄屏：墨色实心只留给上面的种类胶囊（上一级）和保存；这一级的选中用浅一档的底色，两级筛选分得出主次
-     （不加粗：字重一变胶囊宽度跟着变，横滑条里后面的会被挤一下） */
-  .narrow .chip.on { background: color-mix(in srgb, var(--text) 16%, transparent); color: var(--text); }
-  /* 焦点环放在各种底色 / 描边之后，别被它们的 box-shadow 盖掉 */
-  .chip:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--st-surface), 0 0 0 4px var(--text); }
-  .narrow .chip:focus-visible { box-shadow: 0 0 0 2px var(--pm-bg), 0 0 0 4px var(--text); }
-  /* 触屏：36 高的胶囊命中区上下各扩 4px（视觉不变；横向相邻胶囊之间本来就有间隔） */
-  @media (pointer: coarse) { .chip { position: relative; } .chip::after { content: ''; position: absolute; inset: -4px 0; } }
+  /* 窄屏：墨色实心只留给上面的种类胶囊（上一级）和保存；这一级的选中用浅一档底色区分主次 */
+  .narrow .fbtn.on { background: color-mix(in srgb, var(--text) 16%, transparent); color: var(--text); }
+  .fbtn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--st-surface), 0 0 0 4px var(--text); }
+  .narrow .fbtn:focus-visible { box-shadow: 0 0 0 2px var(--pm-bg), 0 0 0 4px var(--text); }
+  @media (pointer: coarse) { .fbtn { position: relative; } .fbtn::after { content: ''; position: absolute; inset: -3px 0; } }
 
   /* 左内距与列表行一致（宽 14、窄 16）：「全选」的勾选框和下面一列勾选框对齐 */
   .head { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 12px 0 14px; font-size: 12.5px; color: var(--st-muted); }
@@ -151,5 +137,5 @@
   .narrow .tbtn.hot { position: relative; isolation: isolate; background: transparent; }
   .narrow .tbtn.hot::before { content: ''; position: absolute; inset: 6px 0; z-index: -1; border-radius: 9px; background: var(--st-sel); }
   .tbtn:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--text); }
-  @media (prefers-reduced-motion: reduce) { .chip, .tbtn { transition: none; } .chip:active:not(:disabled), .tbtn:active:not(:disabled) { transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .fbtn, .tbtn { transition: none; } .fbtn:active:not(:disabled), .tbtn:active:not(:disabled) { transform: none; } }
 </style>

@@ -33,6 +33,7 @@ import { disabledTools } from "../tenant.ts";
 // 工作区协同：看用户界面、共享终端
 import { workspaceTool } from "./workspace.ts";
 import { terminalTool } from "./terminal.ts";
+import { scheduleWakeupTool } from "./schedulewakeup.ts";
 
 export const ALL_TOOLS: Tool[] = [
   readTool,
@@ -75,6 +76,7 @@ export const ALL_TOOLS: Tool[] = [
   widgetGuideTool,
   showWidgetTool,
   ...SESSION_TOOLS, // 会话协作（StartSession / SendMessage / ListSessions / ReadSession）
+  scheduleWakeupTool, // 会话内定时唤醒（只往后追加）
 ];
 
 function enabledTools(): Tool[] {

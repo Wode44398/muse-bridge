@@ -213,6 +213,28 @@ test('同族继承：按去掉版本号的族名找最近的内置卡', () => {
   assert.equal(pick('veo-3.2-fast-generate-001', 'video', 'vertex'), 'veo-3.1-fast-generate-001');
   assert.equal(pick('lyria-4', 'music', 'gemini'), 'lyria-3.5');
   assert.equal(pick('imagen-5.0-generate', 'image', 'vertex'), undefined, '族根对不上不硬套');
+  // 同版本的变体优先，但只限段集合是超集的：3-flash 不能因为同版本去跟 3-pro
+  assert.equal(pick('gemini-3-flash-image', 'image', 'vertex'), 'gemini-3.1-flash-image');
+  assert.equal(pick('gemini-2.5-flash-lite', 'image', 'vertex'), 'gemini-3.1-flash-lite-image');
+});
+
+test('同族继承：裸 gpt-image-2.6 / 2.5（含日期快照）跟同版本的 sunburst 卡（2.6 有 svg / gif、xhigh / max、构图规划），不再落到 gpt-image-2', () => {
+  const oa = P.createProvider({ dialect: 'openai', baseUrl: 'https://api.openai.com/v1', models: [] }, 'admin');
+  const orp = P.createProvider({ dialect: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', models: [] }, 'admin');
+  try {
+    const card = (p, id) => cardFor(P.getProvider(p.id, 'admin'), { id, kind: 'image', enabled: true, source: 'remote' });
+    for (const id of ['gpt-image-2.6', 'gpt-image-2.6-2026-12-01']) {
+      const c = card(oa, id);
+      assert.deepEqual([c.paramSource, c.inheritsFrom], ['family', 'gpt-image-2.6-sunburst'], id);
+      assert.deepEqual(values(spec(c.params, 'outputFormat')), ['png', 'jpeg', 'webp', 'gif', 'svg']);
+      assert.ok(['xhigh', 'max'].every((q) => values(spec(c.params, 'quality')).includes(q)));
+      assert.ok(spec(c.params, 'complexity'));
+      assert.equal(c.normalize({ size: 'auto', outputFormat: 'svg' }).outputFormat, 'svg');
+    }
+    assert.equal(card(oa, 'gpt-image-2.5').inheritsFrom, 'gpt-image-2.5-sunburst');
+    assert.equal(card(orp, 'openai/gpt-image-2.6').inheritsFrom, 'openai/gpt-image-2.6-sunburst');
+    assert.equal(card(oa, 'gpt-image-3').inheritsFrom, 'gpt-image-2', '别的版本照旧按相似度');
+  } finally { P.deleteProvider(oa.id, 'admin'); P.deleteProvider(orp.id, 'admin'); }
 });
 
 const gem = P.createProvider({ preset: 'gemini', dialect: 'gemini', name: 'Gemini API', baseUrl: 'https://generativelanguage.googleapis.com', apiKey: 'AIza-test-not-real',

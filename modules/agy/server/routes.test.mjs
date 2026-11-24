@@ -1,7 +1,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, realpathSync, rmSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -485,6 +485,14 @@ test('端到端对话流：图片块、文件编辑 diff、字符串 ID 权限�
   assert.equal(detail.sessionId, sessionId);
   assert.equal(detail.mode, 'plan');
   assert.equal(detail.messages.length, 2);
+  assert.equal(detail.messages[0].role, 'user');
+  assert.equal(detail.messages[0].images.length, 1, '重启后重开历史仍保留用户发送的图片');
+  assert.equal(detail.messages[0].images[0].name, 'input.png');
+  const histImgRes = await fetch(`${BASE}/api/agy/artifact?id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(detail.messages[0].images[0].path)}&token=${MASTER}`, {
+    headers: { connection: 'close' },
+  });
+  assert.equal(histImgRes.status, 200);
+  await histImgRes.arrayBuffer();
   assert.equal(detail.messages[1].tools.length, 2);
   assert.equal(detail.messages[1].tools[0].diffs[0].oldText, 'before\n');
   assert.equal(detail.messages[1].tools[1].approvalState, 'allowed');
@@ -717,4 +725,124 @@ test('边界与安全契约：artifact 路径围栏、防伪造幽灵会话与�
     delete process.env.AGY_APP_DATA_DIR;
     if (oldKey !== undefined) process.env.GEMINI_API_KEY = oldKey;
   }
+});
+
+test('工作空间置顶与删除路由：置顶排序、按路径置顶、删除同步清空默认项目', async () => {
+  const wsA = path.join(tmp, 'ws-menu-a');
+  const wsB = path.join(tmp, 'ws-menu-b');
+  mkdirSync(wsA, { recursive: true });
+  mkdirSync(wsB, { recursive: true });
+
+  const createA = await (await fetch(`${BASE}/api/agy/project/create`, {
+    method: 'POST', headers: ADMIN_HEADERS, body: JSON.stringify({ path: wsA }),
+  })).json();
+  assert.equal(createA.ok, true);
+  const idA = createA.project.id;
+
+  const createB = await (await fetch(`${BASE}/api/agy/project/create`, {
+    method: 'POST', headers: ADMIN_HEADERS, body: JSON.stringify({ path: wsB }),
+  })).json();
+  assert.equal(createB.ok, true);
+  const idB = createB.project.id;
+
+  // 设 A 为默认项目
+  const setDef = await (await fetch(`${BASE}/api/agy/settings`, {
+    method: 'POST', headers: ADMIN_HEADERS, body: JSON.stringify({ defaultProjectId: idA }),
+  })).json();
+  assert.equal(setDef.ok, true);
+  assert.equal(setDef.settings.defaultProjectId, idA);
+
+  // 置顶 A：排到列表第一位
+  const pinA = await (await fetch(`${BASE}/api/agy/project/pin`, {
+    method: 'POST', headers: ADMIN_HEADERS, body: JSON.stringify({ id: idA, pinned: true }),
+  })).json();
+  assert.equal(pinA.ok, true);
+  assert.equal(pinA.project.pinned, true);
+  assert.equal(pinA.projects[0].id, idA);
+
+  // 取消置顶 A
+  const unpinA = await (await fetch(`${BASE}/api/agy/project/pin`, {
+    method: 'POST', headers: ADMIN_HEADERS, body: JSON.stringify({ id: idA, pinned: false }),
+  })).json();
+  assert.equal(unpinA.ok, true);
+  assert.equal(unpinA.project.pinned, false);
+
+  // 删除 A：从列表移除，且默认项目自动清空
+  const delA = await (await fetch(`${BASE}/api/agy/project/delete`, {
+    method: 'POST', headers: ADMIN_HEADERS, body: JSON.stringify({ id: idA }),
+  })).json();
+  assert.equal(delA.ok, true);
+  assert.equal(delA.deleted, true);
+  assert.equal(delA.projects.some((p) => p.id === idA), false);
+
+  const curSet = await (await fetch(`${BASE}/api/agy/settings`, { headers: ADMIN_HEADERS })).json();
+  assert.equal(curSet.settings.defaultProjectId, '');
+
+  // 缺参数回 400
+  const badPin = await fetch(`${BASE}/api/agy/project/pin`, {
+    method: 'POST', headers: ADMIN_HEADERS, body: JSON.stringify({}),
+  });
+  assert.equal(badPin.status, 400);
+  await badPin.text();
+
+  const badDel = await fetch(`${BASE}/api/agy/project/delete`, {
+    method: 'POST', headers: ADMIN_HEADERS, body: JSON.stringify({}),
+  });
+  assert.equal(badDel.status, 400);
+  await badDel.text();
+
+  // 删除 B 清理现场
+  const delB = await (await fetch(`${BASE}/api/agy/project/delete`, {
+    method: 'POST', headers: ADMIN_HEADERS, body: JSON.stringify({ id: idB }),
+  })).json();
+  assert.equal(delB.ok, true);
+});
+
+test('POST /api/agy/sessions/hide 批量隐藏多条会话并支持缺参返回 400', async () => {
+  const bad = await fetch(`${BASE}/api/agy/sessions/hide`, {
+    method: 'POST', headers: ADMIN_HEADERS, body: JSON.stringify({ ids: [] }),
+  });
+  assert.equal(bad.status, 400);
+  await bad.text();
+
+  const res = await (await fetch(`${BASE}/api/agy/sessions/hide`, {
+    method: 'POST',
+    headers: ADMIN_HEADERS,
+    body: JSON.stringify({ ids: ['batch-h1', 'batch-h2', 'batch-h1'] }),
+  })).json();
+  assert.equal(res.ok, true);
+  assert.equal(res.hidden, 2);
+  assert.deepEqual(res.ids, ['batch-h1', 'batch-h2']);
+
+  // 恢复清理现场
+  const restore = await (await fetch(`${BASE}/api/agy/sessions/restore-all`, {
+    method: 'POST', headers: ADMIN_HEADERS, body: JSON.stringify({}),
+  })).json();
+  assert.equal(restore.ok, true);
+});
+
+test('附件：上传目录里的 PDF 按 agy 报的能力作为 resource 送入，上传目录并进新会话的 additionalDirectories', async () => {
+  const { foldAgyPath } = await import('./paths.mjs');
+  const uploadsDir = path.join(dataRoot, 'uploads');
+  mkdirSync(uploadsDir, { recursive: true });
+  const pdfPath = path.join(uploadsDir, '1795000000099-paper.pdf');
+  writeFileSync(pdfPath, '%PDF-1.4');
+  const before = JSON.parse(readFileSync(stateFile, 'utf8')).rpcLog.length;
+
+  const sse = await (await fetch(`${BASE}/api/chat`, {
+    method: 'POST',
+    headers: ADMIN_HEADERS,
+    body: JSON.stringify({ agent: 'agy', cwd: projectDir, attachments: [pdfPath], message: '读一下这篇' }),
+  })).text();
+  assert.ok(parseSseFrames(sse).some((fr) => fr.type === 'done'), sse.slice(-400));
+
+  const log = JSON.parse(readFileSync(stateFile, 'utf8')).rpcLog.slice(before);
+  const created = log.find((r) => r.method === 'session/new');
+  const dirs = created?.params?._meta?.antigravity?.additionalDirectories || [];
+  assert.ok(dirs.some((d) => foldAgyPath(d) === foldAgyPath(realpathSync(uploadsDir))), JSON.stringify(dirs));
+  const prompt = log.find((r) => r.method === 'session/prompt').params.prompt;
+  const res = prompt.find((b) => b.type === 'resource');
+  assert.equal(res?.resource?.mimeType, 'application/pdf');
+  assert.match(res.resource.uri, /^file:\/\/.*paper\.pdf$/);
+  assert.match(prompt[0].text, /← 已作为文件内容附上/);
 });

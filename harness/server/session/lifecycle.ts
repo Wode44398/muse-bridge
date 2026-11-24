@@ -6,6 +6,8 @@ import { existsSync } from "node:fs";
 import { deleteSessionArchive } from "../compaction-archive.ts";
 import { deleteSessionOutputs } from "../tools/result-store.ts";
 import { clearRunMarker } from "../run-markers.ts";
+import { clearWakeups, WAKEUP_KIND } from "../wakeup/store.ts";
+import { dropAutoNotices } from "../job-notify.ts";
 import type { RuntimeConfig } from "../config.ts";
 import { deleteSessionFile, loadSession, sessionFilePath, type SessionMeta } from "../store.ts";
 import { deleteCheckpoints } from "../checkpoints.ts";
@@ -19,6 +21,7 @@ import { registry } from "./registry.ts";
 import { persistNow, sessionRecord } from "./persist.ts";
 import type { Session } from "./types.ts";
 import { workspaceRoot } from "./workspace.ts";
+import { drainSessionAgents, forgetSessionAgents, recordUndeliveredAgentNotices, releaseSessionAgents, sessionHasRunningAgents, stopSessionAgents } from "./subagents.ts";
 
 // M11（N33）：initial = 发起端显式带来的配置快照（界面上显示的那一份，已按设置页同一套规则校验过）。不给才读全局——
 // 全局值是「最后一个切前台的设备」写的，手机刚切的项目 / 访问范围 / 运行档位以前会串进电脑上新建的对话。
@@ -95,6 +98,8 @@ export function runningRuns(): { sessionId: string; runId: string | null; title:
 export async function drainSessions(waitMs = 10_000): Promise<number> {
   const live = [...registry.sessions.values()].filter((s) => s.running);
   for (const s of live) s.abort?.abort(RESTART_REASON);
+  // 后台子 agent 一并停下（如实记进各自父会话的转录），与在跑的轮同一个时限
+  const agents = drainSessionAgents(waitMs);
   if (live.length) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
@@ -105,6 +110,9 @@ export async function drainSessions(waitMs = 10_000): Promise<number> {
     ]);
     clearTimeout(timer);
   }
+  await agents.catch(() => 0);
+  // 都收完尾了：还没送达的子 agent 报告写进各自父会话的转录（收尾时注入队列里没送出的已经收回攒着的那一份）
+  recordUndeliveredAgentNotices();
   for (const s of [...registry.sessions.values()]) await persistNow(s).catch(() => {});
   return live.length;
 }
@@ -117,7 +125,10 @@ export interface StopReport {
   stopped: boolean;      // did anything at all stop
   turnAborted: boolean;
   jobsKilled: number;
+  // 停掉的后台子 agent
+  agentsStopped?: number;
   servicesStopped: number;
+  wakeupsCancelled?: number; // 一并取消的定时唤醒
   // M2：带了 runId、而此刻在跑的是另一轮——什么都没动。
   error?: "run_mismatch";
   currentRunId?: string | null;
@@ -143,11 +154,18 @@ export function stopSession(id: string, runId?: string): StopReport {
   const reaped = disposeOwner(id, "stop", ["job", "service"]);
   const jobsKilled = reaped.job;
   const servicesStopped = reaped.service;
+  // 定时唤醒（ScheduleWakeup）同理：约好的「稍后再来」也是要停掉的工作（删会话经这里一并清掉）。账本里还没到点的清掉；
+  // 已经到点、交给后台通知投递还没注入的（排在这一轮的注入队列里、攒着等开轮的）一并丢掉，不然这一轮收尾时被收回、过两秒又自己开一轮
+  const wakeupsCancelled = clearWakeups(id) + dropAutoNotices(id, WAKEUP_KIND);
+  // 后台子 agent 不随一轮结束，但「停止这个会话」就是要它们也停（停掉的如实记下，用户下一条消息时告诉模型）
+  const agentsStopped = stopSessionAgents(id);
   return {
-    stopped: turnAborted || jobsKilled > 0 || servicesStopped > 0,
+    stopped: turnAborted || jobsKilled > 0 || servicesStopped > 0 || wakeupsCancelled > 0 || agentsStopped > 0,
     turnAborted,
     jobsKilled,
     servicesStopped,
+    ...(wakeupsCancelled ? { wakeupsCancelled } : {}),
+    ...(agentsStopped ? { agentsStopped } : {}),
   };
 }
 
@@ -181,7 +199,8 @@ const SESSION_IDLE_MS = 30 * 60_000;
 
 function evictable(s: Session): boolean {
   // O7：有进行中的目标的不逐出——两轮之间马上要续下一轮，从盘上读回会按冷恢复把它暂停
-  return !s.running && !s.runPromise && s.pendingAsks.size === 0 && s.watchers.size === 0 && !s.persistTimer && s.goal?.status !== "active";
+  // 有后台子 agent 在跑的也不逐出：它收场时要更新这个会话的卡片记录、给它送通知
+  return !s.running && !s.runPromise && s.pendingAsks.size === 0 && s.watchers.size === 0 && !s.persistTimer && s.goal?.status !== "active" && !sessionHasRunningAgents(s.id);
 }
 
 export function evictIdleSessions(now = Date.now()): number {
@@ -193,6 +212,7 @@ export function evictIdleSessions(now = Date.now()): number {
   for (const s of candidates) {
     if (now - s.touchedAt <= SESSION_IDLE_MS) continue;
     registry.sessions.delete(s.id);
+    releaseSessionAgents(s.id); // 子 agent 台账里留着的上下文一起放掉（逐出就是为了给内存封顶）
     dropped++;
   }
   // 2) Still over the cap (many recently-touched sessions) → keep dropping the
@@ -201,6 +221,7 @@ export function evictIdleSessions(now = Date.now()): number {
     if (registry.sessions.size <= MAX_RESIDENT_SESSIONS) break;
     if (!registry.sessions.has(s.id)) continue;
     registry.sessions.delete(s.id);
+    releaseSessionAgents(s.id);
     dropped++;
   }
   return dropped;
@@ -225,6 +246,7 @@ export function dropSession(id: string): void {
     s.persistTimer = null;
   }
   registry.sessions.delete(id);
+  releaseSessionAgents(id);
 }
 
 // ── M11（K29）：会话生命周期按 id 串行 + 回滚期间全局静默 ──────────────────────
@@ -255,6 +277,7 @@ export function rollbackInProgress(): string | null {
 // （中止在跑的轮、杀 job、停服务），再关掉它的浏览器（标签、隔离存储开关），再忘掉内存状态、删盘上的记录、图片与检查点。
 export function deleteSession(id: string): Promise<{ deleted: boolean; stopped: StopReport }> {
   return lifecycle(id, async () => {
+    forgetSessionAgents(id); // 后台子 agent：按「会话删了」停掉，台账与留着的上下文一并忘掉（排在停止之前：不当成用户停的去报）
     const stopped = stopSession(id);
     disposeOwner(id, "delete", ["browser"]);
     // U4（K08）：记录删了就不知道它的工作区和附件目录了——先记下

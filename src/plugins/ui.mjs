@@ -19,19 +19,26 @@
 //   ctx.ui.refresh(appId, { who }?)                                       让开着这个声明式应用的页面重拉（不给 who 推给所有人）
 //   ctx.ui.fileHandler({ id, title, exts | match: { ext }, app, who? })   文件「用 X 打开」→ 本插件的页面型应用（要声明 page.files）
 //   ctx.ui.command 另认 palette: true（同时收进命令面板）
+//   ctx.ui.workspaceDecor / workspaceAction / refreshDecor              文件夹（工作空间 / 项目）的外观与菜单项，实现在 workspace.mjs
 // handler 回：字符串（当 toast）或 { toast?, insert?（插进输入框）, send?: true（插进去顺手发出）, open?: 'panel' | 网址 }。
 // who：'host'（缺省，只给服务器主机）| 'members'（成员也给）。英文界面：插件 locales/en.json 的 ui.<种类>.<id>.<字段> 覆盖人话。
 import { kernel } from './state.mjs';
 import { busPublish, busPublishAll } from '../runtime/bus.mjs';
 import { normApp, APP_ID_RE, MAX_APPS, isReservedTitle, ACTION_NAME_RE, STATE_MAX, jsonBytes } from './app-spec.mjs';
 import { normalizeBlocks } from './ui-blocks.mjs';
+import { UI_SLOT, ID_RE, ICON_RE, str, within, audience, tr } from './ui-shared.mjs';
+import { addWorkspaceDecor, addWorkspaceAction, refreshDecor, workspaceActionsView, runWorkspace, WORKSPACE_KINDS } from './workspace.mjs';
 
-export const UI_SLOT = 'ui';
+export { UI_SLOT };
+export { decorView } from './workspace.mjs';
 export const UI_KINDS = Object.freeze(['homeCard', 'workbench', 'command', 'composerAction', 'messageAction', 'sessionAction', 'theme']);
-const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 const CMD_RE = /^[a-z][a-z0-9-]{0,31}$/;
-const ICON_RE = /^[a-z][a-z0-9-]{0,23}$/;
-const str = (v, n) => (v == null ? '' : String(v).replace(/[\r\n]+/g, ' ').trim().slice(0, n));
+// 插件工作区卡片能进的分页（六期）：缺省只进 Claude（四期的老写法不变）；'all' = 全部
+export const WORKBENCH_HOSTS = Object.freeze(['claude', 'codex', 'agy', 'dimensio', 'all']);
+const hostsOf = (v) => {
+  const list = v == null ? ['claude'] : Array.isArray(v) ? v : [v];
+  return list.includes('all') ? ['claude', 'codex', 'agy', 'dimensio'] : [...new Set(list)];
+};
 
 function check(kind, spec) {
   if (!spec || typeof spec !== 'object') throw new Error(`ctx.ui.${kind} 要一个对象`);
@@ -47,6 +54,11 @@ function check(kind, spec) {
   }
   if (!ID_RE.test(String(spec.id || ''))) throw new Error(`ctx.ui.${kind} 要有 id（小写字母开头，只用小写字母、数字、连字符）`);
   if (kind === 'workbench' && (typeof spec.page !== 'string' || !spec.page || spec.page.includes('..'))) throw new Error('ctx.ui.workbench 要 page（插件目录里的页面，如 web/bench.html）');
+  if (kind === 'workbench' && spec.hosts != null) {
+    const list = Array.isArray(spec.hosts) ? spec.hosts : [spec.hosts];
+    const bad = list.filter((h) => !WORKBENCH_HOSTS.includes(h));
+    if (!list.length || bad.length) throw new Error(`ctx.ui.workbench 的 hosts 只认 ${WORKBENCH_HOSTS.join(' / ')}（或 'all'）：${bad.join('、') || '空'}`);
+  }
   if (['composerAction', 'messageAction', 'sessionAction'].includes(kind) && typeof spec.handler !== 'function') throw new Error(`ctx.ui.${kind} 要 handler`);
 }
 
@@ -57,6 +69,10 @@ export function makeUi(ctx) {
     app: (spec) => addApp(ctx, spec),
     refresh: (appId, opts) => refreshApp(ctx, appId, opts),
     fileHandler: (spec) => addFileHandler(ctx, spec),
+    // 工作区插槽（plugins/workspace.mjs）：文件夹的外观声明、文件夹菜单项、外观变了推一声
+    workspaceDecor: (spec) => addWorkspaceDecor(ctx, spec),
+    workspaceAction: (spec) => addWorkspaceAction(ctx, spec),
+    refreshDecor: (id, opts) => refreshDecor(ctx, id, opts),
   };
 }
 
@@ -165,23 +181,8 @@ export function watchUi() {
   pub = () => { offSlot(); offChange(); clearTimeout(timer); };
 }
 
-const audience = (who, c) => (who === 'members' ? c.kind === 'admin' || c.kind === 'user' : c.kind === 'admin');
-
-// 英文词条：locales/en.json → ui.<种类>.<id>.<字段>
-function tr(owner, kind, id, field, zh, lang) {
-  if (!/^en/i.test(lang || '')) return zh;
-  const v = kernel.rawRecord(owner)?.extra?.i18n?.en?.ui?.[kind]?.[id]?.[field];
-  return typeof v === 'string' && v.trim() ? v.trim() : zh;
-}
-
 const SAFE_CSS = /^[^;{}<>]{0,120}$/;
 const BAD_CSS = /(url\s*\(|expression\s*\(|@import|javascript:)/i;
-
-async function within(ms, fn) {
-  let t;
-  try { return await Promise.race([Promise.resolve().then(fn), new Promise((r) => { t = setTimeout(() => r(undefined), ms); t.unref?.(); })]); }
-  finally { clearTimeout(t); }
-}
 
 // ── 插件应用 ─────────────────────────────────────────────────────────────
 // 清单（静态）+ ctx.ui.app（动态）合并，同插件同 id 动态盖静态（同 id 动态登记多次，后登记的赢）。
@@ -300,8 +301,9 @@ async function appsView(c, lang) {
 
 /** 这个身份能看到的全部界面扩展（主页卡片的数据、应用角标现算，每个 3 秒封顶）。c = 身份上下文；lang = 界面语言。 */
 export async function uiView(c, lang = 'zh') {
-  const out = { homeCards: [], workbench: [], commands: [], composerActions: [], messageActions: [], sessionActions: [], theme: {}, apps: [], fileHandlers: [] };
+  const out = { homeCards: [], workbench: [], commands: [], composerActions: [], messageActions: [], sessionActions: [], theme: {}, apps: [], fileHandlers: [], workspaceActions: [] };
   if (!kernel.started) return out;
+  out.workspaceActions = workspaceActionsView(c, lang);
   const cards = [];
   for (const { item, owner } of kernel.slot(UI_SLOT).entries()) {
     const s = item.spec;
@@ -328,7 +330,7 @@ export async function uiView(c, lang = 'zh') {
         })());
         break;
       case 'workbench':
-        out.workbench.push({ plugin: owner, pluginName: pname, id, title: T('title', str(s.title, 20) || pname), icon: ICON_RE.test(s.icon || '') ? s.icon : 'plugin', page: String(s.page).replace(/^\/+/, '') });
+        out.workbench.push({ plugin: owner, pluginName: pname, id, title: T('title', str(s.title, 20) || pname), icon: ICON_RE.test(s.icon || '') ? s.icon : 'plugin', page: String(s.page).replace(/^\/+/, ''), hosts: hostsOf(s.hosts) });
         break;
       case 'command':
         out.commands.push({
@@ -481,10 +483,12 @@ async function runApp(c, plugin, id, a) {
   return { state: next, tree: await renderView(owner, spec, c, next), ...out };
 }
 
-/** 按下一个界面动作：kind = command / composerAction / messageAction / sessionAction / homeCard（open.action 指的那个 ctx.action）/ app（声明式应用的动作）。 */
+/** 按下一个界面动作：kind = command / composerAction / messageAction / sessionAction / homeCard（open.action 指的那个 ctx.action）/ app（声明式应用的动作）/
+ *  workspaceDialog · workspaceAction（文件夹菜单项的确认框与执行，plugins/workspace.mjs）。 */
 export async function runUi(c, { plugin, kind, id, args }) {
   if (!kernel.started || !kernel.isActive(String(plugin || ''))) throw Object.assign(new Error('插件没开'), { status: 404 });
   if (kind === 'app') return runApp(c, plugin, id, args && typeof args === 'object' ? args : {});
+  if (WORKSPACE_KINDS.includes(kind)) return runWorkspace(c, { plugin: String(plugin), kind, id: String(id || ''), args });
   const spec = findHandler(plugin, kind, id);
   if (!spec || !audience(spec.who || 'host', c)) throw Object.assign(new Error('没有这个界面动作'), { status: 404 });
   if (typeof spec.handler !== 'function') throw Object.assign(new Error('这个动作没有 handler'), { status: 400 });

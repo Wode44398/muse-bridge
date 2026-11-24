@@ -7,7 +7,9 @@
 //   · 会话基线：建会话时拍下「此刻连上的连接器 + 各自的工具定义」随会话落盘（见 tools/mcp.ts）；会话里的工具清单从此
 //     不变（前缀缓存不断），重启读回也照旧。之后装的连接器、服务端新出的工具，下一个新会话才有。
 //   · 墓碑：会话建好之后连接器被删了、停了、对 dimensio 取消勾选——工具定义照旧留着，调用时回「已移除，新会话生效」。
-//   · 不做：OAuth（扩展中心本身只有静态请求头 / 环境变量，#107 待维护者定）、resources / prompts、sampling、elicitation。
+//   · resources：声明了 resources 能力的连接器可以列出（resources/list，可带 cursor 翻页）与读取（resources/read）；
+//     资源模板（resources/templates）、订阅不做。
+//   · 不做：OAuth（扩展中心本身只有静态请求头 / 环境变量，#107 待维护者定）、prompts、sampling、elicitation。
 import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
@@ -48,6 +50,7 @@ interface Entry {
   client: Client | null;
   pid: number | null; // stdio 子进程
   tools: McpToolInfo[];
+  resources: boolean; // 服务端声明了 resources 能力
   instructions?: string;
   error?: string;
   at: number;
@@ -166,7 +169,7 @@ async function listAllTools(client: Client): Promise<McpToolInfo[]> {
 }
 
 function connect(cfg: ManagedConnector, creds: Creds, hash: string): Entry {
-  const entry: Entry = { cfg, creds, hash, status: "connecting", client: null, pid: null, tools: [], at: Date.now(), ready: Promise.resolve() };
+  const entry: Entry = { cfg, creds, hash, status: "connecting", client: null, pid: null, tools: [], resources: false, at: Date.now(), ready: Promise.resolve() };
   entry.ready = (async () => {
     let client: Client | null = null;
     try {
@@ -176,7 +179,10 @@ function connect(cfg: ManagedConnector, creds: Creds, hash: string): Entry {
       entry.pid = transport instanceof StdioClientTransport ? transport.pid : null;
       entry.client = client;
       entry.instructions = client.getInstructions()?.slice(0, 1_000) || undefined;
-      entry.tools = await listAllTools(client);
+      const caps = client.getServerCapabilities();
+      entry.resources = Boolean(caps?.resources);
+      // 只有 resources、没有 tools 能力的服务：不去调 tools/list（有的服务不认，会把整条连接判成失败）
+      entry.tools = caps && !caps.tools && entry.resources ? [] : await listAllTools(client);
       entry.status = "ready";
       entry.error = undefined;
       client.onclose = () => {
@@ -231,7 +237,7 @@ export function syncConnectors(): Promise<void> {
         const cur = pool.get(cfg.id);
         if ("error" in c) {
           if (cur) void closeEntry(cur);
-          pool.set(cfg.id, { cfg, creds: { env: {}, headers: {} }, hash: "", status: "failed", client: null, pid: null, tools: [], error: c.error, at: Date.now(), ready: Promise.resolve() });
+          pool.set(cfg.id, { cfg, creds: { env: {}, headers: {} }, hash: "", status: "failed", client: null, pid: null, tools: [], resources: false, error: c.error, at: Date.now(), ready: Promise.resolve() });
           continue;
         }
         const hash = fingerprint(cfg, c);
@@ -262,13 +268,14 @@ export async function mcpReady(ms: number): Promise<void> {
 export interface ReadyConnector {
   cfg: ManagedConnector;
   tools: McpToolInfo[];
+  resources?: true;
   instructions?: string;
 }
 export function readyConnectors(): ReadyConnector[] {
   return [...pool.values()]
-    .filter((e) => e.status === "ready" && e.tools.length)
+    .filter((e) => e.status === "ready" && (e.tools.length || e.resources))
     .sort((a, b) => a.cfg.name.localeCompare(b.cfg.name))
-    .map((e) => ({ cfg: e.cfg, tools: e.tools, ...(e.instructions ? { instructions: e.instructions } : {}) }));
+    .map((e) => ({ cfg: e.cfg, tools: e.tools, ...(e.resources ? { resources: true as const } : {}), ...(e.instructions ? { instructions: e.instructions } : {}) }));
 }
 
 // 网关用：连接器此刻的工具（按扩展 id；没连上 / 不在了返回 null）
@@ -286,13 +293,8 @@ export type McpCallOutcome =
   | { kind: "unavailable"; error: string }
   | { kind: "result"; result: CallToolResult };
 
-// 调一次工具。连接器不在池里（删了 / 停了 / 取消勾选）= 墓碑；断了且上次失败超过 5 秒，当场重连一次。
-export async function callMcpTool(
-  id: string,
-  tool: string,
-  args: Record<string, unknown>,
-  opts: { signal?: AbortSignal; timeoutMs?: number } = {},
-): Promise<McpCallOutcome> {
+// 调用前拿到连着的客户端。连接器不在池里（删了 / 停了 / 取消勾选）= 墓碑；断了且上次失败超过 5 秒，当场重连一次。
+async function liveClient(id: string): Promise<{ kind: "removed" } | { kind: "unavailable"; error: string } | { kind: "ready"; client: Client; resources: boolean }> {
   let e = pool.get(id);
   if (!e) {
     await syncConnectors();
@@ -306,13 +308,83 @@ export async function callMcpTool(
   }
   if (e.status === "connecting") await withTimeout(e.ready, CONNECT_TIMEOUT_MS + 1_000, "connect").catch(() => {});
   if (e.status !== "ready" || !e.client) return { kind: "unavailable", error: e.error ?? "not connected" };
-  const result = (await e.client.callTool({ name: tool, arguments: args }, undefined, {
+  return { kind: "ready", client: e.client, resources: e.resources };
+}
+
+// 调一次工具（墓碑 / 重连见 liveClient）
+export async function callMcpTool(
+  id: string,
+  tool: string,
+  args: Record<string, unknown>,
+  opts: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<McpCallOutcome> {
+  const live = await liveClient(id);
+  if (live.kind !== "ready") return live;
+  const result = (await live.client.callTool({ name: tool, arguments: args }, undefined, {
     ...(opts.signal ? { signal: opts.signal } : {}),
     timeout: opts.timeoutMs ?? CALL_TIMEOUT_MS,
     resetTimeoutOnProgress: true,
     maxTotalTimeout: CALL_MAX_TOTAL_MS,
   })) as CallToolResult;
   return { kind: "result", result };
+}
+
+// ── resources ────────────────────────────────────────────────────────────────
+export interface McpResourceInfo {
+  uri: string;
+  name?: string;
+  title?: string;
+  mimeType?: string;
+  description?: string;
+  size?: number;
+}
+export interface McpResourceContent {
+  uri: string;
+  mimeType?: string;
+  text?: string;
+  blobBytes?: number; // 二进制内容的字节数（内容本身不进上下文）
+}
+export type McpResourcesOutcome<T> = { kind: "removed" } | { kind: "unavailable"; error: string } | { kind: "no-resources" } | { kind: "result"; result: T };
+
+const MAX_RESOURCES_LISTED = 500;
+
+// resources/list：一页（cursor 给了就从那一页起）
+export async function listMcpResources(
+  id: string,
+  cursor?: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<McpResourcesOutcome<{ resources: McpResourceInfo[]; nextCursor?: string }>> {
+  const live = await liveClient(id);
+  if (live.kind !== "ready") return live;
+  if (!live.resources) return { kind: "no-resources" };
+  const r = await live.client.listResources(cursor ? { cursor } : undefined, { ...(opts.signal ? { signal: opts.signal } : {}), timeout: CONNECT_TIMEOUT_MS });
+  const resources = (r.resources ?? []).slice(0, MAX_RESOURCES_LISTED).map((x) => ({
+    uri: String(x.uri),
+    ...(x.name ? { name: String(x.name) } : {}),
+    ...(x.title ? { title: String(x.title) } : {}),
+    ...(x.mimeType ? { mimeType: String(x.mimeType) } : {}),
+    ...(x.description ? { description: String(x.description).slice(0, 300) } : {}),
+    ...(typeof x.size === "number" ? { size: x.size } : {}),
+  }));
+  return { kind: "result", result: { resources, ...(r.nextCursor ? { nextCursor: String(r.nextCursor) } : {}) } };
+}
+
+// resources/read：一个资源可以有好几段内容（文本或 base64 二进制）
+export async function readMcpResource(id: string, uri: string, opts: { signal?: AbortSignal } = {}): Promise<McpResourcesOutcome<McpResourceContent[]>> {
+  const live = await liveClient(id);
+  if (live.kind !== "ready") return live;
+  if (!live.resources) return { kind: "no-resources" };
+  const r = await live.client.readResource({ uri }, { ...(opts.signal ? { signal: opts.signal } : {}), timeout: CALL_TIMEOUT_MS });
+  const contents = (r.contents ?? []).map((c) => {
+    const item = c as { uri?: unknown; mimeType?: unknown; text?: unknown; blob?: unknown };
+    return {
+      uri: String(item.uri ?? uri),
+      ...(typeof item.mimeType === "string" ? { mimeType: item.mimeType } : {}),
+      ...(typeof item.text === "string" ? { text: item.text } : {}),
+      ...(typeof item.blob === "string" ? { blobBytes: Buffer.byteLength(item.blob, "base64") } : {}),
+    };
+  });
+  return { kind: "result", result: contents };
 }
 
 // 诊断 / 状态（GET /api/mcp）：不含凭据、不含命令行与地址

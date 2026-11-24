@@ -471,11 +471,14 @@ function editTargetsOf(c: ShellCommand, writes: string[]): string[] {
   return writes;
 }
 
-export function shellTouches(parsed: ShellParse): ShellTouches {
+// 命令里有没有换目录（cd / pushd）；elsewhere = 这条命令本来就不在工作区根上起跑（会话保留的当前目录），按同样的阀处理
+const movesDir = (parsed: ShellParse, elsewhere: boolean): boolean => elsewhere || parsed.commands.some((c) => c.name === "cd" || c.name === "pushd");
+
+export function shellTouches(parsed: ShellParse, elsewhere = false): ShellTouches {
   const writes: string[] = [];
   const edits: string[] = [];
   const mentions: string[] = [];
-  const moves = parsed.commands.some((c) => c.name === "cd" || c.name === "pushd");
+  const moves = movesDir(parsed, elsewhere);
   for (const c of parsed.commands) {
     const w = writeTargetsOf(c);
     writes.push(...w);
@@ -518,10 +521,11 @@ const GIT_UNSAFE_ARG = /^(?:--output(?:=|$)|--open-files-in-pager|-O|--ext-diff$
 const GIT_SAFE_GLOBAL =
   /^(?:--no-pager|-P|--no-optional-locks|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-replace-objects)$/;
 
-export function readOnlyCommand(parsed: ShellParse): boolean {
+export function readOnlyCommand(parsed: ShellParse, elsewhere = false): boolean {
   if (parsed.unanalyzable || !parsed.commands.length) return false;
-  // ZCode 的安全阀：cd 进别的仓库再跑 git，会读那个仓库的配置（fsmonitor、textconv、外部 diff 都能执行程序）
-  const moves = parsed.commands.some((c) => c.name === "cd" || c.name === "pushd");
+  // ZCode 的安全阀：cd 进别的仓库再跑 git，会读那个仓库的配置（fsmonitor、textconv、外部 diff 都能执行程序）。
+  // 目录跨调用保留之后，「上一次调用 cd 过去、这一次跑 git」同样算（elsewhere）
+  const moves = movesDir(parsed, elsewhere);
   return parsed.commands.every((c) => readOnlyOne(c, moves));
 }
 
@@ -590,9 +594,9 @@ export interface DestructiveView {
 const DESTROY_WORD =
   /(?:^|[\s;&|(){}`'"\\/])(?:rm|rmdir|unlink|shred|del|erase|rd|remove-item|ri|clear-content|clc)(?:\.exe)?(?=$|[\s;&|(){}`'"])|\bgit\b[^\n;&|]*\s(?:reset\s[^\n;&|]*--hard|checkout|restore|clean|stash|rm)\b|\s-delete\b/i;
 
-export function destructiveView(parsed: ShellParse, command: string): DestructiveView {
+export function destructiveView(parsed: ShellParse, command: string, elsewhere = false): DestructiveView {
   if (parsed.unanalyzable) return { destroys: DESTROY_WORD.test(command), onlyDestroys: false };
-  const moves = parsed.commands.some((c) => c.name === "cd" || c.name === "pushd");
+  const moves = movesDir(parsed, elsewhere);
   let destroys = false;
   let others = false;
   for (const c of parsed.commands) {

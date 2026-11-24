@@ -6,6 +6,7 @@
     agy,
     fallbackAgyCaps,
     sendAgyMessage,
+    sendAgyVoice,
     sendAgyLater,
     stopAgyTurn,
     uploadAgyFile,
@@ -14,6 +15,10 @@
     removeAgyQueued,
     sendAgyQueuedNow,
   } from '../../lib/agy/store.svelte.js';
+  import { ui } from '../../lib/state.svelte.js';
+  import { showToast } from '../../lib/toast.svelte.js';
+  import { createVoiceRecorder, voiceErrorMessage } from '../../lib/agy/voice-recorder.js';
+  import { formatVoiceTimer } from '../../lib/agy/voice-peaks.js';
   import { devices, loadDevices, thisDeviceId } from '../../lib/devices.svelte.js';
   import { isNativeDesktop } from '../../lib/nativeDesktop.js';
   import {
@@ -28,8 +33,18 @@
   import { refreshAgyQuota } from '../../lib/agy/store.svelte.js';
   import BrandLogo from '../modelhub/BrandLogo.svelte';
   import AgyGauge from './AgyGauge.svelte';
-  import { dropZone } from '../../lib/dragdrop.svelte.js';
+  import { drag, dragPayload, dropZone } from '../../lib/dragdrop.svelte.js';
   import { agentDropZone, dtHasWsFiles, wsDescriptorFrom, attachDescriptorToAgent } from '../../lib/fileDrag.js';
+  import {
+    agySideDrag,
+    getRawAgySideDrag,
+    isAgyChatRef,
+    isAgyProjRef,
+    canQuoteAgy,
+    canRefAgyFolder,
+    quoteAgySession,
+    refAgyFolder,
+  } from '../../lib/agy/chat-quote.svelte.js';
   import { attDragSrc } from '../../lib/dragOut.js';
   import { openPreview } from '../../lib/preview.svelte.js';
   import { rectOf } from '../../lib/chatGallery.js';
@@ -37,7 +52,7 @@
   import AgyAttachment from './AgyAttachment.svelte';
   import AgyAttachMenu from './AgyAttachMenu.svelte';
   import { t, tr } from '../../lib/i18n.js';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { takeComposerFrom } from '../../lib/agy/hero.js';
   import { SPRING, springTiming, reducedMotion, emphasized } from '../../lib/agy/motion.js';
   import { glowCaret } from '../../lib/agy/glow-caret.js';
@@ -51,10 +66,30 @@
 
   let textareaEl = $state(null);
   let fileInputEl = $state(null);
+  let clusterRef = $state(null);
+  let waveCanvasEl = $state(null);
   let focused = $state(false);
   let draggingOver = $state(false);
   let slashDismissedFor = $state('');
   let slashIdx = $state(0);
+
+  // 原生语音输入态（空输入框空闲时，长按右下角开口仪表开启）
+  let voicePhase = $state('idle');      // 'idle' | 'charging' | 'recording' | 'cancelling' | 'sending'
+  let voiceCancelArmed = $state(false);
+  let voiceCharge = $state(0);
+  let voiceElapsedMs = $state(0);
+  let voiceSending = $state(false);
+  const voiceRecording = $derived(voicePhase === 'recording' || voicePhase === 'cancelling');
+  const voiceTimerText = $derived(formatVoiceTimer(voiceElapsedMs));
+
+  const waveHistory = new Array(36).fill(0.06);
+  let waveAcc = 0;
+  let recorder = createVoiceRecorder({
+    onAutoStop: () => {
+      showToast(t('已达单条语音 5 分钟上限，自动发送'));
+      clusterRef?.commitVoiceNow?.();
+    },
+  });
 
   const fallbackCommands = $derived([
     { name: 'plan', description: t('先制定分步实施方案再执行') },
@@ -115,6 +150,7 @@
     ctxPct != null ? t('上下文 {pct}%', { pct: ctxPct }) : '',
     gq?.weekly ? t('{group} 周额度 {pct}%', { group: gq.group, pct: Math.round(gq.weekly.usedPct) }) : '',
     gq?.fiveH ? t('5 小时额度 {pct}%', { pct: Math.round(gq.fiveH.usedPct) }) : '',
+    !hasDraft && !agy.busy ? t('长按录制原生语音') : '',
   ].filter(Boolean).join(' · '));
 
 
@@ -162,11 +198,11 @@
     const tm = setTimeout(() => { glowTail = false; }, 720);
     return () => clearTimeout(tm);
   });
-  // 11-19 维护者：新对话页也只在聚焦（或在干活）时亮流光，不再常亮
-  const glowOn = $derived(focused || agy.busy || glowTail);
+  // 11-19 维护者：新对话页也只在聚焦（或在干活 / 录音）时亮流光，不再常亮
+  const glowOn = $derived(focused || agy.busy || glowTail || voiceRecording);
   let rateRaf = 0;
   $effect(() => {
-    const want = agy.busy ? 2.5 : 1;
+    const want = agy.busy ? 2.5 : (voiceRecording ? 1.55 : 1);
     void glowOn;
     if (!cboxEl) return;
     let cancelled = false;
@@ -210,6 +246,7 @@
   }
 
   function onBoxClick(ev) {
+    if (voicePhase !== 'idle') return;
     const tEl = ev.target;
     if (tEl?.closest?.('button, a, input, textarea, [role="button"], .aa')) return;
     textareaEl?.focus();
@@ -217,8 +254,160 @@
 
   const anyUploading = $derived(agy.draftAtts.some((a) => a.pending));
   const hasDraft = $derived(agy.draftText.trim().length > 0 || agy.draftAtts.length > 0);
+  // 空输入框且空闲（未在加载 / 未在发送上一条语音）时，长按开口仪表开启原生语音输入
+  const voiceEnabled = $derived(!hasDraft && !agy.busy && !agy.loadingSession && !voiceSending);
   // 发送 / 停止键只在「可能要按它」时出现：输入框有字或有附件、或者正在跑
   const showAction = $derived(agy.busy || hasDraft);
+
+  function handleVoiceState(st) {
+    voicePhase = st.phase;
+    voiceCancelArmed = st.cancelArmed;
+    voiceCharge = st.charge;
+    voiceElapsedMs = st.elapsedMs;
+  }
+
+  async function handleVoiceBegin() {
+    agy.sheetKind = '';
+    agy.projectSheetOpen = false;
+    attachMenuOpen = false;
+    textareaEl?.blur();
+    waveHistory.fill(0.06);
+    waveAcc = 0;
+    try {
+      const res = await recorder.start();
+      if (res?.cancelled) return;
+    } catch (err) {
+      showToast(voiceErrorMessage(err, t), 'err');
+      clusterRef?.abortVoiceToIdle?.();
+    }
+  }
+
+  function handleVoiceCancel({ reason } = {}) {
+    recorder.cancel();
+    if (reason === 'short') {
+      showToast(t('按住时间太短，请继续按住说完再松手'));
+    }
+  }
+
+  async function handleVoiceSend() {
+    voiceSending = true;
+    try {
+      const captured = await recorder.stop();
+      if (!captured) {
+        showToast(t('未录到有效声音，请重试'), 'err');
+        return { ok: false };
+      }
+      return await sendAgyVoice(captured);
+    } finally {
+      voiceSending = false;
+    }
+  }
+
+  function drawLiveWaveform(amp, dt, armed) {
+    const canvas = waveCanvasEl;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = canvas.clientWidth || 120;
+    const h = canvas.clientHeight || 22;
+    const pw = Math.round(w * dpr);
+    const ph = Math.round(h * dpr);
+    if (canvas.width !== pw || canvas.height !== ph) {
+      canvas.width = pw;
+      canvas.height = ph;
+    }
+
+    waveAcc += dt;
+    if (waveAcc >= 0.048) {
+      waveAcc = 0;
+      waveHistory.push(amp);
+      if (waveHistory.length > 42) waveHistory.shift();
+      if (!armed) recorder.recordEnvelopePoint(amp);
+    }
+
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+
+    const light = Boolean(cboxEl?.closest?.('.agy-root.light'));
+    const gap = 3.2;
+    const barW = 2.2;
+    const step = barW + gap;
+    const count = Math.max(10, Math.min(34, Math.floor(w / step)));
+    const startX = (w - count * step + gap) * 0.5;
+    const cy = h * 0.5;
+    const off = Math.max(0, waveHistory.length - count);
+
+    ctx.fillStyle = armed
+      ? (light ? 'rgba(217, 48, 37, 0.52)' : 'rgba(240, 122, 114, 0.55)')
+      : (light ? 'rgba(47, 128, 237, 0.85)' : 'rgba(74, 144, 240, 0.9)');
+    for (let i = 0; i < count; i++) {
+      const v = waveHistory[off + i] ?? 0.08;
+      const edge = Math.sin(((i + 0.5) / count) * Math.PI);
+      const bh = Math.max(3, (3 + v * 17) * (0.45 + 0.55 * edge));
+      const x = startX + i * step;
+      const y = cy - bh * 0.5;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x, y, barW, bh, 99);
+      else ctx.rect(x, y, barW, bh);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // 键盘无障碍与快捷兜底：空框失焦按住 Space 蓄力录音、Esc 取消；切到后台自动安全停麦
+  onMount(() => {
+    let spaceHeld = false;
+    const isTypingTarget = (el) => Boolean(el?.closest?.('input, textarea, select, button, a, [contenteditable="true"], [role="dialog"]'));
+    const onWinKeyDown = (ev) => {
+      if (ui.screen !== 'agy') return;
+      if (ev.key === 'Escape' && (voicePhase === 'recording' || voicePhase === 'charging')) {
+        ev.preventDefault();
+        spaceHeld = false;
+        clusterRef?.cancelVoice?.({ animate: true, reason: 'cancel' });
+        return;
+      }
+      if (
+        ev.code === 'Space'
+        && !ev.repeat
+        && !ev.ctrlKey && !ev.metaKey && !ev.altKey
+        && voiceEnabled
+        && !agy.sheetKind && !agy.projectSheetOpen && !agy.pickerOpen && !agy.hiddenOpen && !attachMenuOpen
+        && !isTypingTarget(document.activeElement)
+      ) {
+        if (clusterRef?.startKeyVoice?.()) {
+          ev.preventDefault();
+          spaceHeld = true;
+        }
+      }
+    };
+    const onWinKeyUp = (ev) => {
+      if (ev.code === 'Space' && spaceHeld) {
+        spaceHeld = false;
+        clusterRef?.endKeyVoice?.();
+      }
+    };
+    const onVisChange = () => {
+      if (document.hidden && (voicePhase === 'recording' || voicePhase === 'charging')) {
+        spaceHeld = false;
+        clusterRef?.cancelVoice?.({ animate: false, reason: 'interrupt' });
+      }
+    };
+    window.addEventListener('keydown', onWinKeyDown);
+    window.addEventListener('keyup', onWinKeyUp);
+    document.addEventListener('visibilitychange', onVisChange);
+    return () => {
+      window.removeEventListener('keydown', onWinKeyDown);
+      window.removeEventListener('keyup', onWinKeyUp);
+      document.removeEventListener('visibilitychange', onVisChange);
+    };
+  });
+
+  onDestroy(() => {
+    recorder.cancel();
+  });
   // 它还在干活时也能发：默认中途插话（做完手头这一步就读到），也可以改成这一轮结束后再发
   //（新对话头一两秒还没有会话 id，送不进去）
   const canSend = $derived(
@@ -338,9 +527,81 @@
     for (const f of files) uploadAgyFile(f);
   }
 
+  const baseDrop = agentDropZone('agy', { label: t('挂进这个对话') });
+  const composerDropZone = {
+    key: 'agy-composer',
+    effect: 'copy',
+    label: (p) => {
+      if (isAgyChatRef(p)) return t('引用到这个对话');
+      if (isAgyProjRef(p)) return t('引用文件夹「{name}」', { name: p.name });
+      return typeof baseDrop.label === 'function' ? baseDrop.label(p) : baseDrop.label;
+    },
+    accept: (p) => {
+      if (isAgyChatRef(p)) return canQuoteAgy(p.id, agy.sessionId);
+      if (isAgyProjRef(p)) return canRefAgyFolder(p.path);
+      return baseDrop.accept ? baseDrop.accept(p) : false;
+    },
+    drop: (p) => {
+      if (isAgyChatRef(p)) return quoteAgySession({ id: p.id, title: p.name, cwd: p.cwd || '' });
+      if (isAgyProjRef(p)) return refAgyFolder({ path: p.path, name: p.name });
+      return baseDrop.drop?.(p);
+    },
+  };
+
+  // 侧栏正在拖会话 / 工作空间时的视觉引导（鼠标 HTML5 拖拽 + 触屏长按拿起）
+  const touchSidePayload = $derived(drag.on ? dragPayload() : null);
+  const sideDragCand = $derived.by(() => {
+    if (agySideDrag.kind === 'session') {
+      if (agySideDrag.id === agy.sessionId) return { kind: 'session', ok: false, hint: t('当前就在这段对话里') };
+      if (!canQuoteAgy(agySideDrag.id, agy.sessionId)) return { kind: 'session', ok: false, hint: t('这个对话已经引用过了') };
+      return { kind: 'session', ok: true, hint: t('放到输入框＝引用这段对话') };
+    }
+    if (agySideDrag.kind === 'project' && agySideDrag.path) {
+      if (!canRefAgyFolder(agySideDrag.path)) return { kind: 'project', ok: false, hint: t('这个文件夹已经引用过了') };
+      return { kind: 'project', ok: true, hint: t('放到输入框＝引用这个文件夹') };
+    }
+    if (isAgyChatRef(touchSidePayload)) {
+      return canQuoteAgy(touchSidePayload.id, agy.sessionId)
+        ? { kind: 'session', ok: true, hint: t('放到输入框＝引用这段对话') }
+        : null;
+    }
+    if (isAgyProjRef(touchSidePayload)) {
+      return canRefAgyFolder(touchSidePayload.path)
+        ? { kind: 'project', ok: true, hint: t('放到输入框＝引用这个文件夹') }
+        : null;
+    }
+    return null;
+  });
+
+  function onDragOver(ev) {
+    const side = getRawAgySideDrag();
+    if (side?.kind === 'session' || side?.kind === 'project') {
+      ev.preventDefault();
+      const ok = side.kind === 'session' ? canQuoteAgy(side.id, agy.sessionId) : canRefAgyFolder(side.path);
+      try { ev.dataTransfer.dropEffect = ok ? 'copy' : 'none'; } catch {}
+      draggingOver = true;
+      return;
+    }
+    ev.preventDefault();
+    draggingOver = true;
+  }
+
+  function onDragLeave(ev) {
+    if (!ev.currentTarget.contains(ev.relatedTarget)) draggingOver = false;
+  }
+
   function onDrop(ev) {
     ev.preventDefault();
     draggingOver = false;
+    const side = getRawAgySideDrag();
+    if (side?.kind === 'session') {
+      quoteAgySession({ id: side.id, title: side.title, cwd: side.cwd });
+      return;
+    }
+    if (side?.kind === 'project' && side.path) {
+      refAgyFolder({ path: side.path, name: side.title });
+      return;
+    }
     if (dtHasWsFiles(ev)) {
       const desc = wsDescriptorFrom(ev.dataTransfer);
       if (desc) attachDescriptorToAgent(desc, 'agy');
@@ -424,16 +685,24 @@
       class="agy-cbox"
       class:focused
       class:busy={agy.busy}
+      class:recording={voiceRecording}
+      class:cancel-armed={voiceRecording && voiceCancelArmed}
       class:glow={glowOn}
-      class:tail={glowTail && !centered && !focused && !agy.busy}
+      class:tail={glowTail && !centered && !focused && !agy.busy && !voiceRecording}
       style:--agy-ring-a={ringHold}
-      class:drag={draggingOver}
+      class:drag={draggingOver || drag.overKey === 'agy-composer'}
+      class:drop-cand={Boolean(sideDragCand?.ok)}
       onclick={onBoxClick}
-      use:dropZone={agentDropZone('agy', { label: t('挂进这个对话') })}
-      ondragover={(ev) => { ev.preventDefault(); draggingOver = true; }}
-      ondragleave={() => { draggingOver = false; }}
+      use:dropZone={composerDropZone}
+      ondragover={onDragOver}
+      ondragleave={onDragLeave}
       ondrop={onDrop}
     >
+      {#if sideDragCand && (draggingOver || drag.overKey === 'agy-composer' || sideDragCand.ok)}
+        <div class="agy-drop-hint" class:over={draggingOver || drag.overKey === 'agy-composer'} class:muted={!sideDragCand.ok} aria-hidden="true">
+          <span>{sideDragCand.hint}</span>
+        </div>
+      {/if}
       {#if agy.draftAtts.length > 0}
         <div class="agy-att-strip">
           {#each agy.draftAtts as att, ai (att.url || att.path || 'n' + ai)}
@@ -449,19 +718,38 @@
         </div>
       {/if}
 
-      <textarea
-        bind:this={textareaEl}
-        use:glowCaret={agy.draftText}
-        class="agy-cbox-input"
-        rows="1"
-        value={agy.draftText}
-        placeholder={centered ? t('让 Antigravity 做点什么…') : t('继续对话，键入 / 使用命令')}
-        onfocus={() => { focused = true; }}
-        onblur={() => { focused = false; }}
-        oninput={onInput}
-        onkeydown={onKeyDown}
-        onpaste={onPaste}
-      ></textarea>
+      <div class="agy-input-wrap">
+        <textarea
+          bind:this={textareaEl}
+          use:glowCaret={agy.draftText}
+          class="agy-cbox-input"
+          data-sel-composer
+          rows="1"
+          value={agy.draftText}
+          placeholder={centered ? t('让 Antigravity 做点什么…') : t('继续对话，键入 / 使用命令')}
+          onfocus={() => { focused = true; }}
+          onblur={() => { focused = false; }}
+          oninput={onInput}
+          onkeydown={onKeyDown}
+          onpaste={onPaste}
+        ></textarea>
+
+        <!-- 录音态同位 HUD：与 textarea 重合零高度跳变 -->
+        <div class="voice-top-hud" aria-live="polite" aria-hidden={!voiceRecording}>
+          <span class="vh-dot"></span>
+          <span class="vh-time">{voiceTimerText}</span>
+          <canvas bind:this={waveCanvasEl} class="vh-wave-canvas"></canvas>
+          <span class="vh-hint">
+            <span class="vh-chev" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9.8 4L5.8 8l4 4" />
+                <path d="M13.2 4L9.2 8l4 4" opacity="0.45" />
+              </svg>
+            </span>
+            <span>{voiceCancelArmed ? t('松手取消') : t('左滑取消')}</span>
+          </span>
+        </div>
+      </div>
 
       <div class="agy-cbox-bar">
         <input
@@ -480,66 +768,82 @@
           class="agy-hidden-file"
           onchange={onPickFiles}
         />
-        <button
-          bind:this={addBtnEl}
-          type="button"
-          class="agy-bar-icon"
-          class:on={attachMenuOpen}
-          onclick={onAddClick}
-          title={t('添加图片或文件')}
-          aria-label={t('添加图片或文件')}
-        >
-          <span class="msr4">add</span>
-        </button>
+        <div class="bar-left-wrap">
+          <div class="bar-left">
+            <button
+              bind:this={addBtnEl}
+              type="button"
+              class="agy-bar-icon"
+              class:on={attachMenuOpen}
+              onclick={onAddClick}
+              title={t('添加图片或文件')}
+              aria-label={t('添加图片或文件')}
+            >
+              <span class="msr4">add</span>
+            </button>
 
-        <div class="bar-chips">
-          <!-- 模型 + 思考深度：一组两个入口，档位是紧跟模型名的淡色调用原名，各自弹自己的小菜单 -->
-          <span class="model-grp" class:on={agy.sheetKind === 'model' || agy.sheetKind === 'effort'}>
-            <button
-              type="button"
-              class="agy-chip model"
-              class:on={agy.sheetKind === 'model'}
-              onclick={(e) => openPop('model', e.currentTarget)}
-              title={t('模型')}
-            >
-              <BrandLogo logo={brandLogoOfModel(activeModelId)} name={activeModelShort} size={layout.compact ? 17 : 15} plain />
-              <span class="chip-txt">{activeModelShort}</span>
-            </button>
-            {#if activeThought}
-              <button
-                type="button"
-                class="effort-txt"
-                class:on={agy.sheetKind === 'effort'}
-                onclick={(e) => openPop('effort', e.currentTarget)}
-                title={t('思考深度')}
-              >{activeThought.name}</button>
-            {/if}
+            <div class="bar-chips">
+              <!-- 模型 + 思考深度：一组两个入口，档位是紧跟模型名的淡色调用原名，各自弹自己的小菜单 -->
+              <span class="model-grp" class:on={agy.sheetKind === 'model' || agy.sheetKind === 'effort'}>
+                <button
+                  type="button"
+                  class="agy-chip model"
+                  class:on={agy.sheetKind === 'model'}
+                  onclick={(e) => openPop('model', e.currentTarget)}
+                  title={t('模型')}
+                >
+                  <BrandLogo logo={brandLogoOfModel(activeModelId)} name={activeModelShort} size={layout.compact ? 17 : 15} plain />
+                  <span class="chip-txt">{activeModelShort}</span>
+                </button>
+                {#if activeThought}
+                  <button
+                    type="button"
+                    class="effort-txt"
+                    class:on={agy.sheetKind === 'effort'}
+                    onclick={(e) => openPop('effort', e.currentTarget)}
+                    title={t('思考深度')}
+                  >{activeThought.name}</button>
+                {/if}
+              </span>
+              {#if showDevice}
+                <!-- 电脑：这个会话连着哪台（它要看屏幕、动你的电脑时用哪台）；贴着芯片弹小菜单，同模型 / 档位 -->
+                <button
+                  type="button"
+                  class="agy-chip dev"
+                  class:on={agy.sheetKind === 'device'}
+                  onclick={(e) => openPop('device', e.currentTarget)}
+                  title={t('电脑：{name}', { name: devLabel })}
+                  aria-label={t('电脑：{name}', { name: devLabel })}
+                >
+                  <span class="msr dev-ic" aria-hidden="true">desktop_windows</span>
+                  <span class="chip-txt dev-txt">{devLabel}</span>
+                  <span class="dev-dot {devTone}" aria-hidden="true"></span>
+                </button>
+              {/if}
+            </div>
+          </div>
+          <span class="bar-voice-sub" aria-hidden={!voiceRecording}>
+            {voiceCancelArmed ? t('松手取消，不会发送') : t('松开发送 · Gemini 原生音频')}
           </span>
-          {#if showDevice}
-            <!-- 电脑：这个会话连着哪台（它要看屏幕、动你的电脑时用哪台）；贴着芯片弹小菜单，同模型 / 档位 -->
-            <button
-              type="button"
-              class="agy-chip dev"
-              class:on={agy.sheetKind === 'device'}
-              onclick={(e) => openPop('device', e.currentTarget)}
-              title={t('电脑：{name}', { name: devLabel })}
-              aria-label={t('电脑：{name}', { name: devLabel })}
-            >
-              <span class="msr dev-ic" aria-hidden="true">desktop_windows</span>
-              <span class="chip-txt dev-txt">{devLabel}</span>
-              <span class="dev-dot {devTone}" aria-hidden="true"></span>
-            </button>
-          {/if}
         </div>
 
-        <!-- 右端：空闲时只有开口仪表占着发送键的位置；有内容或在跑时发送 / 停止键从仪表里分身出来，把仪表往左挤（AgySendCluster） -->
+        <!-- 右端：空闲时只有开口仪表占着发送键的位置（空框长按开启原生语音输入）；有内容或在跑时发送 / 停止键从仪表里分身出来，把仪表往左挤（AgySendCluster） -->
         <AgySendCluster
+          bind:this={clusterRef}
           show={showAction}
           busy={asStop}
           disabled={!canSend}
+          {voiceEnabled}
           sendLabel={agy.busy ? t('插话') : t('发送')}
           onsend={() => sendAgyMessage()}
           onstop={() => stopAgyTurn()}
+          onGaugeTap={(el) => openPop('mode', el)}
+          onVoiceBegin={handleVoiceBegin}
+          onVoiceCancel={handleVoiceCancel}
+          onVoiceSend={handleVoiceSend}
+          onVoiceState={handleVoiceState}
+          sampleVoiceLevel={(dt, muted) => recorder.sampleLevel(dt, muted)}
+          onVoiceWaveFrame={drawLiveWaveform}
         >
           <button
             type="button"
@@ -549,7 +853,14 @@
             title={gaugeTitle}
             aria-label={gaugeTitle}
           >
-            <AgyGauge size={34} value={ctxPct} fill={gq?.weekly?.usedPct ?? null} dot={gq?.fiveH?.usedPct ?? null} mode={agy.mode || 'default'} />
+            <AgyGauge
+              size={34}
+              value={ctxPct}
+              fill={gq?.weekly?.usedPct ?? null}
+              dot={gq?.fiveH?.usedPct ?? null}
+              mode={agy.mode || 'default'}
+              charge={voicePhase === 'charging' ? voiceCharge : 0}
+            />
           </button>
         </AgySendCluster>
       </div>
@@ -667,6 +978,8 @@
       --agy-ring-a 0.7s cubic-bezier(0.2, 0, 0, 1);
   }
   .agy-cbox.glow.busy { --agy-ring-a: 1; }
+  .agy-cbox.glow.recording { --agy-ring-a: 0.78; }
+  .agy-cbox.glow.cancel-armed { --agy-ring-a: 0.16; }
   .agy-cbox.glow::before,
   .agy-cbox.glow::after {
     content: '';
@@ -695,6 +1008,16 @@
     filter: blur(18px);
     opacity: 0.7;
   }
+  .agy-cbox.glow.recording::after {
+    filter: blur(16px);
+    opacity: 0.46;
+  }
+  .agy-cbox.glow.cancel-armed::after {
+    opacity: 0.08;
+  }
+  .agy-cbox.cancel-armed {
+    box-shadow: inset 0 0 0 1px var(--ag-err-bd);
+  }
   .agy-cbox.glow.tail::before,
   .agy-cbox.glow.tail::after {
     animation: agy-halo-out 0.7s cubic-bezier(0.2, 0, 0, 1) forwards;
@@ -720,6 +1043,9 @@
     box-shadow: 0 3px 6px -2px rgba(0, 0, 0, 0.08), 0 16px 28px -8px rgba(0, 0, 0, 0.14);
   }
 
+  .agy-input-wrap {
+    position: relative;
+  }
   .agy-cbox-input {
     display: block;
     width: 100%;
@@ -735,16 +1061,158 @@
     font: inherit;
     font-size: 15px;
     line-height: 1.5;
+    transition: opacity 0.16s var(--ag-ease-accel, cubic-bezier(0.3, 0, 0.8, 0.15)), transform 0.2s var(--ag-ease-std);
   }
   .centered .agy-cbox-input { padding-top: 15px; min-height: 46px; }
   .agy-cbox-input::placeholder { color: var(--ag-cbox-ph); }
+  .agy-cbox.recording .agy-cbox-input {
+    opacity: 0;
+    transform: translateY(-3px);
+    pointer-events: none;
+  }
+
+  /* 录音态同位 HUD：与 textarea 重合零布局抖动 */
+  .voice-top-hud {
+    position: absolute;
+    inset: 0;
+    padding: 13px 18px 4px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(5px);
+    transition: opacity 0.14s cubic-bezier(0.3, 0, 0.8, 0.15), transform 0.18s cubic-bezier(0.3, 0, 0.8, 0.15);
+  }
+  .centered .voice-top-hud { padding-top: 15px; }
+  .agy-cbox.recording .voice-top-hud {
+    opacity: 1;
+    transform: translateY(0);
+    transition: opacity 0.24s var(--ag-ease-decel) 0.06s, transform 0.3s var(--ag-ease-decel) 0.04s;
+  }
+  .vh-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--ag-accent);
+    flex: none;
+    transition: background-color 0.16s, transform 0.16s;
+    animation: agy-vh-pulse 1.5s ease-in-out infinite;
+  }
+  .agy-cbox.cancel-armed .vh-dot {
+    background: var(--ag-err);
+    animation: none;
+    transform: scale(0.85);
+  }
+  @keyframes agy-vh-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.35; transform: scale(0.76); }
+  }
+  .vh-time {
+    font-size: 14.5px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+    color: var(--ag-on);
+    flex: none;
+    min-width: 38px;
+    transition: color 0.16s;
+  }
+  .agy-cbox.cancel-armed .vh-time { color: var(--ag-err); }
+  .vh-wave-canvas {
+    flex: 1;
+    min-width: 60px;
+    height: 22px;
+    display: block;
+    transition: opacity 0.18s;
+  }
+  .agy-cbox.cancel-armed .vh-wave-canvas { opacity: 0.28; }
+  .vh-hint {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 12.5px;
+    color: var(--ag-on-dim);
+    white-space: nowrap;
+    transition: color 0.16s;
+  }
+  .agy-cbox.cancel-armed .vh-hint {
+    color: var(--ag-err);
+    font-weight: 500;
+  }
+  .vh-chev {
+    display: inline-flex;
+    align-items: center;
+    opacity: 0.72;
+    animation: agy-vh-slide 1.6s var(--ag-ease-std) infinite;
+  }
+  .agy-cbox.cancel-armed .vh-chev {
+    animation: none;
+    opacity: 0;
+    width: 0;
+    overflow: hidden;
+  }
+  @keyframes agy-vh-slide {
+    0%, 100% { transform: translateX(2px); opacity: 0.45; }
+    50% { transform: translateX(-3px); opacity: 0.95; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .vh-dot, .vh-chev { animation: none; }
+  }
 
   .agy-cbox-bar {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 4px;
     padding: 6px 8px 8px;
     min-width: 0;
+  }
+  .bar-left-wrap {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+  }
+  .bar-left {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    overflow: hidden;
+    transition: opacity 0.14s cubic-bezier(0.3, 0, 0.8, 0.15), transform 0.2s var(--ag-ease-std);
+  }
+  .agy-cbox.recording .bar-left {
+    opacity: 0;
+    transform: translateX(-8px);
+    pointer-events: none;
+  }
+  .bar-voice-sub {
+    position: absolute;
+    left: 10px;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%) translateX(6px);
+    font-size: 12px;
+    color: var(--ag-on-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.14s cubic-bezier(0.3, 0, 0.8, 0.15), transform 0.22s var(--ag-ease-decel), color 0.16s;
+  }
+  .agy-cbox.recording .bar-voice-sub {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+    transition: opacity 0.22s var(--ag-ease-decel) 0.08s, transform 0.28s var(--ag-ease-decel) 0.06s, color 0.16s;
+  }
+  .agy-cbox.cancel-armed .bar-voice-sub { color: var(--ag-err); }
+  @container agy-cbox (max-width: 350px) {
+    .bar-voice-sub { opacity: 0 !important; }
   }
   .bar-chips {
     flex: 1;
@@ -921,6 +1389,35 @@
     cursor: default;
   }
 
+  .agy-cbox.drop-cand {
+    box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ag-accent) 48%, transparent), var(--ag-cbox-shadow);
+  }
+  .agy-cbox.drag {
+    box-shadow: 0 0 0 2px var(--ag-accent), var(--ag-cbox-shadow);
+  }
+  .agy-drop-hint {
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    border-radius: inherit;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    background: color-mix(in srgb, var(--ag-cbox-bg) 78%, transparent);
+    backdrop-filter: blur(2px);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ag-accent);
+    transition: background 0.14s, opacity 0.14s;
+  }
+  .agy-drop-hint.over {
+    background: color-mix(in srgb, var(--ag-accent-soft) 72%, var(--ag-cbox-bg));
+  }
+  .agy-drop-hint.muted {
+    color: var(--ag-on-dim);
+  }
+
   @media (max-width: 599px) {
     .agy-composer-area { padding-left: 10px; padding-right: 10px; }
   }
@@ -937,7 +1434,9 @@
      底栏内缩 8 时 40 的圆钮正好与外角同心（28 − 8 = 20） */
   :global(.agy-root.ag-compact) .agy-cbox { border-radius: 28px; }
   :global(.agy-root.ag-compact) .agy-cbox-input { font-size: 17px; padding: 17px 22px 4px; }
+  :global(.agy-root.ag-compact) .voice-top-hud { padding: 17px 22px 4px; }
   :global(.agy-root.ag-compact) .agy-cbox-bar { padding: 6px 8px 8px; gap: 2px; }
+  :global(.agy-root.ag-compact) .bar-left { gap: 2px; }
   :global(.agy-root.ag-compact) .agy-bar-icon { width: 40px; height: 40px; }
   :global(.agy-root.ag-compact) .agy-bar-icon .msr4 { font-size: 24px; }
   :global(.agy-root.ag-compact) .agy-chip { height: 36px; font-size: 13px; gap: 4px; padding: 0 3px 0 4px; }

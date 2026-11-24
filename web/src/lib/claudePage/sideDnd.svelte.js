@@ -58,8 +58,8 @@ export function createSideDnd(pc) {
     dropDone = false;
     try {
       e.dataTransfer.setData(SIDE_DT, JSON.stringify({ kind: rec.kind, id: rec.id }));
-      // 会话：落在正文区＝move（分屏/换格）；项目：只在侧栏里换位置
-      e.dataTransfer.effectAllowed = rec.kind === 'project' ? 'move' : 'copyMove';
+      // 会话：分屏/打开/引用；项目：侧栏排序或拖入输入栏引用文件夹
+      e.dataTransfer.effectAllowed = 'copyMove';
     } catch {}
     dragGhost(e, rec.title, rec.kind);
     // dragstart 里同步改 DOM（落点层显形、项目组收起）会让 Chromium 当场取消这次拖拽——下一拍再动
@@ -71,7 +71,7 @@ export function createSideDnd(pc) {
   }
   function onProjDragStart(e, p) {
     if (!mouseDnd) { e.preventDefault(); return; }
-    startSide(e, { kind: 'project', id: p.id, title: tr(p.name) });
+    startSide(e, { kind: 'project', id: p.id, path: p.path || '', title: tr(p.name) });
   }
   // 会话拖到侧栏【另一条会话】上松手＝切到那条并引用拖着的这段（手指那套见 sessionDrop）。
   // 那一条正开在分屏另一格里就引用进那一格，不把它抢到本页来。
@@ -204,14 +204,16 @@ export function createSideDnd(pc) {
     reorderProject(rec.id, at);
   }
   // 手指：长按项目行拿起（全站同一套门槛与手感），整张项目列表是一个落点，插入位跟着手指的纵坐标走。
+  // 原地按住再松手＝项目菜单，开在松手点（项目行没有 ⋮，这是触屏上唯一的入口，同 agy 侧栏文件夹）。
   let touchProj = $state(null);    // 手指拎着的项目 id
   const hold = makeHold();
   function projHoldDown(e, p) {
     if (e.pointerType === 'mouse' || IS_CSNAP) return;
     hold.arm(e, (f) => {
-      const ok = beginDrag({ type: 'claude-project', id: p.id, name: p.name }, {
+      const ok = beginDrag({ type: 'claude-project', id: p.id, name: p.name, path: p.path || '' }, {
         x: f.x, y: f.y, pointerId: f.pointerId, pointerType: f.pointerType, sourceEl: f.el,
         ghost: { name: tr(p.name), isDir: true },
+        onStay: (pt) => pc.openMenu({ clientX: pt.clientX, clientY: pt.clientY }, 'project', p.id),
       });
       if (ok) touchProj = p.id;
     });
@@ -244,7 +246,7 @@ export function createSideDnd(pc) {
   $effect(() => { if (!drag.on && touchSess) touchSess = null; });
   let drawerEl = $state();
   $effect(() => {
-    if (!touchSess || pc.wide || !ui.drawerOpen || !drawerEl) return;
+    if (!(touchSess || touchProj) || pc.wide || !ui.drawerOpen || !drawerEl) return;
     const x = drag.x;
     const r = untrack(() => drawerEl.getBoundingClientRect());
     if (x > r.right + 6) untrack(pc.closeDrawer);
@@ -260,7 +262,8 @@ export function createSideDnd(pc) {
   };
   // 手指拖着时插入线跟着 drag.y 走（drag 是 $state，这里读 DOM 几何只为换算位置）
   const touchIns = $derived(touchProj && drag.overKey === 'claude-proj-order' ? insIndexAt(listAt(drag.x, drag.y), drag.y) : -1);
-  const projDragging = $derived(sideDrag?.kind === 'project' || !!touchProj);
+  // 手指拎起项目后真挪了才收起会话行：长按现在也是开菜单的手势，原地按住时整列一收一放会闪一下
+  const projDragging = $derived(sideDrag?.kind === 'project' || (!!touchProj && drag.moved));
   const insShown = $derived(touchProj ? touchIns : insAt);
   const liftedId = $derived(sideDrag?.id || touchProj || touchSess || null);
 

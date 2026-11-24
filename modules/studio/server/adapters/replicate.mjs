@@ -566,6 +566,7 @@ export const CARDS = {
     kind: 'music', label: 'MiniMax Music 2.5', desc: '整首歌（可带人声）。正文写曲风、情绪、场景；要唱的词填「歌词」（用 [Verse] [Chorus] 等标签分段）', async: true,
     inputs: { text: true }, wire: { text: 'prompt' },
     params: MUSIC25_PARAMS,
+    legacyKeys: ['audio_format'],   // 旧写法，搬进 output_format（不是没生效）
     normalize(raw = {}, ctx = {}) {
       const r = { ...(raw || {}) };
       if ((r.output_format === undefined || r.output_format === null || r.output_format === '') && r.audio_format != null) r.output_format = r.audio_format;

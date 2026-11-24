@@ -11,7 +11,7 @@ function curModel(run) {
 // 插件订阅的 turn.start / turn.end（plugins/events.mjs）：从这一轮的事件流里看——每个 gen 一轮（挂起接力会换 gen），
 // 头一个事件发 turn.start，done / interrupted / error 发 turn.end（各一次）。预热占位轮没有消息，不发。
 export function pluginTap(run, obj) {
-  const { sessionId, effort, source, ctx, isSpare } = run.plan;
+  const { sessionId, effort, source, ctx, isSpare, viaAgent } = run.plan;
   try {
     if (!obj || !run.gen) return;
     let t = run.evTurns.get(run.gen);
@@ -22,7 +22,7 @@ export function pluginTap(run, obj) {
       emitBridgeEvent('turn.start', {
         agent: 'claude', kind: 'chat', owner: eventOwner(ctx), sessionId: t.sid, isNew: !sessionId,
         model: curModel(run), effort: effort || '', source: source || '', cwd: ctx.cwd || '',
-        message: eventClip(run.turnText || '', 4000),
+        message: eventClip(run.turnText || '', 4000), ...(viaAgent ? { via: viaAgent } : {}),
       });
     }
     if (obj.sessionId && !t.sid) t.sid = obj.sessionId;
@@ -34,7 +34,7 @@ export function pluginTap(run, obj) {
         model: curModel(run), ok: obj.type === 'done' && !obj.isError, stopped: obj.type === 'interrupted',
         ...(obj.type === 'error' ? { error: eventClip(obj.message || obj.title || '', 1000) } : {}),
         result: obj.type === 'done' ? eventClip(obj.result || '', 8000) : '',
-        costUsd: obj.type === 'done' ? Number(obj.cost) || 0 : 0, durationMs: Date.now() - t.t0, tools: [...t.tools],
+        costUsd: obj.type === 'done' ? Number(obj.cost) || 0 : 0, durationMs: Date.now() - t.t0, tools: [...t.tools], ...(viaAgent ? { via: viaAgent } : {}),
       });
     }
   } catch {}

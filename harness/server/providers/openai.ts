@@ -3,7 +3,8 @@ import type { Block, Msg, Turn } from "../agent/turn.ts";
 import type { StreamEvent, StopReason } from "../agent/events.ts";
 import type { AdapterConfig, Capabilities, ProviderAdapter } from "./types.ts";
 import { readSSE } from "./sse.ts";
-import { httpErrorEvent, streamErrorEvent } from "./classify.ts";
+import { httpErrorEvent, rejectsReasoningReplay, streamErrorEvent } from "./classify.ts";
+import { deltaDetails, replayDetails } from "./reasoning-details.ts";
 import { observeWire } from "./wire-fingerprint.ts";
 import { fetchReconnect } from "../net-proxy.ts";
 import { TOOL_PROGRESS_EVERY_MS } from "./anthropic.ts";
@@ -15,6 +16,17 @@ import { applyCustomParams } from "../custom-params.ts";
 
 // 必须思考的型号上，旁路请求在输出上限之外多给的推理余量（实测最低档的推理用量在一百到几百 token）
 const SIDE_REASONING_HEADROOM = 2048;
+
+// OpenAI 自家的端点（含 Azure）：消息上的生字段（reasoning_content）一律 400
+const OPENAI_OFFICIAL_RE = /(?:^|\.)openai(?:\.azure)?\.com$/i;
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
 
 const DEFAULTS = {
   contextWindow: 128_000,
@@ -57,16 +69,36 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
   // 有的 400，有的接不上调工具前想好的东西）；按档位表发的「不发参数也会思考」的型号、服务上打开了「回传思考」的同样回传。
   // 厂商 id 只兜底型号表不认识的型号（Kimi / MiMo 直连的新型号先照官方要求回传）。
   // 开源权重的 Qwen3.8-Flash-Next：chat template 默认 preserve_thinking，不回传就渲染成空思考，服务端前缀缓存从上一条回复起作废。
+  // 服务上的「回传思考」：undefined = 没声明（自动），false = 用户明确关掉
+  const declaredReplay = custom ? custom.replayReasoning : host?.replayReasoning;
   const replayReasoning =
     Boolean(replay) ||
     Boolean((custom ? custom.model : hosted)?.alwaysThinks) ||
-    Boolean(custom ? custom.replayReasoning : host?.replayReasoning) ||
+    declaredReplay === true ||
     (!MK.tableEntry(cfg.model) && (cfg.provider === "kimi" || cfg.provider === "mimo"));
   // 没有思考原文的工具轮也带空串：只给 DeepSeek（思考模式下带工具调用的历史轮缺 reasoning_content 就 400，会话中途开思考、
   // 从别家换过来的都恢复不了；关思考时带着也无害——实测）；别家不带也照收，不去动它们的请求体
   const replayEmpty = replayReasoning && MK.tableEntry(cfg.model)?.think === "deepseek";
+  // 型号表不认识的型号：历史里出自 reasoning_content 的思考原样回传（这条线路的流里给过它，多半也收它；不回传的话工具续轮
+  // 接不上调用前想好的东西）。只在服务没声明时自动这么做——明确关掉的（例如收到 reasoning_content 就 400 的线路）不发；
+  // OpenAI 官方端点不收消息上的生字段，不发
+  const upstream = custom ? custom.upstreamHost ?? "" : host?.upstreamHost || hostOf(baseUrl);
+  const replaySeen = declaredReplay === undefined && !replayReasoning && !MK.tableEntry(cfg.model) && !OPENAI_OFFICIAL_RE.test(upstream);
+  // 并行工具调用：默认不并行的线路显式打开（百炼的 parallel_tool_calls 默认 false、llama.cpp 的 llama-server 同样默认 false，
+  // 不发就一轮只出一个调用）。别的线路默认就允许，不发这个字段（有的端点不认）
+  const sendParallel =
+    route === "dashscope" ||
+    cfg.provider === "qwen" ||
+    (cfg.provider === "local" && !strataVariantOf(cfg.model)) ||
+    (Boolean(custom) && MK.isLocalHost(upstream));
   // 按档位表发的型号：自定义服务的，或托管在自带厂商服务里的别家型号
   const tiered = custom ? custom.model : hosted;
+  // OpenRouter 的 reasoning_details（reasoning-details.ts）：带工具调用的回合原样回传才接得上推理。认得出是 OpenRouter 的线路回传；
+  // 经本机网关、拿不到上游身份的自定义服务按「响应里出现过」决定（思考块上记着 details 才有东西可传）。明确关掉回传思考的不传
+  const replayDetailsOn = declaredReplay !== false && (route === "openrouter" || (Boolean(custom) && !upstream));
+  // 端点因为回传的思考字段拒收过（火山方舟这类见到 reasoning_content 就 400）：这个会话之后都不再回传（只在这个适配器里记，
+  // 不改服务配置；换型号 / 重启后重建适配器会再试一次）
+  let replayRefused = false;
 
   return {
     id: cfg.provider,
@@ -82,7 +114,8 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
           return;
         }
       }
-      let body = encode(turn, cfg.model, capabilities, replayReasoning, replayEmpty);
+      const replayOk = !replayRefused;
+      let body = encode(turn, cfg.model, capabilities, replayReasoning && replayOk, replayEmpty && replayOk, replaySeen && replayOk, replayDetailsOn && replayOk);
       const level = turn.budget.thinking ?? "off";
       const on = level !== "off";
       // Each OpenAI-compatible vendor gates reasoning differently — these mirror
@@ -205,22 +238,38 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
         body.max_completion_tokens = body.max_tokens;
         delete body.max_tokens;
       }
+      if (sendParallel && Array.isArray(body.tools) && body.tools.length && body.parallel_tool_calls === undefined) body.parallel_tool_calls = true;
       observeWire(turn, "openai", body);
       const url = `${baseUrl}/chat/completions`;
-      const res = await fetchReconnect(url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          // 自定义服务：鉴权方式（Bearer / 无……）和自定义请求头按服务设置
-          ...(custom ? custom.headers : { authorization: `Bearer ${cfg.apiKey}` }),
-        },
-        body: JSON.stringify(body),
-        signal,
-        ...(custom?.noRedirect ? { redirect: "error" as const } : {}),
-      });
+      const send = () =>
+        fetchReconnect(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            // 自定义服务：鉴权方式（Bearer / 无……）和自定义请求头按服务设置
+            ...(custom ? custom.headers : { authorization: `Bearer ${cfg.apiKey}` }),
+          },
+          body: JSON.stringify(body),
+          signal,
+          ...(custom?.noRedirect ? { redirect: "error" as const } : {}),
+        });
+      let res = await send();
+      let raw: string | null = null;
+      // 回传的思考字段被拒（classify.ts rejectsReasoningReplay）：这个会话之后不再回传，去掉这些字段重发一次
+      if (!res.ok && hasReplayedReasoning(body)) {
+        raw = await safeText(res);
+        if (rejectsReasoningReplay(res.status, raw)) {
+          replayRefused = true;
+          stripReplayedReasoning(body);
+          console.log(`[openai] ${hostOf(url) || "endpoint"} (${cfg.model}) rejected replayed reasoning (HTTP ${res.status}) — not replaying it for the rest of this session; retrying once`);
+          observeWire(turn, "openai", body, "replay-refused"); // 历史的编码变了：报备给前缀判定器
+          res = await send();
+          raw = null;
+        }
+      }
 
       if (!res.ok || !res.body) {
-        let raw = await safeText(res);
+        raw ??= await safeText(res);
         if (cfg.provider === "mimo" && cfg.model === "mimo-v2.6-pro-ultraspeed" &&
             res.status === 400 && /not supported model/i.test(raw)) {
           raw = "当前 MiMo API 端点或密钥未开放 UltraSpeed。请在设置中配置有 UltraSpeed 权限的 API Key/地址，或选择普通 Pro / Flash。\n" + raw;
@@ -287,8 +336,15 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
         // DeepSeek-reasoner and some compatible endpoints stream reasoning here.
         // D11：OpenRouter / 部分 vLLM、Ollama 版本用 delta.reasoning（字符串）或 reasoning_details[].text——同一块只取一种，别重复。
         const reasoning = reasoningText(delta);
-        if (reasoning) {
-          yield { e: "thinking_delta", text: reasoning };
+        // OpenRouter 的结构化条目原样收下（加密条目没有明文，也要收：回传时缺了它推理就断）
+        const details = deltaDetails(delta);
+        if (reasoning || details.length) {
+          yield {
+            e: "thinking_delta",
+            text: reasoning,
+            ...(typeof delta.reasoning_content === "string" && delta.reasoning_content ? { wire: "reasoning_content" as const } : {}),
+            ...(details.length ? { details } : {}),
+          };
         }
 
         if (Array.isArray(delta.tool_calls)) {
@@ -296,7 +352,7 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
             const idx = tc.index ?? 0;
             let slot = toolCalls.get(idx);
             if (!slot) {
-              slot = { id: tc.id ?? `call_${idNonce}_${idx}`, name: "", argsBuf: "" };
+              slot = { id: tc.id || `call_${idNonce}_${idx}`, name: "", argsBuf: "" };
               toolCalls.set(idx, slot);
             }
             if (tc.id) slot.id = tc.id;
@@ -319,7 +375,11 @@ export function createOpenAIAdapter(cfg: AdapterConfig): ProviderAdapter {
       // Flush accumulated tool calls once the stream is complete. Malformed
       // argument JSON (truncated stream, model glitch) is NOT silently swallowed
       // into {} — the loop feeds the parse error back so the model can re-issue.
-      for (const [, slot] of [...toolCalls.entries()].sort((a, b) => a[0] - b[0])) {
+      // 同一次响应里 id 重复（有的端点每个调用都回同一个 id）就给后来的重新编号：tool 结果按 id 配对，重复了配不上
+      const seenIds = new Set<string>();
+      for (const [idx, slot] of [...toolCalls.entries()].sort((a, b) => a[0] - b[0])) {
+        if (seenIds.has(slot.id)) slot.id = `call_${idNonce}_${idx}`;
+        seenIds.add(slot.id);
         let args: Record<string, unknown> = {};
         let argsError: string | undefined;
         try {
@@ -389,13 +449,25 @@ function mapStop(reason: string): StopReason {
 
 // ── Encode neutral Turn -> OpenAI Chat Completions request body ──────────────
 
-function encode(turn: Turn, model: string, caps: Capabilities, replayReasoning = false, replayEmpty = false) {
+// 请求体里有没有回传的思考字段；去掉它们（端点拒收时的退路）
+function hasReplayedReasoning(body: Record<string, unknown>): boolean {
+  return Array.isArray(body.messages) && body.messages.some((m: any) => m && ("reasoning_content" in m || "reasoning_details" in m));
+}
+function stripReplayedReasoning(body: Record<string, unknown>): void {
+  for (const m of Array.isArray(body.messages) ? (body.messages as any[]) : []) {
+    if (!m || typeof m !== "object") continue;
+    delete m.reasoning_content;
+    delete m.reasoning_details;
+  }
+}
+
+function encode(turn: Turn, model: string, caps: Capabilities, replayReasoning = false, replayEmpty = false, replaySeen = false, replayDetailsOn = false) {
   const messages: any[] = [];
 
   const system = systemString(turn.system);
   if (system) messages.push({ role: "system", content: system });
 
-  for (const m of turn.messages) messages.push(...encodeMsg(m, replayReasoning, replayEmpty));
+  for (const m of turn.messages) messages.push(...encodeMsg(m, replayReasoning, replayEmpty, replaySeen, replayDetailsOn));
 
   const body: Record<string, unknown> = {
     model,
@@ -425,7 +497,7 @@ function systemString(system: Turn["system"]): string {
 // One neutral message can expand into several OpenAI messages: tool_result
 // blocks must become their own `role:"tool"` messages (OpenAI has no neutral
 // tool role — results ride in a user message in our model).
-function encodeMsg(m: Msg, replayReasoning = false, replayEmpty = false): any[] {
+function encodeMsg(m: Msg, replayReasoning = false, replayEmpty = false, replaySeen = false, replayDetailsOn = false): any[] {
   const out: any[] = [];
   const toolResults = m.content.filter((b) => b.t === "tool_result");
   const rest = m.content.filter((b) => b.t !== "tool_result");
@@ -440,7 +512,7 @@ function encodeMsg(m: Msg, replayReasoning = false, replayEmpty = false): any[] 
       // but replayed as reasoning_content where the vendor mandates it (Kimi's
       // K2.7 Preserved Thinking / K3 tool loops).
       else if (b.t === "thinking") {
-        if (replayReasoning && b.text) thinkParts.push(b.text);
+        if ((replayReasoning || (replaySeen && b.wire === "reasoning_content")) && b.text) thinkParts.push(b.text);
       } else if (b.t === "tool_call") {
         toolCalls.push({
           id: b.id,
@@ -462,10 +534,20 @@ function encodeMsg(m: Msg, replayReasoning = false, replayEmpty = false): any[] 
     // "set", so only leave content null when tool_calls carry the message.
     msg.content = textParts.join("") || (toolCalls.length ? null : "");
     // DeepSeek：带工具调用的轮没有思考原文（别家留下的、关思考时产生的）也要带空串，缺了就 400
-    if (thinkParts.length || (replayEmpty && toolCalls.length)) msg.reasoning_content = thinkParts.join("\n");
+    // 几块思考按流里的样子接起来（旧会话一条消息只有一块，结果不变）
+    if (thinkParts.length || (replayEmpty && toolCalls.length)) msg.reasoning_content = thinkParts.join("");
+    // OpenRouter：reasoning_details 按块的顺序原样接回去（不改、不重排）
+    const details = replayDetailsOn ? replayDetails(rest) : null;
+    if (details) msg.reasoning_details = details;
     if (toolCalls.length) msg.tool_calls = toolCalls;
     out.push(msg);
   } else {
+    // tool_result 块 -> role:"tool" 消息（按 tool_call_id 配对），必须紧跟在带 tool_calls 的 assistant 后面：同一条用户消息里
+    // 结果之后还有正文 / 图时，正文排在 tool 消息之后——排在前面就成了 assistant(tool_calls) → user → tool，严格的端点直接 400
+    for (const b of toolResults) {
+      if (b.t !== "tool_result") continue;
+      out.push({ role: "tool", tool_call_id: b.id, content: toolMessageText(b) });
+    }
     // user: text/image content becomes one user message (if any).
     const parts = rest.map(userPart).filter(Boolean);
     if (parts.length) {
@@ -475,12 +557,6 @@ function encodeMsg(m: Msg, replayReasoning = false, replayEmpty = false): any[] 
         content: onlyText ? parts.map((p: any) => p.text).join("") : parts,
       });
     }
-  }
-
-  // tool_result blocks -> role:"tool" messages, paired by tool_call_id.
-  for (const b of toolResults) {
-    if (b.t !== "tool_result") continue;
-    out.push({ role: "tool", tool_call_id: b.id, content: toolMessageText(b) });
   }
   return out;
 }

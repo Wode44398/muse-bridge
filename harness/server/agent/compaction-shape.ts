@@ -8,6 +8,7 @@
 // 摘要末尾列出归档文件和读法——摘要可以不保真，细节要用时模型自己 Grep / Read 回去。归档列表同样一路带下去。
 import { messageKind } from "./injections.ts";
 import type { Block, Msg } from "./turn.ts";
+import { toolArgStr } from "./tool-input.ts";
 
 export const SUMMARY_HEAD = "[Earlier context summary]";
 const NOTES_PREFIX =
@@ -26,16 +27,35 @@ const MAX_LISTED_ARCHIVES = 12; // 摘要里只列最近这么多个；更早的
 const OMITTED_RE = /^…\((\d+) earlier user messages? omitted\)…$/;
 
 const PER_MESSAGE_TOKENS = 500; // 单条用户原话超过这么多就只留首尾摘录（用户贴进来的大段日志 / 文档）
-const CAPS = { files: 40, commands: 20, errors: 15, ids: 30 } as const;
-type AnchorKind = keyof typeof CAPS;
-export type AnchorIndex = Record<AnchorKind, string[]>;
-const ANCHOR_LABEL: Record<AnchorKind, string> = { files: "Files modified", commands: "Commands run", errors: "Errors seen", ids: "Hashes / URLs / IDs" };
+// 每类锚点的条数上限（窗口 10 万 token 以下的基准；更大的窗口按比例放宽，最多 3 倍，见 anchorCaps）。
+// userIds = 用户消息里出现过的哈希 / URL / ID：单列一类、先于工具输出里的保留（ID 类在压缩召回 eval 里丢得最多）。
+const BASE_CAPS = { files: 40, commands: 20, errors: 15, userIds: 20, ids: 40 } as const;
+type AnchorKind = keyof typeof BASE_CAPS;
+export type AnchorCaps = Record<AnchorKind, number>;
+// userIds 可缺省：C3 之前的旧摘要、调用方手写的四类索引都没有它
+export type AnchorIndex = Record<Exclude<AnchorKind, "userIds">, string[]> & { userIds?: string[] };
+const KINDS = Object.keys(BASE_CAPS) as AnchorKind[];
+const ANCHOR_LABEL: Record<AnchorKind, string> = {
+  files: "Files modified",
+  commands: "Commands run",
+  errors: "Errors seen",
+  userIds: "Hashes / URLs / IDs the user gave",
+  ids: "Hashes / URLs / IDs",
+};
 const EDIT_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+const RESTORE_KIND = "compaction-restore"; // 压缩后回填工作现场的那条（compaction-restore.ts）：文件正文不是锚点来源
+
+// 按压缩窗口放宽锚点上限：大窗口上一条锚点占的比例小，按窗口 / 10 万倍数放宽（1–3 倍）
+export function anchorCaps(window = 0): AnchorCaps {
+  const f = Math.min(3, Math.max(1, window / 100_000));
+  return Object.fromEntries(KINDS.map((k) => [k, Math.round(BASE_CAPS[k] * f)])) as AnchorCaps;
+}
+const anchorsOfKind = (a: AnchorIndex, k: AnchorKind): string[] => (k === "userIds" ? (a.userIds ?? []) : a[k]);
 
 const textOf = (blocks: Block[]): string => blocks.map((b) => (b.t === "text" ? b.text : b.t === "tool_result" ? textOf(b.content) : "")).join("\n");
 const oneLine = (s: string, max: number) => s.replace(/\s+/g, " ").trim().slice(0, max);
 // 按 R9 的口径粗算：ASCII 约 4 个字符 1 token，其余约 1 个字 1 token
-function tokensOf(s: string): number {
+export function tokensOf(s: string): number {
   let wide = 0;
   for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) > 0x7f) wide++;
   return (s.length - wide) / 4 + wide;
@@ -84,9 +104,10 @@ export function parseSummary(text: string): Carried {
   flush();
   let kind: AnchorKind | null = null;
   for (const line of section(ANCHOR_HEADING, true)) {
-    const label = (Object.keys(ANCHOR_LABEL) as AnchorKind[]).find((k) => line === `${ANCHOR_LABEL[k]}:`);
+    const label = KINDS.find((k) => line === `${ANCHOR_LABEL[k]}:`);
     if (label) kind = label;
-    else if (kind && line.startsWith("- ")) out.anchors[kind].push(line.slice(2));
+    else if (kind === "userIds" && line.startsWith("- ")) (out.anchors.userIds ??= []).push(line.slice(2));
+    else if (kind && kind !== "userIds" && line.startsWith("- ")) out.anchors[kind].push(line.slice(2));
   }
   for (const line of section(RECOVERY_HEADING, true)) if (line.startsWith("- ")) out.archives.push(line.slice(2));
   return out;
@@ -188,7 +209,8 @@ export function extractAnchors(messages: Msg[]): AnchorIndex {
     for (const b of m.content) {
       if (b.t === "tool_call") {
         calls.set(b.id, { name: b.name, args: b.args });
-        if (EDIT_TOOLS.has(b.name) && typeof b.args?.path === "string") out.files.push(b.args.path);
+        const edited = EDIT_TOOLS.has(b.name) ? toolArgStr(b.name, b.args, "path") : undefined; // 别名也认（转录是模型原话）
+        if (edited) out.files.push(edited);
         for (const id of idsIn(JSON.stringify(b.args))) out.ids.push(id);
       } else if (b.t === "tool_result") {
         const call = calls.get(b.id);
@@ -202,21 +224,33 @@ export function extractAnchors(messages: Msg[]): AnchorIndex {
         }
         for (const id of idsIn(text.slice(0, 20_000))) out.ids.push(id);
       } else if (b.t === "text" && m.role === "user") {
-        for (const id of idsIn(b.text)) out.ids.push(id);
+        // 用户本人说的（含插话）单列；回填的文件正文不抽；其余注入（召回、上一条摘要……）照旧算一般的 ID
+        const kind = messageKind(m);
+        if (kind === RESTORE_KIND) continue;
+        const ids = idsIn(b.text);
+        if (kind === null || kind === "steer") (out.userIds ??= []).push(...ids);
+        else out.ids.push(...ids);
       }
     }
   }
   return out;
 }
 
-// 先旧后新合并、去重（同一项留最后一次出现的位置），每类只留最近的上限条
-export function mergeAnchors(older: AnchorIndex, newer: AnchorIndex): AnchorIndex {
+// 先旧后新合并、去重（同一项留最后一次出现的位置），每类只留最近的上限条；用户给过的 ID 不在一般 ID 里重复列
+export function mergeAnchors(older: AnchorIndex, newer: AnchorIndex, caps: AnchorCaps = anchorCaps()): AnchorIndex {
   const out = emptyAnchors();
-  for (const k of Object.keys(CAPS) as AnchorKind[]) {
+  for (const k of KINDS) {
     const seen = new Map<string, number>();
-    const all = [...older[k], ...newer[k]];
+    let all = [...anchorsOfKind(older, k), ...anchorsOfKind(newer, k)];
+    if (k === "ids" && out.userIds?.length) {
+      const fromUser = new Set(out.userIds);
+      all = all.filter((v) => !fromUser.has(v));
+    }
     all.forEach((v, i) => seen.set(v, i));
-    out[k] = all.filter((v, i) => seen.get(v) === i).slice(-CAPS[k]);
+    const kept = all.filter((v, i) => seen.get(v) === i).slice(-caps[k]);
+    if (k === "userIds") {
+      if (kept.length) out.userIds = kept;
+    } else out[k] = kept;
   }
   return out;
 }
@@ -245,10 +279,10 @@ export function renderSummary(p: SummaryParts): string {
     lines.push("");
   }
   lines.push(NOTES_HEADING, p.notes.trim());
-  const kinds = (Object.keys(CAPS) as AnchorKind[]).filter((k) => p.anchors[k].length);
+  const kinds = KINDS.filter((k) => anchorsOfKind(p.anchors, k).length);
   if (kinds.length) {
     lines.push("", ANCHOR_HEADING);
-    for (const k of kinds) lines.push(`${ANCHOR_LABEL[k]}:`, ...p.anchors[k].map((v) => `- ${v}`));
+    for (const k of kinds) lines.push(`${ANCHOR_LABEL[k]}:`, ...anchorsOfKind(p.anchors, k).map((v) => `- ${v}`));
   }
   if (p.archives.length) {
     const listed = p.archives.slice(-MAX_LISTED_ARCHIVES);
@@ -259,8 +293,9 @@ export function renderSummary(p: SummaryParts): string {
 
 const archiveFolder = (file: string): string => file.slice(0, Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\")));
 
-// 压缩前准备好（除 LLM 笔记外的）一切：被压掉那段里的用户原话（接上前几次摘要里保留的）、锚点索引（同样接上）
-export function prepareSummary(middle: Msg[], userBudgetTokens: number): Omit<SummaryParts, "notes"> {
+// 压缩前准备好（除 LLM 笔记外的）一切：被压掉那段里的用户原话（接上前几次摘要里保留的）、锚点索引（同样接上）。
+// caps = 锚点上限（按压缩窗口放宽，见 anchorCaps；不给 = 基准）
+export function prepareSummary(middle: Msg[], userBudgetTokens: number, caps: AnchorCaps = anchorCaps()): Omit<SummaryParts, "notes"> {
   let carried: Carried = { userWords: [], omitted: 0, anchors: emptyAnchors(), archives: [] };
   const words: string[] = [];
   for (const m of middle) {
@@ -271,7 +306,7 @@ export function prepareSummary(middle: Msg[], userBudgetTokens: number): Omit<Su
       carried = {
         userWords: [],
         omitted: carried.omitted + prev.omitted,
-        anchors: mergeAnchors(carried.anchors, prev.anchors),
+        anchors: mergeAnchors(carried.anchors, prev.anchors, caps),
         archives: [...carried.archives, ...prev.archives.filter((f) => !carried.archives.includes(f))],
       };
       continue;
@@ -284,7 +319,7 @@ export function prepareSummary(middle: Msg[], userBudgetTokens: number): Omit<Su
     userWords: fitted.kept,
     omitted: fitted.omitted,
     omittedAt: fitted.at,
-    anchors: mergeAnchors(carried.anchors, extractAnchors(middle)),
+    anchors: mergeAnchors(carried.anchors, extractAnchors(middle), caps),
     archives: carried.archives.slice(-MAX_LISTED_ARCHIVES),
   };
 }
@@ -320,6 +355,14 @@ function archiveRecords(messages: Msg[]): string[] {
     const n = i + 1;
     if (messageKind(m) === "compaction-summary") {
       records.push(`### [msg ${n}] earlier compaction summary\n(Its original messages are in the earlier archive files.)`);
+      return;
+    }
+    // 回填的工作现场是磁盘上文件的副本：归档里不再存一遍正文
+    // 只留待批计划那一节：计划不在磁盘上，回填裁掉它之后归档是唯一的回查点
+    if (messageKind(m) === RESTORE_KIND) {
+      const text = m.content.map((b) => (b.t === "text" ? b.text : "")).join("");
+      const plan = /\n\n(## Plan awaiting approval\n[\s\S]*?)(?=\n\n## (?:Background jobs still running|Scheduled wakeups pending|Recently edited files)|$)/.exec(text)?.[1];
+      records.push(`### [msg ${n}] working state re-attached after an earlier compaction\n(Todo list and file contents as they were then; Read the files for their current contents.)${plan ? `\n${plan}` : ""}`);
       return;
     }
     for (const b of m.content) {

@@ -1,6 +1,6 @@
 # Third-party notices
 
-Claude Bridge is licensed under the Apache License, Version 2.0 (see [LICENSE](LICENSE) and [NOTICE](NOTICE)).
+Bridge is licensed under the Apache License, Version 2.0 (see [LICENSE](LICENSE) and [NOTICE](NOTICE)).
 That license covers this project's own code only. The files and packages listed below are distributed under
 their own licenses, reproduced in full where the license requires it.
 

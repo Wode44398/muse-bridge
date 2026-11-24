@@ -199,7 +199,19 @@ const firstPara = (text, max = 260) => {
   const p = String(text || '').split('\n').map((x) => x.trim()).find(Boolean) || '';
   return p.length > max ? p.slice(0, max).replace(/[，,；;。.\s]*$/, '') + '…' : p;
 };
-// 参数表精简：只留结构（类型、枚举、必填），参数说明只留 30 字以内的；batch 单步放宽成对象（字段同单步调用，服务端照常校验）
+// batch 单步的字段骨架：只留字段名与类型（不带说明、不带枚举，单步 action 的枚举另留）。
+// agy 把对象的 properties 当成封闭表：没列的字段一律「additional properties not allowed」，在 agy 那头就拒了，
+// 根本到不了 bridge（11-22 反馈：batch 里写 text / ref / x 全被拦，多步只能一轮一步）。所以字段名一个都不能省。
+function fieldSkeleton(v) {
+  if (!v || typeof v !== 'object') return {};
+  if (Array.isArray(v.anyOf)) return { anyOf: v.anyOf.map(fieldSkeleton) };
+  const out = {};
+  if (v.type) out.type = v.type;
+  if (v.type === 'array') out.items = fieldSkeleton(v.items);
+  if (v.type === 'object' && v.properties) out.properties = Object.fromEntries(Object.entries(v.properties).map(([k, x]) => [k, fieldSkeleton(x)]));
+  return out;
+}
+// 参数表精简：只留结构（类型、枚举、必填），参数说明只留 30 字以内的；batch 单步只留字段骨架（见上）
 function compactSchema(schema) {
   const walk = (o, depth) => {
     if (Array.isArray(o)) return o.map((x) => walk(x, depth));
@@ -213,13 +225,17 @@ function compactSchema(schema) {
   };
   const out = walk(schema, 0);
   // 单步能用哪些动作要留着：设备的批内动作和单步不是同一张表（批里能截图、不能 launch），不留模型只能撞校验
-  const steps = out?.properties?.actions;
+  const steps = schema?.properties?.actions;
   if (steps?.items?.properties) {
-    const stepActions = steps.items.properties.action?.enum;
+    const props = steps.items.properties;
+    const stepActions = props.action?.enum;
+    const fields = Object.fromEntries(Object.entries(props).map(([k, v]) => [k, fieldSkeleton(v)]));
+    if (Array.isArray(stepActions)) fields.action = { type: 'string', enum: stepActions };
     out.properties.actions = {
       type: 'array',
       description: '多步：每步一个对象，字段同单步调用',
-      items: { type: 'object', ...(Array.isArray(stepActions) ? { properties: { action: { type: 'string', enum: stepActions } } } : {}) },
+      items: { type: 'object', properties: fields, ...(steps.items.required ? { required: steps.items.required } : {}) },
+      ...(steps.maxItems ? { maxItems: steps.maxItems } : {}),
     };
   }
   return out;

@@ -9,9 +9,10 @@
 // 2026-11-04 Gemini 对话下线（维护者：「不保留gemini对话了」）：gemini 这一项删掉，媒体生成归 Media Studio（studio）；
 // 名单 / 开关里残留的 gemini 读的时候就地换成 studio（migrateAgentGrant / agent-status 的 normSwitches）。
 //
-// multiUser：这个 agent 能不能开给注册用户（多租户隔离做没做完）。false 的只给管理员——
-//   codex 的工具调用在进程内部执行，绕过 bridge 的沙箱守卫，且共用主机上的登录与会话目录。
+// multiUser：这个 agent 能不能开给注册用户（多租户隔离做没做完）。false 的只给管理员。
 //   dimensio 是每人一个进程、锁在自己文件夹里的租户实例，所以可以。
+//   codex 的工具调用在它自己的进程里执行、绕过 bridge 的沙箱守卫（Windows 上批准后的命令不进沙箱），相当于命令行权限；
+//   会话按各人的 sidecar 归属隔离、审批卡只给本人、工作目录只能在自己的工作空间里、号池只给共享出来的号——所以只给「完全信任」档。
 //   agy 也是每人一个进程（自己的一份会话库 + 工具调用守卫，modules/agy/server/tenants.mjs），但只给「完全信任」档：
 // fullTrust：只能开给完全信任档（有命令行权限）的注册用户。agy 会执行工作目录里 .agents 下的钩子脚本，
 //   这相当于命令行权限——不能经它把命令行给了本来没有的人。
@@ -23,7 +24,7 @@ export const AGENTS = Object.freeze([
   { id: 'claude', label: 'Claude', screen: 'claude', chat: 'claude', multiUser: true },
   // Media Studio（2026-11-04）：媒体创作工作室（图像 / 视频 / 配音 / 音乐）。成员能用的服务 = 自己的 Key + 管理员共享的。
   { id: 'studio', label: 'Media Studio', screen: 'studio', chat: null, multiUser: true, tool: true },
-  { id: 'codex', label: 'ChatGPT · Codex', screen: 'chatgpt', chat: 'codex', multiUser: false },
+  { id: 'codex', label: 'ChatGPT · Codex', screen: 'chatgpt', chat: 'codex', multiUser: true, fullTrust: true },
   { id: 'agy', label: 'Antigravity', screen: 'agy', chat: 'agy', multiUser: true, fullTrust: true },
   // dimensio：2026-09-28 起每个注册用户一个 harness 进程（routes/harness.mjs 实例池 + harness 租户模式），可以按人放行。
   { id: 'dimensio', label: 'dimensio', screen: 'harness', chat: null, multiUser: true },

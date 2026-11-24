@@ -31,6 +31,10 @@ export function stripLegacyBridgeHint(text) {
 // 否则模型会去轮询、或者让用户「过会儿再问我」。
 export const NATIVE_IMAGE_HINT = '- 【生成图片】普通出一张图，用你自带的 image-generator 子代理（invoke_subagent）：把画面要求写清楚交给它，然后直接结束这一轮——它画完的回报会自动送回来让你接着说，不用轮询，也不用请用户再发消息。回报的第一行是图片的绝对路径（存在这个会话自己的产物目录里，不要挪动或改名），回复里用标准 Markdown 链接 [文件名](绝对路径) 交付。';
 
+// agy 收到 ACP image 块后会将其缩放到长边 2000px 并以 JPEG Q85 重编码（丢失透明通道、EXIF 与原文件名）；
+// bridge 已同步把无损原件的绝对路径写进「本轮附加文件路径」，在此说明两条路的选用口径。
+export const ATTACHED_IMAGE_HINT = '- 【附带图片】用户消息若同时带有内联图片与「本轮附加文件路径」中的图片路径，内联图片已经过客户端压缩（长边 2000px JPEG，不含透明通道与 EXIF）；常规看图直接看内联图片即可，不必再读文件。若遇到超长截图/密集小字看不清，或需要处理、搬运、保留透明通道/EXIF、作为参考图传给改图工具时，请直接使用「本轮附加文件路径」里的无损原图路径。';
+
 export const DEFAULT_SYSTEM_PROMPT_APPEND = [
   '- 默认使用简体中文与用户沟通（代码标识符、命令行与专有名词保持原样）。',
   '- 当前会话的工作目录即用户的项目工作空间，读写代码与运行命令默认在此目录内进行；破坏性操作前先向用户确认。',
@@ -151,7 +155,7 @@ function normalizeBridgeTools(raw) {
   };
 }
 
-const DAEMON_PSEUDO_RE = /(?:^|[\\/])agy[\\/]daemon-cwd(?:[\\/]|$)/i;
+const DAEMON_PSEUDO_RE = /(?:^|[\\/])daemon-cwd(?:[\\/]|$)/i;
 
 export function buildEffectiveAgySystemPrompt(settings = {}, {
   hasBridgeTools = false,
@@ -170,6 +174,7 @@ export function buildEffectiveAgySystemPrompt(settings = {}, {
     ? stripLegacyBridgeHint(settings.systemPromptAppend).trim()
     : DEFAULT_SYSTEM_PROMPT_APPEND;
   if (base) parts.push(base);
+  parts.push(ATTACHED_IMAGE_HINT);
   if (builtInTools) parts.push(NATIVE_IMAGE_HINT);
   if (hasBridgeTools) {
     // localCategories：这一轮子进程实际列出的本地工具类别（media / ui / phone）；没传按全开（老调用方）

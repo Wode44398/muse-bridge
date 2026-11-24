@@ -23,9 +23,9 @@ import {
   memoryDir,
   promoteMemory,
   readMemory,
-  renderMemoryForPrompt,
   saveMemory,
 } from "./memory.ts";
+import { renderMemoryForPrompt } from "./memory-index.ts";
 import { Sandbox } from "./sandbox.ts";
 import { dropSession, getOrLoadSession, sessionRecord, type Session } from "./session.ts";
 import { saveSession } from "./store.ts";
@@ -96,9 +96,9 @@ test("K9（X55）读过网页之后，模型写的记忆想生效也先存成 pr
   assert.equal(held.declaredStatus, "proposed", "没有直接生效");
   assert.equal(held.external, true, "记下了它是在读过外部内容的会话里写的");
   assert.ok(held.issues.includes("external-session"));
-  assert.equal(renderMemoryForPrompt(root)?.includes("回复语言") ?? false, false, "不进新会话的提示");
+  assert.match(renderMemoryForPrompt(root) ?? "", /^- 回复语言 — .*\(unconfirmed\)$/m, "新会话的索引里标着待确认");
   const said = resultOf(session, "m1");
-  assert.match(said, /Held as proposed until the user confirms it/);
+  assert.match(said, /Saved as unconfirmed until the user confirms it/);
   assert.match(said, /read external content/);
   assert.match(said, /Saving it again will not change that/, "明说再存一次也没用，别原地打转");
   assert.equal(sessionRecord(session)!.gates.externalContent, true, "标记随会话落盘");
@@ -130,7 +130,7 @@ test("K9（N58）注入特征：模型写的一律 proposed；Recall、索引、
     ctx,
   );
   assert.equal(r.ok, true, text(r));
-  assert.match(text(r), /Held as proposed until the user confirms it: the text matches prompt-injection patterns \(override-instructions\)/);
+  assert.match(text(r), /Saved as unconfirmed until the user confirms it in the memory panel: the text matches prompt-injection patterns \(override-instructions\)/);
   const meta = listMemories(root).find((m) => m.topic === "deploy.prestep")!;
   assert.equal(meta.declaredStatus, "proposed");
   assert.ok(meta.issues.includes("injection-pattern"));

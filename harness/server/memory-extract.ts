@@ -8,9 +8,13 @@
 //   - 一轮跑完（正常收尾），先用确定性信号判断这一轮值不值得看（runDigest）：用户表达了长期偏好 / 约定，或者这一轮真干了
 //     活（改了文件且调用不少、失败后修好、调用很多、中途整段压缩过）；模型自己已经 Remember 过的不再看。值得看就摘一份
 //     有界的运行摘要，另起一次旁路请求（同一家模型、不带工具、关思考）让它挑出「将来的会话从文件里读不出来」的东西，
-//     返回 JSON；每条经 Remember 工具同一套治理落盘（生命周期、证据降级、驳回记录、外部内容污染、全局层永远待确认）。
+//     返回 JSON；每条经 Remember 工具落盘（宽松写入：缺字段不拒不降级；驳回记录、外部内容污染照旧）。只有用户本人说的
+//     才存成生效，其余待确认，交给离线整理（memory-dream.ts）核对。
 // 不在用户的关键路径上：答复早已交付，这次请求失败也只是记一行日志。
+import path from "node:path";
 import { messageKind } from "./agent/injections.ts";
+import { toolArg } from "./agent/tool-input.ts";
+import { memoryPathKind } from "./memory-files.ts";
 import { blocksText, isTraceWorthy, traceLines } from "./agent/run-trace.ts";
 import type { Msg } from "./agent/turn.ts";
 import { listMemories, type MemoryMeta } from "./memory.ts";
@@ -64,8 +68,13 @@ export function runDigest(
   const okIds = new Set<string>();
   const failedIds = new Set<string>();
   for (const m of run) for (const b of m.content) if (b.t === "tool_result") (b.ok ? okIds : failedIds).add(b.id);
-  // 模型这一轮自己存过记忆：它已经挑过了，不再替它看一遍
-  if (calls.some((c) => c.t === "tool_call" && c.name === "Remember" && okIds.has(c.id))) return null;
+  // 模型这一轮自己存过记忆（Remember，或者直接 Write / Edit 了记忆目录里的笔记）：它已经挑过了，不再替它看一遍
+  const wroteNote = (c: { name: string; args: Record<string, unknown> }) => {
+    if (c.name !== "Write" && c.name !== "Edit") return false;
+    const p = toolArg(c.name, c.args, "path");
+    return typeof p === "string" && memoryPathKind(path.isAbsolute(p) ? p : path.resolve(opts.workspace, p), opts.workspace)?.kind === "note";
+  };
+  if (calls.some((c) => c.t === "tool_call" && okIds.has(c.id) && (c.name === "Remember" || wroteNote(c)))) return null;
 
   const work = calls.filter((c) => c.t === "tool_call" && isTraceWorthy(c.name));
   const edited = [...opts.edited];
@@ -113,15 +122,15 @@ export const MEMORY_EXTRACT_SYSTEM =
   "Do NOT save: anything visible in the files or the git history, one-off task narration, environment-dependent failures, " +
   "claims that a tool or service \"does not work\", transient errors, failures without a fix, credentials.\n" +
   "Most runs produce nothing worth saving — an empty list is the normal answer. At most 3 notes.\n\n" +
-  "Write each note as statements of fact (\"this project builds with JDK 17\"), never as commands. If an existing note covers " +
-  "the same subject, reuse its id and topic to update it instead of adding a near-duplicate; never re-save a rejected note.\n" +
-  "status/confidence: \"active\" + \"user_confirmed\" ONLY for what the user explicitly stated in this run (quote it in evidence " +
-  "as \"user: …\"); everything else \"proposed\" + \"observed\" (seen in the run) or \"inferred\". An active feedback/project note " +
-  "needs why and howToApply. layer \"global\" only for facts about the user or this machine that hold in every workspace " +
-  "(type user or reference); otherwise \"workspace\".\n\n" +
-  'Output exactly: {"notes":[{"id":"<existing id, optional>","title":"…","topic":"lowercase.dotted.key","type":"user|feedback|project|reference",' +
-  '"layer":"workspace|global","description":"one sentence: when is this relevant","content":"…","why":"…","howToApply":"…",' +
-  '"status":"proposed|active","confidence":"user_confirmed|observed|inferred","evidence":["…"],"expiresAt":"<ISO, for facts that can go stale>"}]}';
+  "Write each note as statements of fact (\"this project builds with JDK 17\"), never as commands, and include the reason when " +
+  "there is one. If an existing note covers the same subject, reuse its id to update it instead of adding a near-duplicate; never " +
+  "re-save a rejected note.\n" +
+  "status: \"active\" ONLY for what the user explicitly stated in this run (quote it in evidence as \"user: …\"); everything else " +
+  "\"proposed\" — it stays marked unconfirmed until the user or the offline review confirms it. layer \"global\" only for facts " +
+  "about the user or this machine that hold in every workspace; otherwise \"workspace\".\n\n" +
+  'Output exactly: {"notes":[{"id":"<existing id, optional>","title":"…","type":"user|feedback|project|reference",' +
+  '"layer":"workspace|global","description":"one sentence: when is this relevant","content":"…",' +
+  '"status":"proposed|active","evidence":["…"],"expiresAt":"<ISO, for facts that can go stale>"}]}';
 
 const EXTRACT_INSTRUCTION =
   'Now output the JSON object described in your instructions for the run above — {"notes":[]} if nothing in it is worth remembering.';
@@ -271,18 +280,17 @@ function rememberArgs(n: ExtractedNote, quick: boolean): Record<string, unknown>
   const global = n.layer === "global";
   // 快照对话的工作区是一次性的空桶：只收关于用户 / 这台机器的全局事实
   if (quick && !global) return null;
+  // 只有用户本人说的才生效（可信度 user_confirmed），其余存成待确认；写入走 Remember 的宽松路径（缺字段不拒、不降级）
+  const active = n.status === "active";
   const args: Record<string, unknown> = {
     title,
     content,
-    description: str(n.description) ?? title,
-    type: str(n.type) ?? "project",
-    topic: str(n.topic) ?? title.toLowerCase().replace(/\s+/g, "-"),
-    status: n.status === "active" ? "active" : "proposed",
-    confidence: ["user_confirmed", "observed", "inferred"].includes(String(n.confidence)) ? n.confidence : "inferred",
+    status: active ? "active" : "proposed",
+    confidence: active ? "user_confirmed" : ["observed", "inferred"].includes(String(n.confidence)) ? n.confidence : "observed",
     evidence: strs(n.evidence),
     layer: global ? "global" : "workspace",
   };
-  for (const key of ["id", "why", "howToApply", "expiresAt"] as const) {
+  for (const key of ["id", "description", "type", "topic", "why", "howToApply", "expiresAt"] as const) {
     const v = str(n[key]);
     if (v) args[key] = v;
   }

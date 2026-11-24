@@ -8,6 +8,7 @@
   import SidebarAppHost from './apps/SidebarAppHost.svelte';   // 侧栏「应用」组点开的插件应用（pin: 'sidebar'）
   import { api } from '../lib/api.js';
   import { me, ui, session, singleMode, sessionWt } from '../lib/state.svelte.js';
+  import { isPageWindow } from '../lib/windowPage.svelte.js';
   import UserMenu from './UserMenu.svelte';
   import { swipeDismiss } from '../lib/motion.js';
   import { closePage, backPeek } from '../lib/pageMorph.js';
@@ -25,7 +26,7 @@
   import { drag, dropZone, dragScrollGuard } from '../lib/dragdrop.svelte.js';
   import { dockOverlayFor } from '../lib/claudeSplit.js';
   import { agentDropZone, attachToAgent, dtHasWsFiles, wsDescriptorFrom, attachDescriptorToAgent, WS_FILE } from '../lib/fileDrag.js';
-  import { isChatRef, canQuote, quoteSession } from '../lib/chatQuote.js';
+  import { isChatRef, isProjRef, canQuote, quoteSession, canRefFolder, refClaudeFolder } from '../lib/chatQuote.js';
   import { IS_CSNAP } from '../lib/csnap.js';
   import { t, tc, tr } from '../lib/i18n.js';
   // 归档 / 已归档视图 / 搜索会话（2026-10-20，对齐官方 Claude Desktop）
@@ -35,6 +36,7 @@
   import ClaudeStage from './claude/page/ClaudeStage.svelte';
   import ClaudeSidebar from './claude/page/ClaudeSidebar.svelte';
   import ClaudeDialogs from './claude/page/ClaudeDialogs.svelte';
+  import AgyPeek from './claude/workspace/AgyPeek.svelte';   // 右侧的 Antigravity 对话预览栏（共用项目里点 Antigravity 的会话）
   import { expose, providePage } from '../lib/claudePage/context.js';
   import { createSessionList } from '../lib/claudePage/sessionList.svelte.js';
   import { createQuickChats } from '../lib/claudePage/quickChats.svelte.js';
@@ -43,6 +45,7 @@
   import { createSideDnd } from '../lib/claudePage/sideDnd.svelte.js';
   import { createSplitPanes } from '../lib/claudePage/splitPanes.svelte.js';
   import { createSideApps } from '../lib/claudePage/sideApps.svelte.js';
+  import { sameDir } from '../lib/pluginUi/workspace.svelte.js';
 
   // 页面上下文：外壳与各区段工厂、子组件经它互相取用（getter / setter 直通各自的局部状态，响应式不丢）。
   // 各区段工厂按原来在本文件里的位置依次调用——$effect 的创建顺序因此与拆分前一致。
@@ -93,9 +96,21 @@
   const quoteLabel = () => (session.id ? tc('claude', '引用到这个对话') : tc('claude', '引用到新对话'));
   const claudeDrop = {
     ...fileDrop,
-    label: (p) => (isChatRef(p) ? quoteLabel() : fileDrop.label(p)),
-    accept: (p) => (isChatRef(p) ? canQuote(p.id, session.id) : fileDrop.accept(p)),
-    drop: (p) => (isChatRef(p) ? quoteSession({ id: p.id, title: p.name }) : fileDrop.drop(p)),
+    label: (p) => (isChatRef(p)
+      ? quoteLabel()
+      : isProjRef(p)
+        ? t('引用文件夹「{name}」', { name: tr(p.name) })
+        : fileDrop.label(p)),
+    accept: (p) => (isChatRef(p)
+      ? canQuote(p.id, session.id)
+      : isProjRef(p)
+        ? canRefFolder(p.path)
+        : fileDrop.accept(p)),
+    drop: (p) => (isChatRef(p)
+      ? quoteSession({ id: p.id, title: p.name })
+      : isProjRef(p)
+        ? refClaudeFolder({ path: p.path, name: tr(p.name) })
+        : fileDrop.drop(p)),
   };
   // 电脑上（鼠标）从工作空间拖过来走的是浏览器原生 HTML5 拖拽，不是上面那套手指拖拽——
   // 语义一致：落在正文列＝挂进当前会话的输入栏。
@@ -423,7 +438,7 @@
   // 侧栏底部是账户卡（claude.ai 左下角用户行同款），点开是设置 / 账户 / 关于与更新菜单；常规模式
   // 同一张卡，菜单换成主页 / 设置 / 工作空间 / 退出。
   // 菜单在页面级只挂一份（中屏「常驻列 + 隐藏抽屉」会把侧栏内容渲染两遍），锚点取被点那颗按钮的位置。
-  const single = $derived(singleMode());
+  const single = $derived(singleMode() || isPageWindow());
   let umAnchor = $state(null);
   function toggleUserMenu(e) { umAnchor = umAnchor ? null : e.currentTarget.getBoundingClientRect(); }
   const meName = $derived(me.kind === 'none' ? t('未登录') : (me.user || (me.kind === 'admin' ? 'admin' : '')));
@@ -498,6 +513,23 @@
   const sessionProjId = $derived(session.id
     ? (pc.sessions.find((s) => s.id === session.id)?.projectId || session.projectId || null)
     : (session.projectId || null));
+
+  // 别的分页点了共用文件夹上 Claude 的标识（lib/pluginUi/workspace.svelte.js 的 gotoPeerFolder）：落到这个项目。
+  // 已经停在这个项目就不动；否则它正在跑的会话 → 这个项目最近的会话 → 这个项目里开新对话。接住了就 preventDefault。
+  $effect(() => {
+    const onOpen = (e) => {
+      const { path, session: sid } = e.detail || {};
+      const p = pc.projects.find((x) => !x.temporary && sameDir(x.path, path));
+      if (!p) return;
+      e.preventDefault();
+      pc.searchOpen = false;
+      if (sessionProjId === p.id && !(sid && sid !== session.id)) return;
+      const hit = (sid && pc.sessions.find((s) => s.id === sid)) || pc.listed.find((s) => s.projectId === p.id);
+      if (hit) pickSession(hit); else newInProject(p);
+    };
+    window.addEventListener('bridge:openproject', onOpen);
+    return () => window.removeEventListener('bridge:openproject', onOpen);
+  });
 
   // —— 右侧工作台（审阅/终端/浏览器/文件）：作用域=当前会话的工作空间路径 ——
   // 会话切换/项目变化自动跟随（setDockWs 内部有等值跳过；面板经 {#key} 随 ws 重建）。
@@ -621,6 +653,7 @@
 
 <ClaudeStage />
 </div>
+{#if !IS_CSNAP}<AgyPeek />{/if}
 
 <!-- 工作台归这一格：分屏且这一格不够宽时盖在正文上（不挤），够宽照旧挤开正文。
      多张卡同时开只给不分屏的整页（medium 档只塞得下一根侧列、分屏两格都窄，一次一张）。 -->
@@ -637,20 +670,22 @@
   </div>
 {/if}
 
-{#if pc.sideDrag?.kind === 'session' && (pinned || !ui.drawerOpen)}
-  <!-- 会话拖进正文区的落点层：高亮手在的那一半、写明松手会怎样（窄屏抽屉盖着正文时不出，免得盖到抽屉上） -->
+{#if (pc.sideDrag?.kind === 'session' || (pc.sideDrag?.kind === 'project' && pc.sideDrag?.path)) && (pinned || !ui.drawerOpen)}
+  <!-- 会话或工作空间拖进正文区的落点层：拖会话时高亮左/右半区分屏并露出输入框引用区；拖工作空间时仅露出输入框引用文件夹区 -->
   <div class="split-drop" role="presentation" bind:this={pc.splitDropEl} ondragover={pc.onSplitOver} ondragleave={pc.onSplitLeave} ondrop={pc.onSplitDrop}>
-    {#each pc.dropZones as z (z.side + pc.dropZones.length)}
-      <div class="sd-zone" class:on={pc.splitHover === z.side} class:nope={pc.splitHover === z.side && pc.hoverPlan?.kind === 'none'}
-        style="left:{z.l}px;width:{z.w}px">
-        {#if pc.splitHover === z.side}<span class="sd-label">{pc.hoverLabel}</span>{/if}
-      </div>
-    {/each}
-    <!-- 输入栏上的「引用」区：拖进来的这段对话当背景材料挂进那一格的输入栏 -->
+    {#if pc.sideDrag?.kind === 'session'}
+      {#each pc.dropZones as z (z.side + pc.dropZones.length)}
+        <div class="sd-zone" class:on={pc.splitHover === z.side} class:nope={pc.splitHover === z.side && pc.hoverPlan?.kind === 'none'}
+          style="left:{z.l}px;width:{z.w}px">
+          {#if pc.splitHover === z.side}<span class="sd-label">{pc.hoverLabel}</span>{/if}
+        </div>
+      {/each}
+    {/if}
+    <!-- 输入栏上的「引用」区：会话拖进来引用对话，工作空间拖进来引用文件夹 -->
     {#each pc.quoteRects as q (q.target)}
       <div class="sd-quote" class:on={pc.quoteHover === q.target} class:nope={pc.quoteHover === q.target && !pc.quoteOk(q.target)}
         style="left:{q.l}px;top:{q.t}px;width:{q.w}px;height:{q.h}px">
-        <span class="sd-label">{pc.quoteHover === q.target ? pc.quoteLabelFor(q.target) : tc('claude', '放到输入框＝引用这段对话')}</span>
+        <span class="sd-label">{pc.quoteHover === q.target ? pc.quoteLabelFor(q.target) : pc.quoteIdleLabel()}</span>
       </div>
     {/each}
   </div>

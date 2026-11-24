@@ -21,6 +21,7 @@ import { unansweredSenders, sessionBrainDir } from './background.mjs';
 import { AGY_WAKE_PROMPT } from './wake-prompt.mjs';
 import { collectDeliverableAttachments } from './deliverables.mjs';
 import { getSessionMeta, noteSessionMeta } from './sessions.mjs';
+import { BYPASS_MODE } from './acp/bypass.mjs';
 import {
   agyGenKey, publishAgyRun, noticeAgyPending, noticeAgyEnd,
 } from './presence.mjs';
@@ -32,6 +33,8 @@ import {
   stepsToAcpUpdates,
   readSubagentTree,
   hasProtectedSubagents,
+  backgroundBusy,
+  backgroundShown,
 } from './subagents.mjs';
 
 const DEFAULT_ACTIVE_POLL_MS = 1_500;
@@ -75,6 +78,26 @@ export function noteSessionOwner(ctx, client, sessionId) {
 
 export function isMonitorActive(ctxKey, sessionId) {
   return monitors.has(monKey(ctxKey, sessionId));
+}
+
+/** 这一轮已经说完、但还挂着后台（子代理 / 团队 / 转入后台的命令 / 定时任务）在跑的会话：侧栏据此画「在等后台」 */
+export function listBackgroundWaitingSessions(ctxKey) {
+  const prefix = `${ctxKey || 'admin'}::`;
+  const out = [];
+  for (const [k, mon] of monitors) {
+    if (!k.startsWith(prefix) || mon.stopped || !mon.bgActive) continue;
+    out.push(mon.sessionId);
+  }
+  return out;
+}
+
+/** 全服（所有账号）有多少个会话的后台还在干活：bridge 的空闲重启据此等它们（见 index.mjs 的 busyRuns） */
+export function countBackgroundBusySessions() {
+  let n = 0;
+  for (const mon of monitors.values()) {
+    if (!mon.stopped && mon.bgBusy && !mon.client?.hasActiveTurn?.(mon.sessionId)) n += 1;
+  }
+  return n;
 }
 
 export function getPassiveBackgroundGen(ctxKey, sessionId) {
@@ -140,6 +163,7 @@ function createPassiveGen(mon) {
     done: false,
     startedAt: Date.now(),
     pendingPermission: null,
+    pendingPermissions: [],
     pendingQuestion: null,
     settled: new Promise((resolve) => { settleGen = resolve; }),
     _settle: () => settleGen?.(),
@@ -237,6 +261,7 @@ function closePassiveGen(mon, { status = 'completed', notify = true } = {}) {
   } catch {}
 
   gen.pendingPermission = null;
+  gen.pendingPermissions = [];
   gen.pendingQuestion = null;
   clearInterval(gen._hb);
   genFinish(gen);
@@ -350,6 +375,87 @@ async function triggerFallbackWake(mon) {
   }
 }
 
+function addGenPermission(gen, payload) {
+  if (!gen || !payload?.requestId) return false;
+  if (!Array.isArray(gen.pendingPermissions)) gen.pendingPermissions = [];
+  if (gen.pendingPermissions.some((p) => p?.requestId === payload.requestId)) return false;
+  gen.pendingPermissions.push(payload);
+  gen.pendingPermission = gen.pendingPermissions[0] || null;
+  return true;
+}
+
+function removeGenPermission(gen, requestId) {
+  if (!gen) return false;
+  const id = String(requestId || '');
+  let changed = false;
+  if (Array.isArray(gen.pendingPermissions)) {
+    const next = gen.pendingPermissions.filter((p) => p?.requestId !== id);
+    if (next.length !== gen.pendingPermissions.length) {
+      gen.pendingPermissions = next;
+      changed = true;
+    }
+  }
+  const nextFirst = Array.isArray(gen.pendingPermissions) ? (gen.pendingPermissions[0] || null) : null;
+  if (gen.pendingPermission?.requestId === id || gen.pendingPermission !== nextFirst) {
+    gen.pendingPermission = nextFirst;
+    changed = true;
+  }
+  return changed;
+}
+
+function attachWaitingSubagents(mon, tree) {
+  const { ctx, client, sessionId } = mon;
+  const waiting = Array.isArray(tree?.waitingAgents) ? tree.waitingAgents : [];
+  if (waiting.length > 0 && typeof client.ensureSubagentAttached === 'function') {
+    const meta = getSessionMeta(ctx?.agyDir, sessionId) || {};
+    const cwd = meta.cwd || client.mountedSessions?.get(sessionId)?.cwd || ctx?.cwd || '';
+    for (const a of waiting) {
+      if (!a?.id || a.id === sessionId) continue;
+      client.ensureSubagentAttached(a.id, sessionId, {
+        cwd,
+        role: a.role,
+        typeName: a.typeName,
+        depth: a.depth,
+        kind: a.kind,
+      }).catch(() => {});
+    }
+  }
+
+  // agy 对子代理权限有内置 60s 超时：若子代理 DB 已离开 status=9，及时收掉本地过期的挂起卡片
+  const now = Date.now();
+  for (const entry of [...(client.pendingPermissions?.values() || [])]) {
+    if (entry.rootSessionId !== sessionId) continue;
+    if (!entry.sourceSessionId || entry.sourceSessionId === sessionId) continue;
+    if (now - (entry.createdAt || 0) < 3_500) continue;
+    if (!readDbActivity(client.dataDir, entry.sourceSessionId).hasWaiting) {
+      try { client.retireExternalPermission?.(entry.requestId); } catch {}
+    }
+  }
+}
+
+function adoptOrphanSubagentPermissions(mon) {
+  const { ctx, client, sessionId } = mon;
+  for (const entry of [...(client.pendingPermissions?.values() || [])]) {
+    if (entry.rootSessionId !== sessionId) continue;
+    if (!entry.sourceSessionId || entry.sourceSessionId === sessionId) continue;
+    if (entry.onResolved) continue;
+    const gen = ensurePassiveGen(mon);
+    if (!addGenPermission(gen, entry.payload)) continue;
+    mon.passiveSawActivity = true;
+    mon.passiveIdleTicks = 0;
+    try { genEmit(gen, entry.payload); } catch {}
+    noticeAgyPending(ctx, gen);
+    publishAgyRun(ctx, gen, { live: true });
+    entry.onResolved = (resolved) => {
+      if (removeGenPermission(gen, resolved.requestId)) {
+        publishAgyRun(ctx, gen, { live: true });
+      }
+      try { genEmit(gen, { type: 'permission-resolved', ...resolved }); } catch {}
+      scheduleNextPoll(mon, 200);
+    };
+  }
+}
+
 function dbHasActiveTurnAfter(db, baseStep) {
   if (!db?.exists || !db.hasRunning) return false;
   for (const idx of db.activeTurnStepIdxs || []) {
@@ -366,6 +472,10 @@ async function pollMonitor(mon) {
     if (!client.dataDir) return;
 
     const tree = readSubagentTree(client.dataDir, sessionId);
+    mon.bgActive = backgroundShown(tree);
+    mon.bgBusy = backgroundBusy(tree);
+    // 无论主轮是否正在运行，一旦有子代理/Swarm 成员卡在待审批（status=9）立即接通其 ACP 更新流
+    attachWaitingSubagents(mon, tree);
     if (tree.signature !== mon.lastTreeSig) {
       mon.lastTreeSig = tree.signature;
       busPublish(ctx.key, {
@@ -373,6 +483,8 @@ async function pollMonitor(mon) {
         sessionId,
         counts: tree.counts,
         hasActive: tree.hasActive,
+        // 侧栏「在等后台」：有在跑 / 在等的子代理或在跑的后台任务（不含主会话残留的 RUNNING 步骤）
+        bgWaiting: mon.bgActive,
         updatedAt: tree.updatedAt,
       });
       const liveGen = findGenBySession(agyGenKey(ctx.key), sessionId);
@@ -400,6 +512,9 @@ async function pollMonitor(mon) {
       return;
     }
 
+    // 主轮收尾后若仍有未处理的子代理权限请求，立刻转接到被动 gen 展示
+    adoptOrphanSubagentPermissions(mon);
+
     const db = readDbActivity(client.dataDir, sessionId);
     const newSteps = readTranscriptStepsAfter(client.dataDir, sessionId, mon.emittedStep);
     const hasModelSteps = newSteps.some((s) => s.type === 'PLANNER_RESPONSE' || s.type === 'GENERIC');
@@ -423,7 +538,11 @@ async function pollMonitor(mon) {
 
     // 2) 检查被动 gen 是否可以收尾
     if (mon.passiveGen && !mon.passiveGen.done) {
-      const hasPendingRpc = Boolean(mon.passiveGen.pendingPermission || mon.passiveGen.pendingQuestion);
+      const hasPendingRpc = Boolean(
+        (Array.isArray(mon.passiveGen.pendingPermissions) && mon.passiveGen.pendingPermissions.length > 0)
+        || mon.passiveGen.pendingPermission
+        || mon.passiveGen.pendingQuestion
+      );
       const stillRunning = db.exists
         ? dbHasActiveTurnAfter(db, mon.passiveBaseStep)
         : newSteps.some((s) => s.status === 'RUNNING');
@@ -592,12 +711,15 @@ function handleBackgroundPermission(client, payload) {
   const mon = armSubagentMonitor(owner.ctx, client, sid, { pollNow: false });
   if (!mon) return null;
 
-  // 先把本次唤醒已经落盘的思考 / 工具步骤吐到被动 gen 里，再弹审批卡
-  const pendingSteps = readTranscriptStepsAfter(client.dataDir, sid, mon.emittedStep);
-  if (pendingSteps.length) flushDiskStepsToPassiveGen(mon, pendingSteps, true);
+  const isFromSubagent = Boolean(payload?.sourceSessionId && payload.sourceSessionId !== sid);
+  // 主会话自身后台唤醒的权限申请：先把本次唤醒已落盘的思考 / 工具步骤吐到被动 gen 里，再弹审批卡
+  if (!isFromSubagent) {
+    const pendingSteps = readTranscriptStepsAfter(client.dataDir, sid, mon.emittedStep);
+    if (pendingSteps.length) flushDiskStepsToPassiveGen(mon, pendingSteps, true);
+  }
 
   const gen = ensurePassiveGen(mon);
-  gen.pendingPermission = payload;
+  addGenPermission(gen, payload);
   mon.passiveSawActivity = true;
   mon.passiveIdleTicks = 0;
   try { genEmit(gen, payload); } catch {}
@@ -608,11 +730,11 @@ function handleBackgroundPermission(client, payload) {
     handled: true,
     timeoutMs: 0,
     onResolved: (resolved) => {
-      if (gen.pendingPermission?.requestId === resolved.requestId) {
-        gen.pendingPermission = null;
+      if (removeGenPermission(gen, resolved.requestId)) {
         publishAgyRun(owner.ctx, gen, { live: true });
       }
-      if (sid && resolved.toolCallId && !resolved.auto) {
+      const resolvedSub = Boolean(resolved.sourceSessionId && resolved.sourceSessionId !== sid);
+      if (sid && !resolvedSub && resolved.toolCallId && !resolved.auto) {
         const denied = resolved.outcome === 'cancelled' || /^(?:deny|reject)/i.test(String(resolved.optionId || ''));
         noteSessionMeta(owner.ctx?.agyDir, sid, {
           toolApprovals: { [resolved.toolCallId]: denied ? 'denied' : 'allowed' },
@@ -689,6 +811,11 @@ export function attachAcpBackgroundBridge(client) {
       if (owner) syncDiskTailIntoHistory(owner.ctx.key, client, sid);
     },
     rebuildHistory: (sid) => (client.dataDir ? readFullTranscriptAsUpdates(client.dataDir, sid).updates : []),
+    hasSessionOwner: (sid) => sessionOwners.has(sid),
+    isBypass: (sid) => {
+      const owner = sessionOwners.get(sid);
+      return Boolean(owner && getSessionMeta(owner.ctx?.agyDir, sid)?.config?.mode === BYPASS_MODE);
+    },
     onPermission: (payload) => handleBackgroundPermission(client, payload),
     onQuestion: (payload) => handleBackgroundQuestion(client, payload),
     resolveSessionId: () => resolveActiveBackgroundSessionId(client),

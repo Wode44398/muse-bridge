@@ -9,6 +9,7 @@
   import { onMount, tick, untrack } from 'svelte';
   import { me, ui } from '../lib/state.svelte.js';
   import { closePage } from '../lib/pageMorph.js';
+  import { isPageWindow } from '../lib/windowPage.svelte.js';
   import { api } from '../lib/api.js';
   import { cloudFileUrl, openPreview as openPreviewRaw } from '../lib/preview.svelte.js';
   import { filterFilesByName, makeFileComparator, normalizeFileQuery } from '../lib/files-business.js';
@@ -863,7 +864,7 @@
 
   <div class="fd-toolbar" bind:this={toolbarEl}>
     <div class="fd-tb" class:t1={tbTier >= 1} class:t2={tbTier >= 2} class:t3={tbTier >= 3} class:t4={tbTier >= 4} bind:this={tbEl}>
-      {#if !hostChrome}
+      {#if !hostChrome && (embedded || !isPageWindow())}
         <button class="tb-btn" data-flip="home" use:tip={embedded ? t('返回工作台') : t('返回主页')} onclick={goHome}>
           {#if embedded}
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
@@ -873,7 +874,7 @@
         </button>
       {/if}
       {#if tbTier < 2}
-        {#if !hostChrome}<span class="tb-gap"></span>{/if}
+        {#if !hostChrome && (embedded || !isPageWindow())}<span class="tb-gap"></span>{/if}
         <button class="tb-btn" data-flip="back" aria-label={t('后退')} use:tip={{ label: t('后退'), kbd: 'Alt+←' }} disabled={!histN.back} onclick={goBack}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
         </button>

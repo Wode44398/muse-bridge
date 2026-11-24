@@ -113,7 +113,8 @@ export function buildQueryOptions(run) {
     // 项目对话：协调者开关 + 补回工具的白名单（runtime/project-mode.mjs）；普通会话剥掉，别从服务进程的环境里漏进去
     env: { ...TOOL_DEFAULT_ENV, ...stripCoordinatorEnv(chromeOn && !chromeSplit ? chromeEngineEnv(engineEnv || process.env) : (engineEnv || process.env)), CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: '86400000', ...peerEngineEnv(ctx, snap), ...(pOpts ? pOpts.env : {}), ...(coordTools ? coordinatorEnv(coordTools) : {}) },
     // 插件给的子 agent 定义（ctx.claude.options 的 agents）
-    ...(pOpts && Object.keys(pOpts.agents).length ? { agents: pOpts.agents } : {}),
+    // 和内置的子 agent（手机操作员）合并，别整个盖掉；同名时内置的优先
+    ...(pOpts && Object.keys(pOpts.agents).length ? { agents: { ...pOpts.agents, ...(phoneControlOn ? { 'phone-operator': phoneOperatorAgent() } : {}) } } : {}),
     // Claude in Chrome 两个方向都显式给：admin 带 --chrome 点亮；其余身份带 --no-chrome——
     // ~/.claude.json 里桌面 app 存着 claudeInChromeDefaultEnabled:true，不能指望默认值替我们关门。
     extraArgs: chromeOn && !chromeSplit ? { chrome: null } : { 'no-chrome': null },

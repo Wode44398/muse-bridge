@@ -13,7 +13,7 @@
   import { pressable } from '../lib/motion.js';
   import { t } from '../lib/i18n.js';
 
-  let { name = '', title = '', touch = false, dark = true, isDir = false, onDone } = $props();
+  let { name = '', title = '', hint = '', touch = false, dark = true, isDir = false, onDone } = $props();
 
   let value = $state(untrack(() => name));   // 只取打开时的旧名作初值，之后由输入框接管
   let error = $state('');
@@ -73,7 +73,7 @@
 
 <div class="rp-root i27ink" class:dark class:closing bind:this={rootEl} role="presentation" data-rename-prompt>
   {#if touch}
-    <Alert title={heading} {error} {closing} onclose={() => finish(null)}
+    <Alert title={heading} message={hint} {error} {closing} onclose={() => finish(null)}
       actions={[{ label: t('确定'), role: 'default', onclick: confirm }, { label: t('取消'), role: 'cancel', onclick: () => finish(null) }]}>
       <TextField bind:value oninput={() => (error = '')} autocapitalize="off" autocorrect="off" spellcheck="false" autofocus />
     </Alert>
@@ -82,6 +82,7 @@
     <div class="rp-scrim ov-scrim" class:closing onclick={() => finish(null)}></div>
     <div class="rp-card ov-panel" class:closing role="dialog" aria-modal="true" aria-label={heading}>
       <div class="rp-title">{heading}</div>
+      {#if hint}<div class="rp-hint">{hint}</div>{/if}
       <input class="rp-input" bind:value oninput={() => (error = '')} autocapitalize="off" autocorrect="off" spellcheck="false" aria-label={heading} />
       {#if error}<div class="rp-err">{error}</div>{/if}
       <div class="rp-acts">
@@ -119,6 +120,7 @@
     background: var(--rp-surface); border: 1px solid var(--rp-line); border-radius: 16px; box-shadow: var(--rp-shadow);
   }
   .rp-title { font-size: 15px; line-height: 22px; font-weight: 600; }
+  .rp-hint { margin-top: -6px; font-size: 13px; line-height: 19px; color: var(--rp-muted); }
   .rp-input {
     height: 34px; padding: 0 10px; border: 1px solid var(--rp-line); border-radius: 8px; outline: none;
     background: var(--rp-field); color: var(--rp-text); font: inherit; font-size: 14px;

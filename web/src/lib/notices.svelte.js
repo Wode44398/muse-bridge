@@ -20,6 +20,7 @@ import { busOn } from './bus.js';
 import { api } from './api.js';
 import { t, tr } from './i18n.js';
 import { isNativeDesktop } from './nativeDesktop.js';
+import { WINDOW_PAGE, isPageWindow, hasDesktopPageWindows, routeToPageWindow } from './windowPage.svelte.js';
 
 const LS = 'bridge-msg-notify';
 const DEF = { preview: true, sound: true, tone: 'system', toneUri: '', toneName: '', vibrate: true, vibe: 'double', inApp: true, keepAlive: false };
@@ -228,8 +229,16 @@ export async function openBanner(b) {
 // agent 不给 = 自己认（原生通知、桌面壳点进来只带会话 id）
 export async function openNoticeTarget(sid, sub, agent = null) {
   try {
+    const resolvedAgent = sid ? (agent == null ? await agentOfSession(sid) : agent) : '';
+    const targetPage = resolvedAgent === 'agy' ? 'agy' : 'claude';
+    // 独立分页窗口里点到其它分页的通知横幅：经桌面壳路由到对应分页窗口或主窗，不把当前独立窗跳歪
+    if (isPageWindow() && WINDOW_PAGE !== targetPage && hasDesktopPageWindows()) {
+      if (sid) await routeToPageWindow({ key: targetPage, action: 'open-session', func: resolvedAgent, sessionId: sid });
+      else if (sub === 'routine') await routeToPageWindow({ key: 'claude', action: 'open-routines' });
+      return;
+    }
     const m = await import('./agentUi.js');
-    if (sid) await m.openSessionFromNotice(sid, agent == null ? await agentOfSession(sid) : agent);
+    if (sid) await m.openSessionFromNotice(sid, resolvedAgent);
     else if (sub === 'routine') await m.openRoutinesFromNotice();
   } catch {}
 }

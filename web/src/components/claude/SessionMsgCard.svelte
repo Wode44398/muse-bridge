@@ -11,6 +11,8 @@
   import { IS_CSNAP } from '../../lib/csnap.js';
   import { renderMarkdown } from '../../lib/md.js';   // 会话间的话基本是 Claude 写的，常带 markdown；md.js 内部 DOMPurify 清洗
   import { t } from '../../lib/i18n.js';
+  import AgentTile from './workspace/AgentTile.svelte';
+  import { openAgyPeek } from '../../lib/claudePage/agyPeek.svelte.js';
 
   let { part } = $props();
 
@@ -35,7 +37,8 @@
   const STATUS = { done: '这一轮已结束', failed: '这一轮出错了', stopped: '被停下' };
   let openNotes = $state({});
   // 跨 agent（11-03）：信封带 agent="dimensio" 的是 dimensio 会话，去 dimensio 页打开
-  function go(id, agent) { if (!id || IS_CSNAP) return; if (agent === 'dimensio') openDimensioSession(id); else openSession(id); }
+  // Antigravity 发来的（agent="agy"）：在本页右侧的预览栏里看那个 agy 会话，不跳页
+  function go(id, agent, title = '') { if (!id || IS_CSNAP) return; if (agent === 'agy') openAgyPeek({ id, title }); else if (agent === 'dimensio') openDimensioSession(id); else openSession(id); }
 </script>
 
 {#snippet linkIc()}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/><path d="M6 8.4v3.1a3 3 0 0 0 3 3h6.6"/><path d="M13.6 12l2.4 2.5-2.4 2.5"/></svg>{/snippet}
@@ -43,10 +46,19 @@
 {#if part.kind === 'message'}
   <div class="smc">
     <div class="smc-head">
-      <span class="smc-ic">{@render linkIc()}</span>
-      <span class="smc-kind">{head}</span>
-      <button class="smc-from" disabled={IS_CSNAP || !part.from} title={t('打开这个会话')} onclick={() => go(part.from, part.agent)}>{fromTitle}</button>
-      {#if part.agent === 'dimensio'}<span class="smc-agent">dimensio</span>{/if}
+      {#if part.agent === 'agy'}
+        <!-- Antigravity 来信：连接器方块 + 名字写明是谁，右端「查看对话」在右侧预览栏打开它那个会话 -->
+        <span class="smc-ic agy"><AgentTile agent="agy" size={16} /></span>
+        <b class="smc-who">Antigravity</b>
+        <span class="smc-kind">{head}</span>
+        <button class="smc-from" disabled={IS_CSNAP || !part.from} title={t('查看对话')} onclick={() => go(part.from, part.agent, fromTitle)}>{fromTitle}</button>
+        {#if !IS_CSNAP && part.from}<button class="smc-peek" onclick={() => go(part.from, part.agent, fromTitle)}>{t('查看对话')}</button>{/if}
+      {:else}
+        <span class="smc-ic">{@render linkIc()}</span>
+        <span class="smc-kind">{head}</span>
+        <button class="smc-from" disabled={IS_CSNAP || !part.from} title={t('打开这个会话')} onclick={() => go(part.from, part.agent)}>{fromTitle}</button>
+        {#if part.agent === 'dimensio'}<span class="smc-agent">dimensio</span>{/if}
+      {/if}
     </div>
     <div class="smc-body sel-text" class:clamp={long && !open}>
       {#if sections}
@@ -103,6 +115,12 @@
 {#snippet peerIc()}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7.5" width="12" height="11" rx="2.2"/><path d="M8.5 7.5V6.2a2.2 2.2 0 0 1 2.2-2.2h7.6a2.2 2.2 0 0 1 2.2 2.2v7.1a2.2 2.2 0 0 1-2.2 2.2h-2.8"/></svg>{/snippet}
 
 <style>
+  .smc-ic.agy { width: auto; height: auto; }
+  .smc-who { flex: none; font-weight: 500; color: var(--text); }
+  .smc-peek { flex: none; margin-left: auto; padding: 3px 8px; border-radius: 6px; font-size: 12.5px; color: var(--serif);
+    transition: background-color 60ms cubic-bezier(.165, .84, .44, 1), color 60ms cubic-bezier(.165, .84, .44, 1); }
+  .smc-peek:active { background: var(--hover-strong); color: var(--text); }
+  @media (hover: hover) { .smc-peek:hover { background: var(--hover); color: var(--text); } }
   .smc-agent { flex: none; padding: 0 6px; border-radius: 999px; background: var(--userbubble); font-size: 11px; color: var(--muted); }
   .smc-peer { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text); font-weight: 500; }
   .smc { width: min(560px, 100%); box-sizing: border-box; background: var(--card); border: 1px solid var(--divider); border-radius: 14px; padding: 10px 13px 11px; text-align: left; animation: smcIn .28s cubic-bezier(.22,1,.36,1); }

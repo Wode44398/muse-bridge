@@ -18,6 +18,7 @@ import { HOST_OWNER } from '@bridge/core/runtime/principal.mjs';
 import { studioOwnerDir } from '@bridge/core/runtime/studio-settings.mjs';
 import { DIALECTS, KINDS, AUTH_STYLES, DIALECT_AUTH, DIALECT_KINDS, NO_BASEURL, PRESET_BY_ID } from './presets.mjs';
 import { syncView, dismissModels, dropSyncState } from './discovery/store.mjs';
+import { dropProviderConfigs } from './model-config/store.mjs';
 
 export { HOST_OWNER };
 export const MEMBER_MAX_PROVIDERS = 10;
@@ -357,6 +358,7 @@ export function deleteProvider(id, owner) {
   d.providers.splice(i, 1);
   try { setSecret(id, owner, { key: '', sa: '' }); } catch {}
   try { dropSyncState(owner, id); } catch {}
+  try { dropProviderConfigs(owner, id); } catch {}
   save(owner); changed(owner);
   return true;
 }

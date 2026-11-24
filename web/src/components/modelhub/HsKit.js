@@ -21,8 +21,11 @@ export const G = {
   trash: '<path d="M5 7h14M10 4h4"/><path d="M7 7l.8 11.2a2 2 0 0 0 2 1.8h4.4a2 2 0 0 0 2-1.8L17 7"/>',
   refresh: '<path d="M19 12a7 7 0 1 1-2.05-4.95"/><path d="M19.2 4.6v3.6h-3.6"/>',
   chev: '<path d="m8 10 4 4 4-4"/>',
+  check: '<path d="M5 12.5 9.8 17.2 19 7.8"/>',
   // 调节（高级调用配置）：三道横线各带一个旋钮
   tune: '<path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/>',
+  // 铅笔（改备注名）
+  pen: '<path d="M5 19l.9-3.6L15.6 5.7a1.8 1.8 0 0 1 2.6 0l.1.1a1.8 1.8 0 0 1 0 2.6L8.6 18.1z"/><path d="M13.9 7.4l2.7 2.7"/>',
 };
 
 /** 线稿 → 完整 svg 字符串（尺寸由外层 CSS 定） */
@@ -47,14 +50,14 @@ export function claudeBlock(id, ctx) {
 }
 
 /** 去向的固定顺序（叠放图标、提交的 agents 都按它排） */
-export const AGENT_ORDER = ['claude', 'dimensio', 'studio'];
+export const AGENT_ORDER = ['claude', 'dimensio', 'codex', 'studio'];
 /** 去重并按固定顺序排好的去向 */
 export const ordAgents = (a) => AGENT_ORDER.filter((x) => Array.isArray(a) && a.includes(x));
 
 /**
  * 勾中的行 + 点亮的去向片 → 要提交的改动。
  *   rows      勾中的行：{ id, agents（现在的去向） }
- *   destIds   这一栏的去向片（文本栏 claude / dimensio，媒体栏 studio）
+ *   destIds   这一栏的去向片（文本栏 claude / dimensio / codex，媒体栏 studio）
  *   chosen    点亮的片
  *   consistent 勾中的行现在的去向一致：这一栏的去向改成 chosen（取消点亮 = 批量取消添加）；不一致：只把点亮的加上去，不动别的
  *   blockOf(agent, row) 这一行加不进这个去向的原因（'' = 能加）
@@ -195,6 +198,17 @@ export function ago(ts, now = Date.now()) {
 /** 两个去向集合是否相同（顺序无关） */
 export const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
 
+/** 按关键字筛厂商（比对原名、当前语言名与 key；空白分词，顺序不限） */
+export function filterVendors(vendors, query, labelOf = (v) => v.name) {
+  const words = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return vendors || [];
+  return (vendors || []).filter((v) => {
+    if (!v) return false;
+    const hay = [v.name, labelOf ? labelOf(v) : '', v.key].filter(Boolean).join(' ').toLowerCase();
+    return words.every((w) => hay.includes(w));
+  });
+}
+
 /**
  * 横滑条两端渐隐（Svelte action）：只在那一侧还有内容时才渐隐，滚到头那一侧变实。
  * 给元素写 --fl / --fr，CSS 侧：mask-image: linear-gradient(to right, transparent, #000 var(--fl), #000 calc(100% - var(--fr)), transparent)
@@ -300,6 +314,7 @@ export function advProblem(d, { toClaude = false, tierProblem = null } = {}) {
 const COMPAT_KEYS = ['promptCaching', 'stripBetas', 'slimBody', 'stripThinkingHistory', 'replayReasoning'];
 const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
 const RESERVED_HEADER = /^(authorization|x-api-key|x-goog-api-key|host|content-length)$/i;
+const RESPONSES_MODES = ['native', 'translate'];
 /** 服务视图 → 草稿：兼容项 'auto' | 'on' | 'off'；空串 = 自动 / 默认 */
 export function svcAdvDraft(s) {
   const c = (s && s.compat) || {};
@@ -310,6 +325,8 @@ export function svcAdvDraft(s) {
     retries: Number.isInteger(s && s.retries) ? s.retries : '',
     authStyle: (s && s.authStyle) || 'bearer',
     headers: ((s && s.headers) || []).map((h) => ({ name: h.name, value: h.value })),
+    // 老服务端的视图没有这个键：草稿里也不出，保存时不发
+    ...(s && 'responsesApi' in s ? { responses: RESPONSES_MODES.includes(s.responsesApi) ? s.responsesApi : 'auto' } : {}),
   };
 }
 /** 草稿 → patch（compat / retries 给 null = 恢复自动；超时留空 = 600 秒） */
@@ -324,6 +341,8 @@ export function svcAdvPayload(d) {
     authStyle: d.authStyle,
     // 名字和值都空的行当没填
     headers: d.headers.filter((h) => h.name.trim() || h.value.trim()).map((h) => ({ name: h.name.trim(), value: h.value })),
+    // Responses 接口的走法：null = 恢复自动
+    ...('responses' in d ? { responsesApi: RESPONSES_MODES.includes(d.responses) ? d.responses : null } : {}),
   };
 }
 /** 草稿的毛病 → 人话，没毛病 '' */

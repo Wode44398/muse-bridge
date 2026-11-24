@@ -34,6 +34,12 @@
       <span class="r-main"><span class="r-tx">{t('原图加载')}</span><Toggle checked={prefs.fullResMedia} onchange={gen.toggleFullRes} label={t('原图加载')} /></span>
     </div>
   </div>
+  <div class="ig">
+    <div class="r">
+      <span class="r-main"><span class="r-tx">{t('使用系统的文字选择')}</span><Toggle checked={prefs.sysSelect} onchange={gen.toggleSysSelect} label={t('使用系统的文字选择')} /></span>
+    </div>
+  </div>
+  {@render gfoot(t('长按文字时用手机系统自带的选择柄和菜单。用读屏（TalkBack）时会自动改用系统的。'))}
   <!-- 安卓：后台运行不受省电限制（任务通知栏靠它在后台活着；原单页设置「通用」里的那一行） -->
   {#if phone.hasBatteryApi}
     <div class="ig">

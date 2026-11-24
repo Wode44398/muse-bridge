@@ -127,6 +127,9 @@ export const PERMISSIONS = Object.freeze({
   // ui 也管主页应用：详情页得让用户知道装了它主页会多出图标、点开是插件自己的全屏页面
   ui: '往 bridge 的界面里加卡片、菜单项、命令、工作台标签和主页应用（图标 + 全屏页面）',
   auth: '提供外部登录方式',
+  'claude.memory': '查看 Claude 记忆目录的位置与篇数（不读内容）',
+  ops: '以你的身份查看 bridge 里的会话、项目等（只读）',
+  'claude.projects': '把文件夹加成你的 Claude 项目（只加不删）',
   // 页面权限。声明了也不等于能用——第一次用要使用者本人在 bridge 画的授权框里同意（plugins/page-grants.mjs）
   'page.chat': '在应用页面里以你的身份和 Claude 对话',
   'page.files': '读写你在选择器里选中的文件',

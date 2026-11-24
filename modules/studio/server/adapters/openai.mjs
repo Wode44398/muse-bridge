@@ -307,6 +307,8 @@ function imageCard(model, label, desc, quality, { flex = false, formats = ['png'
     id: `openai:${model}`, kind: 'image', async: false, label, desc,
     inputs: { text: true, images: { max: 16, roles: ['edit', 'ref'] }, multiTurn: false },
     params,
+    // 旧写法的比例 + 档位被 legacySize 换成宽高，不是没生效（生成工具报「未生效参数」时别算它们）
+    ...(flex ? { legacyKeys: ['aspectRatio', 'imageSize'] } : {}),
     // 自由尺寸卡：旧写法的比例 + 档位先换成宽高，再按 ParamSpec 规范化（坏的自定义宽高 400）；每帧时长取整到 10 ms
     normalize: (raw = {}, ctx = {}) => roundFrameMs(applySpecs(params, flex ? legacySize(raw) : raw, ctx)),
   };

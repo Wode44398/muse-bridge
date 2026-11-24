@@ -21,12 +21,8 @@ export const webfetchTool: Tool = {
   def: {
     name: "WebFetch",
     description:
-      "Fetch an http(s) URL and read its content. HTML is converted to readable plain text; " +
-      "JSON, plain text, XML and markdown are returned as-is. Use this to consult CURRENT, " +
-      "authoritative external information your training data may be stale on — official API/SDK " +
-      "docs, package readmes, changelogs, reference pages — and then adapt your code to exactly " +
-      "what the page says (current model names, endpoints, parameters). Give the full absolute URL. " +
-      "Follows redirects. Binary responses (images, PDFs, archives) are not supported.",
+      "Fetch an absolute http(s) URL and return its content: HTML as readable plain text; JSON, text, XML and markdown " +
+      "as-is. Follows redirects. Binary responses (images, PDFs, archives) are not supported.",
     parameters: {
       type: "object",
       properties: {

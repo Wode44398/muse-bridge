@@ -51,7 +51,7 @@ export function toHarnessProvider(s) {
     ...(s.members ? { shared: true } : {}),
     // 请求实际发到的上游主机（地址是本机网关，harness 靠它认官方 Anthropic 与 OpenRouter）
     ...(s.upstream ? { upstream: s.upstream } : {}),
-    // 上游是官方 Anthropic：提示缓存照开（harness 没说就按地址主机名判，网关地址会判成关）
+    // 上游是官方 Anthropic：提示缓存显式写开（其余没改过的不写，交给 dimensio 自己的默认）
     ...(s.upstream === 'api.anthropic.com' && s.protocol === 'anthropic' ? { promptCaching: true } : {}),
     // 模型中心高级设置里改过的兼容项（dimensio 认这三项）：压在上面的自动值上
     ...harnessCompat(s.compat),

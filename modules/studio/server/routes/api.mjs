@@ -28,6 +28,7 @@
 //       POST /api/studio/assets/<id>/delete { withFile? }  → { ok }；推总线 { type:'studio.asset.deleted', id }
 // 设置  GET  /api/studio/settings → { ok, host?: { values, changed }, mine: { values, changed }, effective, canEditHost }
 //       POST /api/studio/settings { scope: 'host'|'mine', values: { 键: 值|null } } → 同 GET；变更推 { type:'studio.settings' }
+// 模型配置（单个模型的参数覆盖与调用配方、预演、试跑）：见 routes/model-config.mjs
 
 import { readBody } from '@bridge/core/runtime/body.mjs';
 import { contextFor, INTERNAL_IDENTITY } from '@bridge/core/runtime/identity.mjs';
@@ -52,6 +53,7 @@ import { startJob, listJobs, getJob, cancelJob, forgetResult } from '../jobs.mjs
 import { listAssets, saveAsset, deleteAsset, getAsset, assetExists } from '../assets.mjs';
 import { providerLog, logCall, dropLog } from '../log.mjs';
 import { importVertex, importAvailable, lastImport } from '../migrate.mjs';
+import { registerModelConfigRoutes } from './model-config.mjs';
 
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
 const ID_RE = /^[0-9a-f-]{36}$/;
@@ -91,6 +93,8 @@ export function registerStudioApi(router, { identify }) {
     busPublish(owner, { type: 'studio.settings', scope });
     if (scope === 'host') for (const o of loadedOwners()) if (isMemberOwner(o)) busPublish(o, { type: 'studio.settings', scope });
   });
+
+  registerModelConfigRoutes(router, { guard, body, run });
 
   // —— 服务 ——
   // 成员的接口地址只许是公网（草稿、保存、测试、拉列表都先查；生成时再查）

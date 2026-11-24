@@ -196,7 +196,8 @@ export function createSessionList(pc) {
     } else if (ev.type === 'family' && ev.child) {
       if (ev.title && provRows.has(ev.child)) patchSession(ev.child, { title: ev.title });   // 刚插的那一行换成派生时起的标题
       refreshSoon();   // 某个会话刚派生了子会话：侧栏重拉，让它挂到父会话下面
-    } else if (ev.type === 'archive' || ev.type === 'quick.pruned') {
+    } else if (ev.type === 'archive' || ev.type === 'quick.pruned' || ev.type === 'claude.projects') {
+      // claude.projects：插件经 ctx.claude.ensureProject 建了项目——重拉项目与会话
       // quick.pruned：临时对话按设置回收了一轮（有的进了回收站，或清理方式刚改过）——重拉列表与回收策略
       refreshSoon();   // 归档 / 取消归档（本机、别的设备或自动归档）：整表重拉——归档的让出名额，取消归档的回到列表
     } else if (ev.type === 'session.gone' && ev.sessionId) {

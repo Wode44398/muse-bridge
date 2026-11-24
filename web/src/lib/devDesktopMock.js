@@ -414,13 +414,15 @@ if (import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(
     get state() { return JSON.parse(JSON.stringify(mockClip)); },
   };
 
-  // 跳过登录门直接钉到工作空间页（boot 逻辑可能晚到，补一脚）。
+  // 跳过登录门直接钉到工作空间页（boot 逻辑可能晚到，补一脚）。`?fdmock=home`：留在桌面主页、照常开机入场（验 Dock 落位）。
   const pin = async () => {
     const { ui } = await import('./state.svelte.js');
     ui.booted = true;
     ui.screen = 'files';
   };
-  queueMicrotask(pin);
-  setTimeout(pin, 500);
-  setTimeout(pin, 1500);
+  if (new URLSearchParams(location.search).get('fdmock') !== 'home') {
+    queueMicrotask(pin);
+    setTimeout(pin, 500);
+    setTimeout(pin, 1500);
+  }
 }

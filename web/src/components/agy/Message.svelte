@@ -7,9 +7,10 @@
   import { agyArtifactUrl, openPreview } from '../../lib/preview.svelte.js';
   import { attDragSrc } from '../../lib/dragOut.js';
   import { attLook } from '../../lib/agy/attach-look.js';
+  import { isVoiceAtt } from '../../lib/agy/voice-peaks.js';
   import { relativeToWorkspace } from '../../lib/agy/workspace-logic.js';
   import { resolveAgyLocalLink } from '../../lib/agy/logic.js';
-  import { agy, locateAgyFileInWorkspace, sendAgyMessage } from '../../lib/agy/store.svelte.js';
+  import { agy, locateAgyFileInWorkspace, openAgySession, sendAgyMessage } from '../../lib/agy/store.svelte.js';
   import { openAgyAgentsPanel } from '../../lib/dock.svelte.js';
   import { agySubagents, isMultiAgentTool, isSwarmTool, matchSendMessageToSubagent } from '../../lib/agy/subagents.svelte.js';
   import { agySwarm } from '../../lib/agy/swarm.svelte.js';
@@ -31,6 +32,7 @@
   import QuestionCard from './QuestionCard.svelte';
   import AgyTurnFoot from './AgyTurnFoot.svelte';
   import AgyAttachment from './AgyAttachment.svelte';
+  import AgyVoiceBubble from './AgyVoiceBubble.svelte';
 
   const {
     msg,
@@ -162,8 +164,9 @@
     return openInWorkspace(resolved);
   }
 
-  // 用户自己发的附件：会话目录里的文件 / 文件夹在工作区里定位；上传来的图片、视频、文件不在工作区里，用查看器看。
+  // 用户自己发的附件：引用的对话跳原会话；会话目录里的文件 / 文件夹在工作区里定位；上传来的图片、视频、文件用查看器看。
   function openUserAtt(att) {
+    if (att.kind === 'chat' && att.quoteId) { openAgySession(att.quoteId); return; }
     if (att.kind === 'folder') { if (att.path) locateAgyFileInWorkspace(att.path); return; }
     if (att.path && sessionCwd && relativeToWorkspace(att.path, sessionCwd) !== null) {
       openInWorkspace(att.path, att.name);
@@ -191,11 +194,13 @@
     if (att?.path) openInWorkspace(att.path, att.name);
   }
 
-  // 附件分两排：能出预览图的（图片 / 视频）在上，其余文件卡在下——高矮不一的东西不混在一行里
+  // 附件分排：能出预览图的（图片 / 视频）在上，其余文件卡在下；原生语音单独按气泡样式展示
   const splitRows = (list) => {
     const all = Array.isArray(list) ? list : [];
-    return [all.filter((a) => attLook(a).media), all.filter((a) => !attLook(a).media)];
+    const nonVoice = all.filter((a) => !isVoiceAtt(a));
+    return [nonVoice.filter((a) => attLook(a).media), nonVoice.filter((a) => !attLook(a).media)];
   };
+  const voiceAttsOf = (list) => (Array.isArray(list) ? list.filter((a) => isVoiceAtt(a)) : []);
   // 进度卡上已经摆出来的成品，底部的交付物里不再摆第二遍
   const shownInline = $derived(inlineMediaPaths(segments.map((s) => s.seg)));
   // 手机档：这一轮做完后步骤行（思考 / 工具调用的汇总）整段收走，只留回答——窄屏上它被截成半句，做完了也没人再看；
@@ -203,6 +208,7 @@
   const stepsGone = $derived(layout.compact && msg.status === 'done' && segments.some((s) => s.kind !== 'steps'));
   const delivRows = $derived(splitRows((Array.isArray(msg.attachments) ? msg.attachments : []).filter((a) => !shownInline.has(pathKey(a.path)))));
   const userRows = $derived(splitRows(msg.atts));
+  const userVoices = $derived(voiceAttsOf(msg.atts));
 
   async function copyAnswer() {
     if (!msg.md) return;
@@ -231,7 +237,7 @@
   </details>
 {:else if msg.role === 'user'}
   <div class="agy-msg user">
-    {#if Array.isArray(msg.atts) && msg.atts.length > 0}
+    {#if userRows[0].length + userRows[1].length > 0}
       <div class="agy-user-atts">
         {#each userRows as row, ri (ri)}
           {#if row.length > 0}
@@ -242,7 +248,7 @@
                   {sessionId}
                   variant="user"
                   solo={ri === 0 && row.length === 1}
-                  onopen={att.url || att.path ? openUserAtt : null}
+                  onopen={att.url || att.path || att.quoteId ? openUserAtt : null}
                   drag={() => attDragSrc(att)}
                 />
               {/each}
@@ -251,6 +257,10 @@
         {/each}
       </div>
     {/if}
+
+    {#each userVoices as vatt, vi (vatt.path || vatt.url || vi)}
+      <AgyVoiceBubble att={vatt} {sessionId} fresh={freshUser} />
+    {/each}
 
     {#if msg.text}
       <div class="agy-user-bubble sel-text" class:sent={freshUser}>{msg.text}</div>
@@ -282,6 +292,7 @@
         <AgySubagentCard tool={seg.tool} msgTools={seg.msgTools} />
       {:else if seg.kind === 'steer'}
         {@const rows = splitRows(seg.blk.atts)}
+        {@const steerVoices = voiceAttsOf(seg.blk.atts)}
         <div class="agy-steer">
           {#if rows[0].length + rows[1].length > 0}
             <div class="agy-user-atts">
@@ -294,7 +305,7 @@
                         {sessionId}
                         variant="user"
                         solo={ri === 0 && row.length === 1}
-                        onopen={att.url || att.path ? openUserAtt : null}
+                        onopen={att.url || att.path || att.quoteId ? openUserAtt : null}
                         drag={() => attDragSrc(att)}
                       />
                     {/each}
@@ -303,6 +314,9 @@
               {/each}
             </div>
           {/if}
+          {#each steerVoices as vatt, vi (vatt.path || vatt.url || vi)}
+            <AgyVoiceBubble att={vatt} {sessionId} fresh={live} />
+          {/each}
           {#if seg.blk.text}
             <div class="agy-user-bubble sel-text" class:sent={live}>{seg.blk.text}</div>
           {/if}
@@ -392,7 +406,7 @@
     {/if}
 
     {#if isLast}
-      <AgyTurnFoot {msg} {sessionCwd} {reconnecting} />
+      <AgyTurnFoot {msg} {sessionCwd} {reconnecting} bgTree={agySubagents.sessionId === agy.sessionId ? agySubagents.tree : null} />
     {/if}
   </div>
 {/if}

@@ -10,6 +10,7 @@
 // 本身也是临时的演示品；除 pv- 精确匹配外的任何 Host 一律不走这里。
 
 import http from 'node:http';
+import { upgradeClaimed } from '../runtime/ws-server.mjs';
 import net from 'node:net';
 import { PV_PUBLIC_DOMAIN } from '../config/index.mjs';
 import { getModule } from '../modules/registry.mjs';
@@ -153,7 +154,8 @@ export function registerPreviewHostRoutes(router) {
 export function attachPreviewHostUpgrade(server) {
   const onUpgrade = async (req, socket, head) => {
     const token = pvTokenFromHost(req.headers.host);
-    if (!token) { socket.destroy(); return; } // bridge 自身无 ws 端点
+    // 不是预览域名：bridge 自己的 WebSocket 端点（如安卓画面流）由登记了路径的功能处理，其余销毁
+    if (!token) { if (!upgradeClaimed(req)) socket.destroy(); return; }
     // 设备端口转发暂不转 WebSocket（vite 热更新连不上，页面照常可用）
     if (forwardByToken(token)) { socket.destroy(); return; }
     const port = await resolvePort(token);

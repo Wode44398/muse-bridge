@@ -23,6 +23,7 @@
     title = '',
     cover = false,       // 卡片盖住锚点（仪表变菜单）
     skin = 'var(--ag-cbox-bg)',   // 锚点身后的底色：容器起点就是这个颜色，渐变成弹层底色
+    locked = false,      // 上层盖着子浮层（如长按上下文菜单）时暂停本层键盘与下滑关闭
     onClose,
     children,
   } = $props();
@@ -360,7 +361,7 @@
   }
 
   function onKey(ev) {
-    if (closing) return;
+    if (closing || locked) return;
     if (ev.key === 'Escape') {
       ev.preventDefault();
       close();
@@ -385,7 +386,7 @@
   }
 
   function onSheetTouchStart(ev) {
-    if (!narrow || morphing || ev.touches.length !== 1) { touchStartY = null; return; }
+    if (!narrow || morphing || locked || ev.touches.length !== 1) { touchStartY = null; return; }
     if (scrollEl && scrollEl.scrollTop > 2 && !ev.target?.closest?.('.pop-grab, .pop-head')) {
       touchStartY = null;
       return;
@@ -395,7 +396,7 @@
   }
 
   function onSheetTouchMove(ev) {
-    if (touchStartY === null || ev.touches.length !== 1) return;
+    if (locked || touchStartY === null || ev.touches.length !== 1) return;
     const dy = ev.touches[0].clientY - touchStartY;
     if (dy > 6) {
       dragging = true;

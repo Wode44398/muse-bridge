@@ -159,6 +159,23 @@ export async function searchSessions(
   return { items, scanned: entries.length };
 }
 
+// 全部读得通的会话（新的在前）：标题与可见正文。Recall 的会话检索按它打分（session-rank.ts）
+export async function sessionExtracts(): Promise<Array<{ meta: SessionMeta; parts: string[] }>> {
+  let names: string[];
+  try {
+    names = await fs.readdir(sessionsDir());
+  } catch {
+    return [];
+  }
+  const out: Extract[] = [];
+  for (const n of names) {
+    if (!n.endsWith(".json")) continue;
+    const e = await extract(n.slice(0, -".json".length), path.join(sessionsDir(), n));
+    if (e) out.push(e);
+  }
+  return out.sort((a, b) => b.meta.updatedAt - a.meta.updatedAt).map((e) => ({ meta: e.meta, parts: e.parts }));
+}
+
 // ── 离线整理（memory-dream.ts）与 Recall(layer:"sessions") 用：按工作区找会话、取一个会话的可见正文 ──────────────
 // 记忆系统的地基是原始对话：笔记写错了、过时了，要拿写它时的对话来核对。这里只给用户看得见的正文（同侧栏搜索），
 // 每条带角色；own = 用户本人打的字（不是注入、不是工具结果、不是附件转交）——晋升时逐字核对用户原话只认这一类。

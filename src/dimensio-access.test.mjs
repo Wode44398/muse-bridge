@@ -2,11 +2,11 @@
 //
 // 2026-09-23 维护者定：注册用户默认只能用 Claude 与 Gemini（Vertex）；2026-09-28 起管理员可在控制台按人勾选，
 // 但勾选只在「这个 agent 支持多用户」时才生效（config/agents.mjs 的 multiUser）：
-// - codex：进程内部工具调用、命令、改文件绕过 bridge 的 canUseTool 沙箱守卫，且共用主机上的登录与会话目录。
+// - codex：进程内部工具调用、命令、改文件绕过 bridge 的 canUseTool 沙箱守卫，相当于命令行权限——只开给完全信任档（同 agy）。
 // - dimensio（harness 底座）：单实例是【单租户】的；2026-09-28 起注册用户各用各的 harness 进程（routes/harness.mjs
 //   实例池，数据落在他自己的 .bridge/dimensio，harness 以 DIMENSIO_TENANT=1 锁在他的文件夹里），所以可以按人放行。
 //   但【默认名单里没有它】（新账号默认只有 Claude + Gemini），要管理员在控制台单独勾。
-// 这条测试防的就是有人日后顺手把 codex 挂回 pro 档、或把 dimensio 塞进默认名单。
+// 这条测试防的就是有人日后顺手把 codex 开给普通档、或把 dimensio 塞进默认名单。
 // Antigravity（agy）已下线：users.json / config.json 里残留的 'agy' 不能再让任何身份拿到它。
 import { test } from 'node:test';
 import assert from 'node:assert';
@@ -33,11 +33,13 @@ test('admin 拿到这台机器上全部已启用的 agent', () => {
   assert.equal(admin.allowDimensio, enabledAgents().includes('dimensio'));
 });
 
-test('codex 不支持多用户：注册用户勾了也拿不到', () => {
-  assert.equal(AGENT_BY_ID.codex.multiUser, false);
-  for (const u of [proUser, plainUser]) {
-    assert.equal(contextFor(u).allowCodex, false, `${u.tier} 不应有 codex`);
-  }
+test('codex 只开给完全信任档：这台机器开着 codex 时 pro 被勾了就有，普通档勾了也拿不到', () => {
+  assert.equal(AGENT_BY_ID.codex.multiUser, true);
+  assert.equal(AGENT_BY_ID.codex.fullTrust, true);
+  const on = enabledAgents().includes('codex');
+  assert.equal(contextFor(proUser).allowCodex, on, '完全信任档：被勾选且全局开着才有');
+  assert.equal(contextFor(plainUser).allowCodex, false, '普通档没有命令行权限，勾了也不给');
+  assert.equal(contextFor({ ...proUser, agents: ['claude'] }).allowCodex, false, '没被勾选的不给');
 });
 
 test('agy 只开给完全信任档：这台机器开着 agy 时 pro 被勾了就有，普通档勾了也拿不到', () => {

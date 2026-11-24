@@ -64,6 +64,16 @@ function Busy($serverPid) {
     $r = (Get-Content (Join-Path $Root 'inflight-runs.json') -Raw -Encoding utf8 -ErrorAction Stop).Trim()
     if ($r -ne '[]') { $c = ([regex]::Matches($r, '"sessionId"')).Count; if ($c -gt $n) { $n = $c } }
   } catch {}
+  # Antigravity sessions whose turn is over but whose background work is still going (a command moved
+  # to the background, a subagent team). A restart kills them with the agy process, and servers older
+  # than v8.78 do not count them in live-runs.json. Read agy's own data on disk (scripts/agy-bg-busy.mjs).
+  if ($n -eq 0) {
+    try {
+      $reg = 'file:///' + ((Join-Path $Root 'src\modules\register.mjs') -replace '\\', '/')
+      $bg = & node --import $reg (Join-Path $Root 'scripts\agy-bg-busy.mjs') 2>$null | Select-Object -Last 1
+      if ("$bg" -match '^\d+$' -and [int]"$bg" -gt 0) { $n = [int]"$bg" }
+    } catch {}
+  }
   return $n
 }
 

@@ -7,7 +7,9 @@
   import { ui } from '../../lib/state.svelte.js';
   import { api } from '../../lib/api.js';
   import { registerDockHost } from '../../lib/dock.svelte.js';
-  import { sharedTool } from '../../lib/dock/tools.js';
+  import { sharedTool, pluginCards } from '../../lib/dock/tools.js';
+  import { isPluginView, workbenchByKey, openWorkbenchStandalone } from '../../lib/pluginUi.svelte.js';
+  import { inAndroidApp } from '../../lib/pluginPanels.svelte.js';
   import { t } from '../../lib/i18n.js';
   import Workbench from './Workbench.svelte';
 
@@ -55,7 +57,16 @@
     state: view,
     get cols() { return dk.cols; },
     weights: { get w() { return dk.weights; } },
-    open: (v) => dk.openTool(v),
+    // 插件卡片（ctx.ui.workbench 的 hosts 含 dimensio）：插件没了不开；手机 App 里改成原生干净页面打开（同其它分页）
+    open: (v) => {
+      if (isPluginView(v)) {
+        const w = workbenchByKey(v);
+        if (!w) return;
+        if (inAndroidApp()) { openWorkbenchStandalone(w, ctxNow()); return; }
+      }
+      dk.openTool(v);
+    },
+    context: () => ctxNow(),
     close: () => dk.close(),
     closeView: (v) => dk.closeCard(v),
     toggleView: (v) => dk.toggleCard(v),
@@ -72,7 +83,14 @@
   });
 
   // 共用工具沿用登记表里的条目，叫法、列位、提示点按 dimensio 给的；快捷键由 dimensio 的页面统一接（工作区关着时也要能开）
-  const tools = $derived(dk.tools.map((x) => ({ ...(x.own ? {} : sharedTool(x.key) || {}), ...x, match: null, ok: null })));
+  // 插件卡片的上下文（SDK 的 bridge.context()）：dimensio 的会话 id 与工作目录
+  function ctxNow() { return { sessionId: dk.chatId || null, cwd: dk.ws || null, agent: 'dimensio' }; }
+  // 把插件给 dimensio 的卡片注入它的工作区（卡片表在 harness 里，宿主只给键、标题、图标）
+  $effect(() => {
+    const list = pluginCards('dimensio').map((x) => ({ key: x.key, label: x.label, closeLabel: x.closeLabel, icon: x.icon }));
+    untrack(() => dk.setExtraTools?.(list));
+  });
+  const tools = $derived(dk.tools.map((x) => ({ ...(x.own ? {} : sharedTool(x.key) || {}), ...x, ...(x.plugin ? { iconSvg: true } : {}), match: null, ok: null })));
 
   let two = $state(false);
   $effect(() => { const v = two; untrack(() => dk.setTwo(v)); });

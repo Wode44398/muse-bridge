@@ -24,6 +24,7 @@
     findSwarmMemberByConvId,
   } from '../../lib/agy/swarm.svelte.js';
   import { t, tc } from '../../lib/i18n.js';
+  import { cronLabel, timerMs, fmtSpan, fmtLeft, BG_STALL_MS } from '../../lib/agy/run-status.js';
   import AgyAgentDots from './AgyAgentDots.svelte';
   import AgyAgentTranscript from './AgyAgentTranscript.svelte';
   import AgySwarmPanel from './swarm/AgySwarmPanel.svelte';
@@ -42,6 +43,10 @@
     (Array.isArray(tree?.agents) ? tree.agents : []).filter((a) => !swarmMemberConvIds.has(a.id))
   );
   const parentTasks = $derived(Array.isArray(tree?.parentTasks) ? tree.parentTasks : []);
+  // 主会话自己挂着的后台任务：在跑的摆前面，结束了的收进「已结束 N」
+  const runningTasks = $derived(parentTasks.filter((x) => x.status === 'running').sort((a, b) => (b.at || 0) - (a.at || 0)));
+  const endedTasks = $derived(parentTasks.filter((x) => x.status !== 'running').sort((a, b) => (b.at || 0) - (a.at || 0)));
+  let endedTasksOpen = $state(false);
   const hasActive = $derived(Boolean(tree?.hasActive || swarmSnap?.hasActive));
   const activeCount = $derived((Number(tree?.counts?.active) || 0) + (Number(swarmSnap?.summary?.workingCount) || 0));
 
@@ -323,6 +328,51 @@
   </article>
 {/snippet}
 
+{#snippet bgTaskRow(tk)}
+  {@const running = tk.status === 'running'}
+  {@const sched = tk.kind === 'cron' || tk.kind === 'timer'}
+  {@const quietMs = running && !sched && (tk.logAt || tk.at) ? now - (tk.logAt || tk.at) : 0}
+  {@const stalled = quietMs > BG_STALL_MS}
+  {@const due = tk.kind === 'timer' ? (tk.at || 0) + timerMs(tk.schedule) : 0}
+  <div class="ag-bg-row" class:running>
+    <span class="ag-st-slot" aria-hidden="true">
+      {#if running && sched}
+        <span class="msr4 muted">schedule</span>
+      {:else if running}
+        <span class="ag-spin" class:stall={stalled}></span>
+      {:else if tk.status === 'error'}
+        <span class="msr4 err">error</span>
+      {:else if tk.status === 'lost'}
+        <span class="msr4 muted">stop_circle</span>
+      {:else}
+        <span class="msr4 muted">check</span>
+      {/if}
+    </span>
+    <span class="ag-bg-main">
+      <span class="ag-bg-title trunc" class:agy-shine={running && !sched && !stalled} title={tk.command || tk.title}>{tk.title || tk.id}</span>
+      {#if running}
+        <span class="ag-bg-sub trunc" class:warn={stalled}>
+          {#if tk.kind === 'cron'}
+            {t('周期任务')} · {cronLabel(tk.schedule)}
+          {:else if tk.kind === 'timer'}
+            {t('定时唤醒')} · {due > now ? t('约 {d}后', { d: fmtLeft(due - now) }) : t('马上就到')}
+          {:else if stalled}
+            {t('{d}没有新输出', { d: fmtLeft(quietMs) })}
+          {:else}
+            {t('已跑 {d}', { d: fmtSpan(now - (tk.at || now)) })}
+          {/if}
+        </span>
+        {#if tk.logTail}
+          <span class="ag-bg-tail trunc" title={tk.logTail}>{tk.logTail}</span>
+        {/if}
+      {/if}
+    </span>
+    {#if !running}
+      <span class="ag-bg-st" title={tk.status === 'lost' ? t('bridge 或 Antigravity 重启时这个任务还没跑完') : ''}>{tk.status === 'error' ? t('出错') : tk.status === 'lost' ? t('已中断') : t('已结束')}</span>
+    {/if}
+  </div>
+{/snippet}
+
 <div class="ag-ap" class:wide>
   {#if topAgentId}
     <div class="ag-ap-subhead">
@@ -366,9 +416,15 @@
             <span class="ag-live-title">
               {activeCount > 0
                 ? t('{n} 个后台子代理运行中', { n: activeCount })
-                : t('后台任务同步中')}
+                : runningTasks.length > 0
+                  ? t('{n} 个后台任务在跑', { n: runningTasks.length })
+                  : t('后台任务同步中')}
             </span>
-            <p class="ag-live-desc">{t('子代理汇报到达后会自动推送回对话，无需手动追问。')}</p>
+            <p class="ag-live-desc">
+              {activeCount > 0
+                ? t('子代理汇报到达后会自动推送回对话，无需手动追问。')
+                : t('任务结束或定时到点后，Antigravity 会自己接着干，不用手动追问。')}
+            </p>
             <div class="ag-live-acts">
               <button type="button" class="ag-sync-btn" disabled={agySubagents.syncing} onclick={() => doSync(true)}>
                 <span class="msr">refresh</span>
@@ -449,24 +505,23 @@
           <section class="ag-sec">
             <div class="ag-sech">
               <h3>{t('后台任务')}</h3>
-              <span class="ag-n num">{parentTasks.length}</span>
+              <span class="ag-n num">{runningTasks.length || parentTasks.length}</span>
             </div>
             <div class="ag-bg-list">
-              {#each parentTasks as tk (tk.id)}
-                <div class="ag-bg-row">
-                  <span class="ag-st-slot" aria-hidden="true">
-                    {#if tk.status === 'running'}
-                      <span class="ag-spin"></span>
-                    {:else if tk.status === 'error'}
-                      <span class="msr4 err">error</span>
-                    {:else}
-                      <span class="msr4 ok">check</span>
-                    {/if}
-                  </span>
-                  <span class="ag-bg-title trunc" title={tk.title}>{tk.title}</span>
-                  <span class="ag-bg-st">{tk.status === 'running' ? t('运行中') : tk.status === 'error' ? t('出错') : t('已完成')}</span>
-                </div>
+              {#each runningTasks as tk (tk.id)}
+                {@render bgTaskRow(tk)}
               {/each}
+              {#if endedTasks.length > 0}
+                <button type="button" class="ag-bg-fold" aria-expanded={endedTasksOpen} onclick={() => { endedTasksOpen = !endedTasksOpen; }}>
+                  <span class="msr" class:closed={!endedTasksOpen} aria-hidden="true">expand_more</span>
+                  <span>{t('已结束 {n}', { n: endedTasks.length })}</span>
+                </button>
+                {#if endedTasksOpen}
+                  {#each endedTasks as tk (tk.id)}
+                    {@render bgTaskRow(tk)}
+                  {/each}
+                {/if}
+              {/if}
             </div>
           </section>
         {/if}
@@ -943,16 +998,43 @@
   .ag-bg-list { display: flex; flex-direction: column; gap: 6px; }
   .ag-bg-row {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     padding: 7px 10px;
     border-radius: 9px;
     background: var(--ag-surface-1);
     border: 1px solid var(--ag-border);
     font-size: 12px;
+    line-height: 16px;
   }
-  .ag-bg-title { flex: 1; min-width: 0; color: var(--ag-on-sub); }
-  .ag-bg-st { flex: none; color: var(--ag-on-dim); font-size: 11px; }
+  .ag-bg-row:not(.running) { background: transparent; border-color: transparent; padding-top: 4px; padding-bottom: 4px; }
+  .ag-bg-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .ag-bg-title { color: var(--ag-on-sub); }
+  .ag-bg-row.running .ag-bg-title { color: var(--ag-on); font-weight: 500; }
+  .ag-bg-row:not(.running) .ag-bg-title { color: var(--ag-on-dim); }
+  .ag-bg-sub { font-size: 11.5px; color: var(--ag-on-dim); font-variant-numeric: tabular-nums; }
+  .ag-bg-sub.warn { color: var(--ag-warn); }
+  .ag-bg-tail {
+    font-family: var(--ag-mono, ui-monospace, Consolas, monospace);
+    font-size: 11px;
+    color: var(--ag-on-faint);
+  }
+  .ag-bg-st { flex: none; color: var(--ag-on-faint); font-size: 11px; }
+  .ag-bg-fold {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 8px 0 4px;
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--ag-on-dim);
+  }
+  .ag-bg-fold:hover { background: var(--ag-hover); color: var(--ag-on); }
+  .ag-bg-fold .msr { font-size: 16px; transition: transform 0.16s ease; }
+  .ag-bg-fold .msr.closed { transform: rotate(-90deg); }
+  .ag-spin.stall { animation: none; border-top-color: var(--ag-warn); }
 
   .ag-spin {
     width: 11px;

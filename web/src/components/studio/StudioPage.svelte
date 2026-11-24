@@ -9,6 +9,7 @@
   // 平板 / 桌面是预测式返回；系统返回逐层关（浮层 → 抽屉 → 回主页）；studioInbox；任务完成作品飞进作品栏。
   import { untrack } from 'svelte';
   import { ui, prefs, studioInbox } from '../../lib/state.svelte.js';
+  import { isPageWindow } from '../../lib/windowPage.svelte.js';
   import { layout } from '../../lib/layout.svelte.js';
   import { closePage, backPeek } from '../../lib/pageMorph.js';
   import { swipeDismiss, reduced } from '../../lib/motion.js';
@@ -182,9 +183,10 @@
   let slideEl = $state();
   const peek = $derived(backPeek(peekX));
   function resetSlide() { peekX = 0; peeking = false; ui.studioSliding = false; }
+  const pageWin = isPageWindow();
   const edgeBack = (node) => swipeDismiss(node, {
     axis: 'x', dir: 1, edge: 40, threshold: 0.32,
-    guard: () => !compact && !ui.morphing && !drag.on,
+    guard: () => !pageWin && !compact && !ui.morphing && !drag.on,
     base: () => peekX, cur: () => peekX,
     onStart: () => { peeking = true; ui.studioSliding = true; },
     onMove: (x) => { peekX = x; },
@@ -194,7 +196,7 @@
       closePage('studio', { fromRect: rect, fromRadius: peek.r, onSwitch: resetSlide });
     },
   });
-  function back() { if (ui.screen === 'studio') closePage('studio', { onSwitch: resetSlide }); }
+  function back() { if (!pageWin && ui.screen === 'studio') closePage('studio', { onSwitch: resetSlide }); }
 
   // —— 任务托盘 ——
   let trayOpen = $state(false);
@@ -266,7 +268,7 @@
       aria-hidden={!railVisible} inert={!railVisible} aria-label={t('作品')}>
       <div class="sd-rail-in">
         <header class="sd-band sd-rail-hd">
-          {#if !compact}<button class="sd-ib" aria-label={t('返回')} onclick={back}>{@html icon('back')}</button>{/if}
+          {#if !compact && !pageWin}<button class="sd-ib" aria-label={t('返回')} onclick={back}>{@html icon('back')}</button>{/if}
           {@render brand()}
           <button class="sd-ib" aria-label={compact ? t('关闭') : t('收起作品栏')} onclick={toggleRail}>{@html icon(compact ? 'close' : 'side')}</button>
         </header>
@@ -284,7 +286,7 @@
         <header class="sd-band sd-cbar" class:tight={tabsTight} bind:clientWidth={cbarW} bind:this={cbarEl}>
           <div class="sd-cbar-l" bind:clientWidth={cbarLW}>
             {#if !railVisible || compact}
-              <button class="sd-ib" aria-label={t('返回')} onclick={back}>{@html icon('back')}</button>
+              {#if !pageWin}<button class="sd-ib" aria-label={t('返回')} onclick={back}>{@html icon('back')}</button>{/if}
               <button class="sd-ib sd-rail-btn" aria-label={t('打开作品栏')} aria-expanded={railVisible} onclick={toggleRail}>
                 {@html icon(compact ? 'menu' : 'side')}
                 {#key pip}{#if pip && !railVisible}<span class="sd-dot" style="background:var(--sd-accent)"></span>{/if}{/key}

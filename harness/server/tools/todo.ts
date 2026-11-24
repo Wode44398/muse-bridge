@@ -19,9 +19,7 @@ export const todoTool: Tool = {
   def: {
     name: "TodoWrite",
     description:
-      "Track a multi-step task as a checklist. Send the FULL list each call. Keep exactly one " +
-      "item in_progress at a time; mark items completed as soon as they are done. Use for any " +
-      "task with 3+ steps.",
+      "Track a multi-step task as a checklist. Each call replaces the whole list; at most one item is in_progress.",
     parameters: {
       type: "object",
       properties: {

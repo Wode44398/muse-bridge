@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import os from "node:os";
 import path from "node:path";
 import { AgentState, isPureSocialTurn, visibleMessages } from "./agent/state.ts";
+import { hardenedProfile, type ModelProfile } from "./agent/profile.ts";
 import { tagLegacyOrigins } from "./agent/injections.ts";
 import type { Msg } from "./agent/turn.ts";
 
@@ -23,9 +24,9 @@ import {
   listMemories,
   memoryDir,
   readMemory,
-  renderMemoryForPrompt,
   saveMemory,
 } from "./memory.ts";
+import { renderMemoryForPrompt } from "./memory-index.ts";
 
 const tempRoots: string[] = [];
 
@@ -67,7 +68,7 @@ test("memory is isolated per workspace and uses structured descriptions", () => 
   assert.equal(saved.id, "choose-sqlite");
   assert.equal(listMemories(workspaceA).length, 1);
   assert.deepEqual(listMemories(workspaceB), []);
-  assert.match(renderMemoryForPrompt(workspaceA)!, /project; active\/verified; topic=persistence\.database/);
+  assert.match(renderMemoryForPrompt(workspaceA)!, /^- Choose SQLite — Relevant when changing the local persistence layer\. · choose-sqlite\.md$/m);
   assert.equal(readMemory(workspaceA, saved.id)?.description, "Relevant when changing the local persistence layer.");
 
   const raw = readFileSync(path.join(memoryDir(workspaceA), `${saved.id}.md`), "utf8");
@@ -79,6 +80,7 @@ test("memory is isolated per workspace and uses structured descriptions", () => 
   assert.equal(readdirSync(memoryDir(workspaceA)).some((f) => f.endsWith(".tmp")), false);
 });
 
+// 记忆放宽（m 线）：没写状态的旧笔记与模型直接写的文件一样默认生效、列进索引（以前钉的是「旧格式一律 proposed、不进提示」）
 test("legacy global notes migrate once without leaking into later workspaces", () => {
   const root = temp("dimensio-legacy-");
   process.env.MEMORY_DIR = root;
@@ -92,15 +94,15 @@ test("legacy global notes migrate once without leaking into later workspaces", (
 
   const legacy = listMemories(workspaceA)[0];
   assert.equal(legacy?.title, "Old note");
-  assert.equal(legacy?.status, "proposed");
-  assert.equal(legacy?.confidence, "inferred");
-  assert.ok(legacy?.issues.includes("legacy-schema"));
-  assert.doesNotMatch(renderMemoryForPrompt(workspaceA)!, /A legacy decision/);
-  assert.match(renderMemoryForPrompt(workspaceA)!, /1 proposed\/stale\/superseded notes omitted/);
+  assert.equal(legacy?.status, "active");
+  assert.equal(legacy?.confidence, "observed");
+  assert.deepEqual(legacy?.issues, []);
+  assert.match(renderMemoryForPrompt(workspaceA)!, /^- Old note — A legacy decision and its reason\. · old-note\.md$/m);
   assert.deepEqual(listMemories(workspaceB), []);
 });
 
-test("memory quality gate rejects secrets and ungrounded active claims", () => {
+// 记忆放宽（m 线）：可信度与证据对不上不再拒（以前钉「active + inferred 拒存」）；凭据照旧拒、读出时照旧隔离
+test("memory quality gate rejects secrets; trust levels no longer block a save", () => {
   process.env.MEMORY_DIR = temp("dimensio-quality-");
   const workspace = temp("quality-workspace-");
 
@@ -118,19 +120,17 @@ test("memory quality gate rejects secrets and ungrounded active claims", () => {
     /credential or private key/,
   );
 
-  assert.throws(
-    () =>
-      saveMemory(workspace, {
-        title: "Choose a queue",
-        description: "Relevant when changing background jobs.",
-        type: "project",
-        topic: "jobs.queue",
-        status: "active",
-        confidence: "inferred",
-        content: "Use Redis.\n\nWhy: throughput.\nHow to apply: keep one queue.",
-      }),
-    /cannot have inferred confidence/,
-  );
+  const queue = saveMemory(workspace, {
+    title: "Choose a queue",
+    type: "project",
+    topic: "jobs.queue",
+    status: "active",
+    confidence: "inferred",
+    content: "Use Redis for background jobs.",
+  });
+  assert.equal(queue.status, "active");
+  assert.equal(readMemory(workspace, queue.id)?.status, "active", "读出时也不因可信度压下去");
+  assert.equal(readMemory(workspace, queue.id)?.description, "Use Redis for background jobs.", "没给描述：取正文开头");
 
   const legacyDir = memoryDir(workspace);
   mkdirSync(legacyDir, { recursive: true });
@@ -158,10 +158,9 @@ test("Remember names every problem in one response instead of one per call", asy
   const text = (result: Awaited<ReturnType<typeof rememberTool.run>>) =>
     result.content.map((block) => (block.t === "text" ? block.text : "")).join("\n");
 
-  // The shape of the real 2026-08-16 k3 call: no description, verified with
-  // neither evidence nor verifiedAt, and an active project note missing its
-  // Why/How to apply sections. Reported one at a time, that is four round trips.
-  const rejected = await rememberTool.run(
+  // 记忆放宽（m 线）：2026-08-16 那次 k3 调用的形状（没描述、verified 却没证据也没时间、active 的项目笔记缺 Why / How to apply）
+  // 以前要来回四趟，现在一次就存下、生效；verified 没有本会话的工具调用作证，只把可信度记成 observed
+  const saved = await rememberTool.run(
     {
       title: "podstream 构建环境",
       content: "Gradle 必须用工作区 JDK21。",
@@ -172,28 +171,25 @@ test("Remember names every problem in one response instead of one per call", asy
     },
     ctx,
   );
-  assert.equal(rejected.ok, false);
-  for (const expected of [/description/, /evidence/, /verifiedAt/, /Why/, /How to apply/]) {
-    assert.match(text(rejected), expected);
-  }
-
-  // Everything the one message asked for, supplied in a single retry.
-  const saved = await rememberTool.run(
-    {
-      title: "podstream 构建环境",
-      description: "构建 podstream 时须用工作区 JDK21。",
-      content: "Gradle 必须用工作区 JDK21。\n\nWhy: 系统 Java 26 会让构建脚本编译失败。\nHow to apply: local.properties 指向 .sdk 与 JDK21。",
-      type: "project",
-      topic: "android-build.environment",
-      status: "active",
-      confidence: "verified",
-      evidence: ["./gradlew assembleDebug 在 JDK21 下 BUILD SUCCESSFUL"],
-      verifiedAt: new Date().toISOString(),
-    },
-    ctx,
-  );
   assert.equal(saved.ok, true, text(saved));
-  assert.equal(listMemories(workspace).length, 1);
+  const [note] = listMemories(workspace);
+  assert.equal(note.status, "active");
+  assert.equal(note.confidence, "observed");
+  assert.match(text(saved), new RegExp(`in ${memoryDir(workspace).replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")}`), "结果里说文件落在哪");
+
+  // 真正存不了的一次报全：没正文 + 疑似凭据
+  const rejected = await rememberTool.run({ title: "token", description: "api_key=sk-1234567890abcdefghijklmnop" }, ctx);
+  assert.equal(rejected.ok, false);
+  assert.match(text(rejected), /2 problems/);
+  assert.match(text(rejected), /needs content/);
+  assert.match(text(rejected), /credential/);
+
+  // 写坏了的可选项：丢掉照存、说一声
+  const lenient = await rememberTool.run({ title: "Port", content: "The dev server listens on 8811.", expiresAt: "next week", type: "trivia" }, ctx);
+  assert.equal(lenient.ok, true, text(lenient));
+  assert.match(text(lenient), /expiresAt must be an ISO date — ignored/);
+  assert.match(text(lenient), /type must be one of/);
+  assert.equal(listMemories(workspace).length, 2);
 });
 
 test("active topic conflicts require an explicit superseding decision", () => {
@@ -254,7 +250,10 @@ test("expiry and missing anchors quarantine notes from the prompt", () => {
   assert.ok(items.every((m) => m.status === "stale"));
   assert.ok(items.some((m) => m.issues.includes("expired")));
   assert.ok(items.some((m) => m.issues.includes("missing-anchor:missing-config.json")));
-  assert.doesNotMatch(renderMemoryForPrompt(workspace)!, /Expired endpoint|Missing config anchor/);
+  // 记忆放宽（m 线）：被隔离的也列标题，带上为什么不作数（以前整条不进提示）
+  const index = renderMemoryForPrompt(workspace)!;
+  assert.match(index, /^- Expired endpoint — .*\(stale: expired\)$/m);
+  assert.match(index, /^- Missing config anchor — .*\(stale: its anchor file is gone\)$/m);
 });
 
 test("resumed prompts replace only the memory index", () => {
@@ -269,7 +268,7 @@ test("resumed prompts replace only the memory index", () => {
   assert.equal(refreshMemoryIndex(old), "core prompt\n\n## Project guide (GUIDE.md)\nkeep this guide");
 });
 
-function makeState(adapter: ProviderAdapter, workspace: string, extraTools: Tool[] = []): AgentState {
+function makeState(adapter: ProviderAdapter, workspace: string, extraTools: Tool[] = [], profile?: ModelProfile): AgentState {
   let state!: AgentState;
   const ctx: ToolContext = {
     sandbox: new Sandbox(workspace),
@@ -290,6 +289,7 @@ function makeState(adapter: ProviderAdapter, workspace: string, extraTools: Tool
     ctx,
     toolMap: new Map(tools.map((tool) => [tool.def.name, tool])),
     permissionMode: "auto",
+    ...(profile ? { profile } : {}),
   });
   return state;
 }
@@ -577,7 +577,8 @@ test("an open todo list keeps the run going past the checkpoint turn", async () 
   assert.equal(events.at(-1)?.e, "done");
 });
 
-test("the verification gate outranks a same-turn memory checkpoint", async () => {
+// 验证门禁是加固档案的行为
+test("the verification gate outranks a same-turn memory checkpoint (hardened)", async () => {
   process.env.MEMORY_DIR = temp("dimensio-memory-");
   const workspace = temp("same-turn-dirty-");
   let turn = 0;
@@ -613,7 +614,7 @@ test("the verification gate outranks a same-turn memory checkpoint", async () =>
       }
     },
   };
-  const state = makeState(adapter, workspace, [verificationAuditTool]);
+  const state = makeState(adapter, workspace, [verificationAuditTool], hardenedProfile());
   state.addUserMessage("改一下这个文件");
   // Stand in for an Edit/Write earlier in the run: the tree is dirty and
   // nothing has verified it yet.

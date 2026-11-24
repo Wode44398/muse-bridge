@@ -36,6 +36,7 @@
   import { pickSession } from '../../lib/sessionPicker.svelte.js';
   import { pageNav, pageComposer } from '../../lib/pageNav.js';
   import { watchFromPage } from '../../lib/notices.svelte.js';
+  import { startDownload } from '../../lib/downloads.svelte.js';
   import { bidiIsolate, clipText } from '../../lib/selfMount.js';
   import { createFrameGate, createWatchHold, fromFrame, makeNonce, confirmParts } from '../../lib/pluginFrameGate.js';
 
@@ -72,7 +73,7 @@
   const PLUGIN_ID_RE = /^[a-z][a-z0-9-]{0,47}$/;
 
   // 宿主认的调用（随 init 交给 SDK 的 bridge.can()）
-  const CAPS = ['nav', 'composer', 'grant', 'pick.file', 'pick.session', 'chat', 'files', 'kv'];
+  const CAPS = ['nav', 'composer', 'grant', 'pick.file', 'pick.session', 'chat', 'files', 'kv', 'socket', 'download'];
   const SUB_MAX = 4;
   const SUB_RE = /^[A-Za-z0-9_-]{1,32}$/;
   // 同服务端 page-chat 的会话 id 形状；不对的不发请求
@@ -398,6 +399,27 @@
     }
   }
 
+  // 页面要下载插件接口给的文件（bridge.download）：宿主带自己的登录态去取——桌面壳 / 手机 App 交给原生下载器（有进度、存进下载目录），
+  // 网页里取成 blob 用宿主页的 <a download> 存（沙箱页面在手机 WebView 里自己存不了）。路径同代发，只放行本插件的接口。
+  async function doDownload(m, g) {
+    const rel = cleanPath(m.path);
+    const target = rel == null ? null : pluginUrl(rel);
+    if (!target) return reply(m.id, null, t('请求不合法'), null, { status: 400 });
+    const name = String(m.name || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim().slice(0, 120) || 'download';
+    try {
+      if (startDownload({ url: target.url, name })) return replyIf(g, m.id, { ok: true, native: true });
+      const res = await fetch(target.url, { headers: authHeaders(), credentials: 'same-origin' });
+      if (!res.ok) return replyIf(g, m.id, null, 'HTTP ' + res.status, null, { status: res.status });
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+      replyIf(g, m.id, { ok: true, native: false, size: blob.size });
+    } catch (e) { replyIf(g, m.id, null, String(e?.message || e || t('网络错误'))); }
+  }
+
   async function onMessage(e) {
     // 出自这个 iframe 的窗口才收；唯一的例外是跳页时旧文档的 bye——它到这儿 e.source 已经是 null（见 fromFrame），
     // 不放它进门的话门一直挂着、下一次 load 的 probe 会落进跳去的外站页
@@ -423,6 +445,7 @@
         if (mode === 'embed') height = Math.max(minHeight, Math.min(4000, Number(m.height) || minHeight));
         break;
       case 'fetch': doFetch(m, g); break;
+      case 'download': doDownload(m, g); break;
       case 'toast': showToast(String(m.text || '').slice(0, 300), m.error ? 'err' : 'ok'); break;
       case 'confirm': {
         // 由 bridge 写明是谁在问，放在框自己的标题位（框的最上面）：插件没法把自己的框伪装成 bridge 的，说明写多长也顶不走它。

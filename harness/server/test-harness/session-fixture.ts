@@ -2,6 +2,7 @@
 // adapter + wire-fakes 的假 fetch）。Q2 的布局场景与 C1 的召回契约共用。
 import assert from "node:assert/strict";
 import type { PermissionMode } from "../agent/permissions.ts";
+import type { ModelProfile } from "../agent/profile.ts";
 import { describeWorldChange, systemPrompt } from "../agent/prompt.ts";
 import { AgentState } from "../agent/state.ts";
 import { worldTokens, type WorldValues } from "../agent/world-state.ts";
@@ -17,6 +18,7 @@ export interface SessionFixtureOptions {
   // 记忆审计门禁默认关（它的收尾挪位会混进别的场景）；要测它时显式打开
   memoryAudit?: boolean;
   tools?: Tool[];
+  profile?: ModelProfile; // 模型档案；不给 = 默认（lean）档案
 }
 
 export function attachSession(adapter: ProviderAdapter, root: string, opts: SessionFixtureOptions = {}): Session {
@@ -33,7 +35,7 @@ export function attachSession(adapter: ProviderAdapter, root: string, opts: Sess
   };
   state = new AgentState({
     adapter,
-    system: systemPrompt({ root, access: "workspace", permissionMode: mode, shell: "bash", platform: "linux", provider: adapter.id, model: adapter.model }),
+    system: systemPrompt({ root, access: "workspace", permissionMode: mode, shell: "bash", platform: "linux", provider: adapter.id, model: adapter.model, ...(opts.profile ? { profile: opts.profile } : {}) }),
     tools: tools.map((tool) => tool.def),
     budget: { maxOutputTokens: 1000, thinking: "off" },
     ctx,
@@ -41,6 +43,7 @@ export function attachSession(adapter: ProviderAdapter, root: string, opts: Sess
     permissionMode: mode,
     permissionRules: { allow: [], deny: [], ask: [] },
     memoryAuditRequired: opts.memoryAudit ?? false,
+    ...(opts.profile ? { profile: opts.profile } : {}),
   });
   wireWorld(state);
   // P13：与 buildState 一样，沙箱现读会话放行的工作区外只读目录

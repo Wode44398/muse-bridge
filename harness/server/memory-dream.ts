@@ -9,8 +9,10 @@
 //   · 晋升（→ active）只有一条路：模型摘出用户在原始对话里亲口说的那句话，服务端逐字核对它确实出现在那个会话里用户本人打的字里
 //     （session-search.ts quoteInUserLines：不是注入、不是工具结果）。对不上就不晋升，只记一条「已复核」，留在面板里等用户一键确认；
 //   · 用户确认过的（origin user / user_confirmed）只加复核意见，不改、不并、不退；
-//   · 晋升照样过 saveMemory 的严格校验（注入特征、Why / How to apply、锚点、同 topic 冲突）和工作区注入预算，过不了就不晋升；
-//   · 全局层不碰（全局条目进每一个工作区，永远等用户确认，K7）；被驳回的不碰（那是用户的决定记录）。
+//   · 晋升照样过 saveMemory 的严格校验（凭据、注入特征、锚点、同 topic 冲突），过不了就不晋升（记忆索引列出全部条目，
+//     晋升不再占注入预算）；
+//   · 模型直接写进记忆目录的文件（没有 frontmatter、只有 name / description 的都算）同样会被复核：它们默认生效、没人核对过；
+//   · 全局层不碰（全局条目进每一个工作区，只由用户在记忆面板里处置，K7）；被驳回的不碰（那是用户的决定记录）。
 // 每改一处旧版都进 .history；复核意见写在条目上（reviewed_at / review_verdict / review_note），面板照着显示。
 //
 // 不全量扫（文章：持续检查全部记忆不现实）：只看「这一版还没复核过」的（reviewedAt < updated）——待确认的、被隔离的、模型自己
@@ -25,7 +27,6 @@ import type { Msg } from "./agent/turn.ts";
 import { effectiveBaseUrl, resolveKey } from "./config.ts";
 import { askForJsonList, UnparseableReply, type ExtractedNote, type SideUsage } from "./memory-extract.ts";
 import {
-  activeIndexLineLength,
   annotateReview,
   hasMemorySection,
   listMemories,
@@ -35,7 +36,6 @@ import {
   retireMemory,
   saveMemory,
   supersedeMemory,
-  workspaceBudgetLeft,
   type MemoryMeta,
   type MemoryType,
   type ReviewVerdict,
@@ -357,8 +357,8 @@ function draftFrom(m: MemoryMeta, content: string, raw: unknown): NoteDraft {
     description: clip(oneLine(str(n.description) ?? m.description), 240),
     content: body,
     type: type && TYPES.has(type) ? type : m.type,
-    // 改 topic 会绕开同 topic 冲突检测，改写时一律沿用原来的
-    topic: m.topic,
+    // 改 topic 会绕开同 topic 冲突检测，改写时一律沿用原来的（没写 topic 的笔记 topic 就是 id，不补一个）
+    topic: m.topic !== m.id ? m.topic : "",
     expiresAt: str(n.expiresAt) ?? m.expiresAt,
   };
 }
@@ -382,18 +382,17 @@ function tryPromote(c: Ctx, m: MemoryMeta, draft: NoteDraft, quote: string | und
   const t = c.shown.get(sessionId);
   if (!t) return `session ${sessionId} was not among the conversations shown`;
   if (!quoteInUserLines(t.lines, quote)) return "quote not found in what the user typed";
-  const others = listMemories(c.ws).filter((o) => o.id !== m.id && o.topic === draft.topic && o.declaredStatus === "active");
-  if (others.some(isProtected) || others.length > 1) return `another active note covers topic ${draft.topic} (${others.map((o) => o.id).join(", ")})`;
+  const topic = draft.topic || m.id;
+  const others = listMemories(c.ws).filter((o) => o.id !== m.id && o.topic === topic && o.declaredStatus === "active");
+  if (others.some(isProtected) || others.length > 1) return `another active note covers topic ${topic} (${others.map((o) => o.id).join(", ")})`;
   const supersedes = others[0]?.id;
-  const need = activeIndexLineLength({ id: m.id, type: draft.type, topic: draft.topic, title: draft.title, description: draft.description });
-  if (need > workspaceBudgetLeft(c.ws, { excluding: [m.id, ...(supersedes ? [supersedes] : [])] })) return "this workspace's prompt budget is full";
   try {
     const saved = saveMemory(c.ws, {
       id: m.id,
       title: draft.title,
       description: draft.description,
       type: draft.type,
-      topic: draft.topic,
+      topic: draft.topic || undefined,
       status: "active",
       confidence: "user_confirmed",
       content: draft.content,
@@ -420,7 +419,7 @@ function rewrite(c: Ctx, m: MemoryMeta, draft: NoteDraft): boolean {
       title: draft.title,
       description: draft.description,
       type: draft.type,
-      topic: draft.topic,
+      topic: draft.topic || undefined,
       status: "proposed",
       confidence: m.confidence === "inferred" ? "inferred" : "observed",
       content: draft.content,
@@ -571,13 +570,13 @@ async function patterns(c: Ctx, adapter: ProviderAdapter, sessions: Transcript[]
     const title = str(n.title);
     const content = str(n.content);
     const topic = str(n.topic)?.toLowerCase();
-    if (!title || !content || !topic) continue;
+    if (!title || !content) continue;
     const cited = [...new Set(strs(n.sessions))].filter((s) => c.shown.has(s));
     if (cited.length < 2) {
       c.summary.notApplied.push(`pattern "${clip(title, 60)}": needs at least two of the sessions shown`);
       continue;
     }
-    const clash = existing.find((m) => m.topic === topic && m.declaredStatus !== "superseded");
+    const clash = topic ? existing.find((m) => m.topic === topic && m.declaredStatus !== "superseded") : undefined;
     if (clash) {
       c.summary.notApplied.push(`pattern "${clip(title, 60)}": topic already covered by ${clash.id}${clash.declaredStatus === "rejected" ? " (rejected by the user)" : ""}`);
       continue;
@@ -592,7 +591,7 @@ async function patterns(c: Ctx, adapter: ProviderAdapter, sessions: Transcript[]
         title: clip(title, 120),
         description: clip(oneLine(str(n.description) ?? title), 240),
         type,
-        topic,
+        topic: topic || undefined,
         status: "proposed",
         confidence: "observed",
         content: body,
@@ -606,7 +605,7 @@ async function patterns(c: Ctx, adapter: ProviderAdapter, sessions: Transcript[]
       c.summary.created.push(saved.id);
       // 有用户原话就晋升（同一套核对）；没有就停在 proposed，复核意见写上它从哪几个会话来
       const quote = str(n.quote);
-      const why = meta && quote ? tryPromote(c, meta, { title: meta.title, description: meta.description, content: body, type, topic, expiresAt: meta.expiresAt }, quote, str(n.session), evidence) : "no quote";
+      const why = meta && quote ? tryPromote(c, meta, { title: meta.title, description: meta.description, content: body, type, topic: topic ?? "", expiresAt: meta.expiresAt }, quote, str(n.session), evidence) : "no quote";
       if (why === null) c.summary.promoted.push(saved.id);
       else if (quote) c.summary.notApplied.push(`${saved.id}: not promoted — ${why}`);
       annotateReview(c.ws, saved.id, { verdict: why === null ? "supported" : "unclear", note: `seen in ${cited.length} sessions${why === null ? "" : quote ? ` (not promoted: ${why})` : ""}` });

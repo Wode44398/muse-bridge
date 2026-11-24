@@ -8,6 +8,8 @@
   import WorkspaceEmbed from './WorkspaceEmbed.svelte';
   import MemoryPanel from './MemoryPanel.svelte';
   import MediaViewer from '../preview/MediaViewer.svelte';
+  import PluginWorkbench from './PluginWorkbench.svelte';
+  import { isPluginView, workbenchByKey } from '../../lib/pluginUi.svelte.js';
   import { t } from '../../lib/i18n.js';
 
   // files = 外壳算好的文件卡挂载参数（{ key, ws, rel, open, home }；null = 此刻挂不了，见下面的说明文案）
@@ -19,7 +21,11 @@
   const previewHost = $derived(host.previewHost === 'dock' ? '' : host.previewHost);
 </script>
 
-{#if view === 'memory'}
+{#if isPluginView(view)}
+  <!-- 插件的工作区卡片（ctx.ui.workbench）：各分页同一张卡；不包 {#key ws}，换工作目录只把新上下文推给页面 -->
+  {@const w = workbenchByKey(view)}
+  {#if w}<PluginWorkbench {w} {host} />{:else}<div class="wb-wait">{t('这个插件页面不在了（插件被关掉或卸载了）')}</div>{/if}
+{:else if view === 'memory'}
   <!-- 记忆按工作目录找记忆库，不用等 meta -->
   {#key st.ws}<MemoryPanel ws={st.ws} agent={host.memoryAgent} {theme} />{/key}
 {:else if view === 'files'}

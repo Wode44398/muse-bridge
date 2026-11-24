@@ -4,7 +4,9 @@ import { fail } from "./types.ts";
 import { diagnose } from "./diagnostics.ts";
 import { introducesRedactionMark, REDACTED_WRITE_HINT, REDACTION_MARK } from "../redact.ts";
 import { writeUserFile } from "../atomic-write.ts";
+import { afterMemoryWrite, beforeMemoryWrite, memoryWriteGate } from "../memory-files.ts";
 import { eolOf, spliceMixed } from "./line-endings.ts";
+import { ARG_ALIASES } from "./arg-aliases.ts";
 
 // Edit's determinism is the #1 reason agent coding derails; these three
 // guarantees come straight from the plan (§7.1):
@@ -17,15 +19,14 @@ const readRequired = (ctx: ToolContext): boolean => ctx.toolPolicy?.readBeforeEd
 export const editTool: Tool = {
   effect: "write",
   concurrencySafe: false,
+  aliases: ARG_ALIASES.Edit,
   def: {
     name: "Edit",
     description:
-      "Replace an exact substring in a file you have already Read. old_string must be " +
-      "unique unless replace_all is true. Whitespace/quote mismatches are tolerated. " +
-      "If the file changed on disk since that Read (your own sed/script write, say), the edit still goes " +
-      "through as long as old_string matches the new content uniquely — no re-Read needed. " +
-      "old_string and new_string must differ. The saved file gets a quick syntax check " +
-      "(JS/TS/JSON/Python); any syntax error is reported in the result — fix it before moving on.",
+      "Replace an exact string in a file you have Read. old_string must match exactly once unless replace_all is true " +
+      "(quote/whitespace variants are tolerated). If the file changed on disk since your Read, the edit still applies " +
+      "as long as old_string matches the current content. The saved file gets a quick syntax check (JS/TS/JSON/Python) " +
+      "reported in the result.",
     parameters: {
       type: "object",
       properties: {
@@ -92,7 +93,7 @@ export const editTool: Tool = {
     // that the file moved under them.
     const changedOnDisk = state !== undefined && current !== state.content;
     if (changedOnDisk) {
-      ctx.readFileState.set(abs, { mtimeMs, content: current, readRanges: [], complete: false });
+      ctx.readFileState.set(abs, { mtimeMs, content: current, readRanges: [], complete: false, stale: true });
     }
     const changedNote = changedOnDisk
       ? `${ctx.sandbox.rel(abs)} changed on disk since you Read it (my view is now refreshed to the current bytes). `
@@ -166,27 +167,36 @@ export const editTool: Tool = {
         : eol === "\r\n"
           ? resultLF.replace(/\n/g, "\r\n")
           : resultLF;
+    // 记忆目录里的笔记：子 agent 不写、用户驳回的不改、不许自称被驳回
+    const memoryBlock = memoryWriteGate(abs, ctx, result);
+    if (memoryBlock) return fail("memory note", memoryBlock);
 
     try {
       await ctx.beforeFileWrite?.(abs).catch(() => {}); // 大工作区：改之前先备份这个文件（检查点只存改过的文件）
+      beforeMemoryWrite(abs, ctx.sandbox.root); // 记忆目录里的笔记：旧版先进 .history
       await writeUserFile(abs, result); // U5：临时文件 + rename，写到一半出事原文件还在
       const stat = await fs.stat(abs);
       const totalLines = result.split(/\r?\n/).length;
       // An externally changed file is no longer fully read, whatever the stale
       // state claimed — Write's overwrite gate must not inherit that coverage.
       // 没 Read 过就改的（readBeforeEdit=off）不记：模型没看过这个文件，Write 覆盖它仍得先 Read
+      // 叠在外部改动上改成的（或之前就是工具刷新的视图）：模型仍没看过外部改的那部分，记成 stale，Write 覆盖前得先重读
       if (state) {
         const complete = changedOnDisk ? false : state.complete;
+        const stale = changedOnDisk || state.stale === true;
         ctx.readFileState.set(abs, {
           mtimeMs: stat.mtimeMs,
           content: result,
           readRanges: complete ? [[1, totalLines]] : [],
           complete,
+          ...(stale ? { stale: true as const } : {}),
         });
       }
     } catch (e) {
       return fail("write failed", `Could not write ${args.path}: ${(e as Error).message}`);
     }
+    // 记忆目录里的笔记：记下来源、重新生成 MEMORY.md，下一轮开跑时索引按新内容更新
+    if (afterMemoryWrite(abs, ctx.sandbox.root, { session: ctx.ownerId, external: ctx.externalContent?.() === true })) ctx.noteMemoryChanged?.();
 
     const n = replaceAll ? count : 1;
     const applied =
