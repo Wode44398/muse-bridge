@@ -8,9 +8,6 @@
   import { codexHost, codexTools, agyHost, agyTools, createDockHost } from '../../lib/dock.svelte.js';
   import { sharedTool } from '../../lib/dock/tools.js';
   import { DOCK_CHANNEL, AGENT_CARD_KEYS } from '../../lib/solo.js';
-  import { tokenVars } from '@hx/lib/theme.ts';
-  import '@hx/app.css';
-  import '../agy/theme.css';
   import Workbench from './Workbench.svelte';
 
   let { agent, card, ws = '', sid = '', theme = '' } = $props();
@@ -26,6 +23,15 @@
   const tools = $derived(agent === 'codex' ? codexTools() : agent === 'agy' ? agyTools()
     : AGENT_CARD_KEYS.dimensio.map((k) => sharedTool(k)).filter(Boolean));
   const skin = untrack(() => agent);
+
+  // agy / dimensio 的样式与令牌属于各自的功能扩展：经登记的懒加载入口取，核心不静态引它们的源码（stage 闸门）
+  let tokenVars = $state(null);
+  let skinReady = $state(untrack(() => agent !== 'agy' && agent !== 'dimensio'));
+  untrack(() => {
+    const done = () => { skinReady = true; };
+    if (agent === 'agy') import('../agy/card-skin.js').then(done, done);
+    else if (agent === 'dimensio') import('./DimensioCardSkin.js').then((m) => { tokenVars = m.tokenVars; done(); }, done);
+  });
   untrack(() => {
     host.setWs(ws);
     host.state.sessionId = sid;
@@ -35,7 +41,7 @@
 
   // dimensio 的令牌平时由它的 theme.ts 写进根节点；这里按拖出时的明暗写一份
   const hxVars = $derived.by(() => {
-    if (agent !== 'dimensio') return '';
+    if (agent !== 'dimensio' || !tokenVars) return '';
     try { return Object.entries(tokenVars(mode)).map(([k, v]) => `${k}:${v}`).join(';'); } catch { return ''; }
   });
 
@@ -46,8 +52,10 @@
 </script>
 
 <div class="acw" class:light class:agy-root={agent === 'agy'} class:hxroot={agent === 'dimensio'} style={hxVars}>
-  <Workbench {host} {tools} wide {card} skin={skin} mobile="sheet" theme={mode}
-    label={tools.find((x) => x.key === card)?.label || ''} keysOn={false} onCardBack={back} />
+  {#if skinReady}
+    <Workbench {host} {tools} wide {card} skin={skin} mobile="sheet" theme={mode}
+      label={tools.find((x) => x.key === card)?.label || ''} keysOn={false} onCardBack={back} />
+  {/if}
 </div>
 
 <style>

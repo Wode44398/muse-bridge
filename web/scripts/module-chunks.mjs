@@ -22,8 +22,10 @@ export const MODULE_ENTRIES = {
   // store：lib/agentUi.js 点通知回跳与 agy 的 ui_open 经它懒加载（只在 agy 分页开着时才走到）
   // antigravity-logo：Claude 页插件工作区外观里的 agy 标志（components/claude/workspace/AgentTile）懒加载引擎，agy 开着才取
   agy: ['src/components/agy/AgyPage.svelte', 'src/desktop/settings/AgySection.svelte', 'src/components/settings/ios/agy/AgySettingsPages.svelte', 'src/lib/agy/file-target.js',
-    'src/lib/agy/store.svelte.js', 'src/lib/agy/antigravity-logo.js'],
-  dimensio: ['src/components/HarnessPage.svelte', '../harness/web/src/i18n/en/index.ts', 'src/components/dock/DimensioMemoryNote.svelte'],
+    'src/lib/agy/store.svelte.js', 'src/lib/agy/antigravity-logo.js', 'src/components/agy/card-skin.js'],
+  // card-skin / DimensioCardSkin：卡片拖出成独立窗口（dock/AgentCardWindow）时按那一家懒加载样式与令牌
+  dimensio: ['src/components/HarnessPage.svelte', '../harness/web/src/i18n/en/index.ts', 'src/components/dock/DimensioMemoryNote.svelte',
+    'src/components/dock/DimensioCardSkin.js'],
 };
 
 // public/ 下原样拷贝、属于某个扩展的目录。
@@ -35,7 +37,8 @@ const MODULE_SOURCES = {
   codex: [/^src\/components\/codex\//, /^src\/components\/dock\/CodexWorkspace\.svelte$/, /^src\/lib\/codex\//,
     /^src\/desktop\/settings\/Codex\w*\.svelte$/, /^src\/components\/settings\/ios\/codex\//],
   agy: [/^src\/components\/agy\//, /^src\/lib\/agy\//, /^src\/desktop\/settings\/Agy(?:Ext|Pool)?Section\.svelte$/, /^src\/components\/settings\/ios\/agy\//],
-  dimensio: [/^src\/components\/HarnessPage\.svelte$/, /^src\/components\/dock\/HxWorkbench\.svelte$/, /^src\/components\/dock\/DimensioMemoryNote\.svelte$/, /^\.\.\/harness\/web\/src\//],
+  dimensio: [/^src\/components\/HarnessPage\.svelte$/, /^src\/components\/dock\/HxWorkbench\.svelte$/, /^src\/components\/dock\/DimensioMemoryNote\.svelte$/,
+    /^src\/components\/dock\/DimensioCardSkin\.js$/, /^\.\.\/harness\/web\/src\//],
 };
 
 export function bridgeModuleChunks({ webRoot }) {
