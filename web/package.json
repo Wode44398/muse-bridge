@@ -6,9 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview",
-    "prebuild": "node scripts/prebuild.mjs",
-    "predev": "node scripts/prebuild.mjs"
+    "preview": "vite preview"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
@@ -35,6 +33,7 @@
     "fflate": "^0.8.3",
     "jsqr": "^1.4.0",
     "katex": "^0.17.0",
+    "lottie-web": "^5.13.0",
     "mammoth": "^1.12.0",
     "marked": "^18.0.4",
     "marked-katex-extension": "^5.1.10",

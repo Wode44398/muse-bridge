@@ -4,6 +4,7 @@
 //   · Studio 的服务列表读不出（studioErr）：在 Studio 那几行的位置出一行报错 + 重试，不算「空」
 //   · 副行：域名单独包一层（窄处让位给数量）；没有数量可说时标 solo（窄处留着）
 //   · 行尾的 agent 图标用 18；两套外壳各用各的开关
+//   · ChatGPT 订阅的服务：副行写账号邮箱（不是主机名）、不报「缺 Key」，要重新登录的账号给提醒
 // 做法：用 svelte 编译器把真的 HubHome.svelte 与 modelHub.svelte.js 编成服务端模块，子组件与其余依赖换成桩。
 // 点击、筛选切换、动效这些要 DOM 的不在这里测（见 lib/modelHub.test.js 测状态层的那一半）。
 import test from 'node:test';
@@ -42,11 +43,13 @@ put('package.json', '{"type":"module"}');
 const MH = 'web/src/components/modelhub/';
 comp(MH + 'HubHome.svelte', readFileSync(join(here, 'HubHome.svelte'), 'utf8'));
 mod('web/src/lib/modelHub.svelte.js', readFileSync(join(WEB, 'src', 'lib', 'modelHub.svelte.js'), 'utf8'));
+mod('web/src/lib/modelHubBalance.svelte.js', readFileSync(join(WEB, 'src', 'lib', 'modelHubBalance.svelte.js'), 'utf8'));
 put('web/src/lib/motion.js', readFileSync(join(WEB, 'src', 'lib', 'motion.js'), 'utf8'));
 // —— 桩：子组件只把收到的参数印成属性 ——
 comp(MH + 'BrandLogo.svelte', '<script>let { logo = "", name = "", size = 36 } = $props();</script><i class="logo" data-logo={logo} data-size={size}>{name}</i>');
 comp(MH + 'AgentStack.svelte', '<script>let { agents = [], size = 16 } = $props();</script><i class="stack" data-agents={agents.join(",")} data-size={size}></i>');
 put(MH + 'kindIcons.js', 'export const KIND_ICON = { text: "", image: "", video: "", voice: "", music: "" };');
+put(MH + 'chatgptKit.js', readFileSync(join(here, 'chatgptKit.js'), 'utf8'));
 comp('web/src/desktop/kit/DSwitch.svelte', '<script>let { checked = false } = $props();</script><i class="dsw" data-on={checked}></i>');
 comp('web/src/components/ios27/Toggle.svelte', '<script>let { checked = false, label = "" } = $props();</script><i class="tgl" data-on={checked} data-label={label}></i>');
 comp('web/src/components/ios27/Sym.svelte', '<i class="sym"></i>');
@@ -61,6 +64,7 @@ put('web/src/lib/modelHubAdopt.js', 'export const adoptDimensioService = async (
 put('web/src/lib/agentSettings.svelte.js', 'export const ags = { poolOk: false, accounts: [], usage: {} }; export const loadPool = async () => {}; export const loadUsage = async () => {};');
 put('web/src/lib/settingsNav.svelte.js', 'export const openSettings = () => {}; export const openSettingsFromChat = () => true;');
 put('web/src/lib/state.svelte.js', 'export const me = { get kind() { return globalThis.__me; } };');
+put('web/src/lib/lastKnown.js', 'export const recall = () => undefined; export const remember = () => {}; export const forget = () => {};');
 put('web/src/lib/api.js', 'export const api = { get: async () => ({}), post: async () => ({}) };');
 put('web/src/lib/dialogs.js', 'export const uiConfirm = async () => false; export const uiAlert = async () => {};');
 // t() 照填占位；tr() 加个记号，看得出运行时文案确实走了 tr
@@ -72,6 +76,7 @@ globalThis.__me = 'admin';
 globalThis.__cp = { ok: false, err: '', providers: [], shared: [], presets: [], canShare: true, member: false, maxProviders: 0 };
 globalThis.__dim = { ready: false, vendors: [] };
 const H = await import(pathToFileURL(join(dir, 'web', 'src', 'lib', 'modelHub.svelte.js')).href);
+const B = await import(pathToFileURL(join(dir, 'web', 'src', 'lib', 'modelHubBalance.svelte.js')).href);
 const Home = (await import(pathToFileURL(join(dir, MH + 'HubHome.svelte.js')).href)).default;
 
 const EMPTY = { ok: true, v2: true, loading: false, err: '', studioErr: '', vertex: null, services: [], claude: [], dimensio: [], studio: [], plugins: [], builtins: null };
@@ -227,4 +232,40 @@ test('成员（没有总览、有自己的 Claude 服务）：不出「服务器
     globalThis.__me = 'admin';
     Object.assign(globalThis.__cp, { ok: false, providers: [] });
   }
+});
+
+test('ChatGPT 订阅：副行写账号邮箱、不报缺 Key；多个账号写「邮箱 等 N 个账号」；要重新登录的给提醒', () => {
+  const acc = (o) => ({ lineId: 'l1', email: 'a@x.com', label: 'a@x.com', enabled: true, status: 'ok', statusText: '', ...o });
+  const cg = (accounts) => ({
+    ...SVC, id: 'h-cg', name: 'ChatGPT', kind: 'chatgpt', baseUrl: 'https://api.openai.com/v1', host: 'api.openai.com', brand: null,
+    lines: accounts.map((a) => ({ id: a.lineId, label: a.label, baseUrl: '', enabled: a.enabled, hasKey: false })),
+    chatgpt: { usageUrl: 'https://chatgpt.com/settings/usage', accounts }, counts: { text: 3 }, agents: ['claude', 'codex'],
+  });
+  setHub({ services: [cg([acc()])] });
+  let row = rowOf(html(), 'ChatGPT');
+  assert.match(row, /<span class="hh-host">a@x\.com · <\/span>文本 3<\/span>/);
+  assert.ok(!row.includes('api.openai.com'));
+  assert.ok(!row.includes('缺 Key'));
+  assert.match(row, /data-logo="openai"/);
+  setHub({ services: [cg([acc(), acc({ lineId: 'l2', email: 'b@x.com', label: 'b@x.com', status: 'relogin' })])] });
+  row = rowOf(html(), 'ChatGPT');
+  assert.match(row, /a@x\.com 等 2 个账号/);
+  assert.match(row, /hh-tag hh-tin warn">1 个账号要重新登录</);
+  setHub({ services: [cg([acc({ status: 'missing' })])] });
+  assert.match(rowOf(html(), 'ChatGPT'), /hh-tag hh-tin warn">要重新登录</);
+});
+
+test('余额：查到了写在副行的域名后面；用完了多一个提醒；查不到的不写', () => {
+  setHub({ services: [{ ...SVC, balance: true }, { ...SVC, id: 'h-2', name: 'DeepSeek', host: 'api.deepseek.com', balance: true }, { ...SVC, id: 'h-3', name: '查不到', host: 'x.com', balance: true }] });
+  B.bal['h-1'] = { lines: [{ lineId: 'l', enabled: true, ok: true, items: [{ kind: 'balance', amount: 5.37, currency: 'USD' }, { kind: 'keyLimit', amount: 66.98, total: 100, currency: 'USD' }] }] };
+  B.bal['h-2'] = { lines: [{ lineId: 'l', enabled: true, ok: true, items: [{ kind: 'balance', amount: 0, currency: 'CNY' }] }] };
+  B.bal['h-3'] = { lines: [{ lineId: 'l', enabled: true, ok: false, error: 'HTTP 401' }] };
+  try {
+    const h = html();
+    assert.match(rowOf(h, 'OpenRouter'), /<span class="hh-host">openrouter\.ai · <\/span>余额 \$5\.37 · 文本 5 · 图像 2<\/span>/);
+    assert.ok(!rowOf(h, 'OpenRouter').includes('余额用完'));
+    assert.match(rowOf(h, 'DeepSeek'), /余额 ¥0\.00/);
+    assert.ok(rowOf(h, 'DeepSeek').includes('余额用完'));
+    assert.match(rowOf(h, '查不到'), /<span class="hh-host">x\.com · <\/span>文本 5 · 图像 2<\/span>/);
+  } finally { for (const k of Object.keys(B.bal)) delete B.bal[k]; }
 });

@@ -60,11 +60,12 @@
   import { createDimensio, DM_TITLE } from './settings/ios/dimensio.svelte.js';
   import { createPhone } from './settings/ios/phone.svelte.js';
   import { createDevices, createAgentKeys } from './settings/ios/devices.svelte.js';
-  import { createAgents, createPolicy, createStudio, createAgy } from './settings/ios/agents.svelte.js';
+  import { createAgents, createPolicy, createStudio, createAgy, createCodex } from './settings/ios/agents.svelte.js';
   import { createAccount } from './settings/ios/account.svelte.js';
   import { createWallpaper } from './settings/ios/wallpaper.svelte.js';
   import { createUpdate, createAbout, createFeedback } from './settings/ios/about.svelte.js';
   import { createSrvAdminProbe, createExtProbe, createHubPresence } from '../lib/settings/common.svelte.js';
+  import { warmSettingsBodies } from '../lib/settings/warm.js';
   import RootPages from './settings/ios/RootPages.svelte';
   import PrefsPages from './settings/ios/PrefsPages.svelte';
   import AgentPages from './settings/ios/AgentPages.svelte';
@@ -114,13 +115,16 @@
   S.pol = createPolicy();
   S.st = createStudio(S);
   S.agy = createAgy(S);
+  S.codex = createCodex(S);
   // —— 模型中心（2026-11-10 起是根页 agent 组里的一页 'model-hub'，正文 components/modelhub/HubHome 懒加载）——
   // 出不出现看 hub.ok（管理员的总览）|| cp.ok（能自定义 API 的成员自己的 Claude 服务），两样都是开设置才拉。
   // 直达这一页时数据多半还在路上：落定前先停在这页等，落定了确实两边都没有再退回去（见下面 deepStack 与退回的 effect）
   S.hub = createHubPresence();
+  // 子页正文的代码块（模型中心、各扩展的设置）空闲时先取上：点进去那一下页面推进来就是完整的，不再先空着等下载
+  warmSettingsBodies();
   // 弹层总闸（左缘右滑 guard / 外壳 class:modal 都读它）：Claude 页的绕过权限确认、分支前缀编辑也登记在这里。
   // 模型中心的浮层（添加 / 服务详情，挂在 App 根上）开着也算弹层：设置别响应左缘右滑、顶栏去掉磨砂；调用策略子页里的浮层（dpModal）同理
-  const anyAgModal = $derived(!!S.pool.acctForm || !!S.pool.acctDel || !!S.pol.numEdit || !!S.ag.agLast || S.cl.bypassAsk || !!S.cl.prefixEdit || !!hubUi.sheet || !!S.dm.dmEdit || S.dm.dmPicking || S.st.stModal || S.agy.agyModal || S.dp.dpModal);
+  const anyAgModal = $derived(!!S.pool.acctForm || !!S.pool.acctDel || !!S.pol.numEdit || !!S.ag.agLast || S.cl.bypassAsk || !!S.cl.prefixEdit || !!hubUi.sheet || !!S.dm.dmEdit || S.dm.dmPicking || S.st.stModal || S.agy.agyModal || S.codex.cxModal || S.dp.dpModal);
   S.acc = createAccount(S);
   S.wpc = createWallpaper(S);
   S.up = createUpdate();
@@ -150,9 +154,10 @@
   function titleOf(pid) {
     if (TITLES[pid]) return TITLES[pid]();
     if (pid.startsWith('plg-')) return panelTitle(pluginPanels.list.find((x) => 'plg-' + x.id === pid));
-    if (pid.startsWith('ag-')) { const id = pid.slice(3); return agentById(id)?.label || (id === 'claude' ? 'Claude' : id); }
+    if (pid.startsWith('ag-')) { const id = pid.slice(3); return agentById(id)?.label || (id === 'claude' ? 'Claude' : id === 'codex' ? 'Codex' : id); }
     if (pid.startsWith('st:')) return S.st.stTitles[pid] || '';
     if (pid.startsWith('agy:')) return S.agy.agyTitles[pid] || '';
+    if (pid.startsWith('cx:')) return S.codex.cxTitles[pid] || '';
     if (pid.startsWith('dm:')) return DM_TITLE[pid.slice(3)]?.() || '';
     if (pid.startsWith('dp:')) { const p = ds.prefs?.items?.find((x) => x.key === pid.slice(3)); return p ? prefLabel(p) : ''; }
     if (pid.startsWith('acct:')) return accLabel(S.pool.acctById(pid.slice(5))?.label || '') || t('账号');
@@ -351,7 +356,7 @@
 
   // 每页的滚动状态：大标题滚到顶栏下 → 顶栏小标题出现；有内容滚到顶栏下 → 滚动边缘效果显形
   let scrolled = $state({});
-  const hasHero = (pid) => pid === 'about' || pid === 'account' || pid === 'studio' || pid === 'model-hub' || pid.startsWith('ag-') || pid.startsWith('acct:') || pid.startsWith('agy:acct:') || pid.startsWith('device:');
+  const hasHero = (pid) => pid === 'about' || pid === 'account' || pid === 'studio' || pid === 'model-hub' || pid.startsWith('ag-') || pid.startsWith('acct:') || pid.startsWith('agy:acct:') || pid.startsWith('cx:acct:') || pid.startsWith('device:');
   function onPageScroll(pid, e) {
     const y = e.currentTarget.scrollTop;
     const s = y > 4 ? (y > (hasHero(pid) ? 120 : 44) ? 2 : 1) : 0;
@@ -394,7 +399,7 @@
   const TEXT_FIELD = 'textarea, input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="password"], input[type="tel"], input[type="number"], [contenteditable="true"]';
   function onKey(e) {
     if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing || closing) return;
-    if (hubUi.sheet || S.st.stModal || S.agy.agyModal || S.dp.dpModal || ui.serverAdminOpen) return;   // 浮层（模型中心的添加 / 编辑、调用策略子页里的选择器、服务端控制台等）自己接 Esc
+    if (hubUi.sheet || S.st.stModal || S.agy.agyModal || S.codex.cxModal || S.dp.dpModal || ui.serverAdminOpen) return;   // 浮层（模型中心的添加 / 编辑、调用策略子页里的选择器、服务端控制台等）自己接 Esc
     const a = document.activeElement;
     if (a && a.matches?.(TEXT_FIELD) && String(a.value ?? a.textContent ?? '').trim() && !a.closest('[role="alertdialog"]')) {
       e.preventDefault(); a.blur(); return;
@@ -447,7 +452,7 @@
     {@const pp = pluginPanels.list.find((x) => 'plg-' + x.id === pid)}
     {#if pp}<div class="plg-host">{#key pp.id}<PluginFrame id={pp.id} page={pp.page} mode="panel" onBack={pop} />{/key}</div>
     {:else}<p class="plg-gone">{t('这个插件面板不在了（插件被关掉或卸载了）')}</p>{/if}
-  {:else if pid === 'studio' || pid.startsWith('st:') || pid.startsWith('agy:') || pid === 'ag-claude' || DISPATCH_PAGES.includes(pid) || pid.startsWith('ag-') || pid.startsWith('dm:')
+  {:else if pid === 'studio' || pid.startsWith('st:') || pid.startsWith('agy:') || pid.startsWith('cx:') || pid === 'ag-claude' || DISPATCH_PAGES.includes(pid) || pid.startsWith('ag-') || pid.startsWith('dm:')
     || pid.startsWith('dp:') || pid.startsWith('acct:') || CL_CHOICE[pid] || CL_GROUP[pid]}<AgentPages {pid} />
   {/if}
 {/snippet}

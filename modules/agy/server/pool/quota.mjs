@@ -194,7 +194,7 @@ async function probeViaDirectCcpa(acct, { forceRefreshToken = false } = {}) {
     signal: AbortSignal.timeout(10_000),
   });
 
-  if (r.status === 401 && !forceRefreshToken && acct.refreshToken) {
+  if (r.status === 401 && !forceRefreshToken && (acct.refreshToken || acct.source === 'slot')) {
     return probeViaDirectCcpa(acct, { forceRefreshToken: true });
   }
   if (!r.ok) {

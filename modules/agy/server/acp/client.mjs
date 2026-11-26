@@ -162,6 +162,8 @@ export class AcpClient {
     // sessionId -> 该会话的完整原始历史（session/load 回放 + 之后每轮在本进程里实时收到的更新）。
     // 打开一个正在跑的会话时不能 session/load（会打断在跑轮），靠它把「这一轮之前的历史」交给前端。
     this.historyUpdates = new Map();
+    // sessionId -> 写入/同步该内存历史时磁盘 transcript 的指纹（空串 = 尚未与磁盘对齐）
+    this.historyDiskStamps = new Map();
     this.sessionListeners = new Set();   // global observers for title/config updates
 
     this.pendingPermissions = new Map(); // String(rpcId) -> { rpcId, sessionId, rootSessionId, sourceSessionId, payload, timer, onResolved, createdAt }
@@ -231,16 +233,97 @@ export class AcpClient {
   }
 
   // 记住一份会话历史（LRU，最多 HISTORY_KEEP 份；在跑轮的那份不淘汰）
-  _setHistory(sessionId, updates) {
+  _setHistory(sessionId, updates, diskStamp = '') {
     const id = String(sessionId || '');
     if (!id) return;
     this.historyUpdates.delete(id);
     this.historyUpdates.set(id, Array.isArray(updates) ? updates : []);
+    if (diskStamp) this.historyDiskStamps.set(id, String(diskStamp));
+    else this.historyDiskStamps.delete(id);
     for (const key of [...this.historyUpdates.keys()]) {
       if (this.historyUpdates.size <= HISTORY_KEEP) break;
       if (key === id || this.turns.has(key)) continue;
       this.historyUpdates.delete(key);
+      this.historyDiskStamps.delete(key);
     }
+  }
+
+  // 用磁盘快读结果预热内存历史：之后该会话续聊可直接走 session/resume（不必再跑慢 session/load），
+  // 若已有实时挂载历史则仅在显式 force 时覆盖。
+  seedHistory(sessionId, updates, { diskStamp = '', force = false } = {}) {
+    const id = String(sessionId || '');
+    if (!id || !Array.isArray(updates)) return false;
+    if (!force && this.historyUpdates.has(id)) {
+      if (diskStamp && !this.historyDiskStamps.get(id)) {
+        this.historyDiskStamps.set(id, String(diskStamp));
+      }
+      return false;
+    }
+    this._setHistory(id, [...updates], diskStamp);
+    return true;
+  }
+
+  // 读取内存中已挂载且缓存了历史的会话视图（供上层免 session/close 杀 worker 直接返回）
+  getCachedHistory(sessionId) {
+    const id = String(sessionId || '');
+    if (!id) return null;
+    const updates = this.historyUpdates.get(id);
+    if (!Array.isArray(updates)) return null;
+    return {
+      updates: [...updates],
+      mounted: this.mountedSessions.has(id),
+      snapshot: this.mountedSessions.get(id) || null,
+      diskStamp: this.historyDiskStamps.get(id) || '',
+    };
+  }
+
+  noteHistoryDiskStamp(sessionId, diskStamp = '') {
+    const id = String(sessionId || '');
+    if (!id) return;
+    if (diskStamp) this.historyDiskStamps.set(id, String(diskStamp));
+    else this.historyDiskStamps.delete(id);
+  }
+
+  // 基于当前已挂载快照或进程缓存的能力目录，零 RPC 拼出带 desiredConfig 当前值与 bypass 装饰的会话快照
+  buildSyntheticSnapshot(sessionId, desiredConfig = {}) {
+    const id = String(sessionId || '');
+    const mounted = id ? this.mountedSessions.get(id) : null;
+    const desired = desiredConfig && typeof desiredConfig === 'object' ? desiredConfig : {};
+    const bypassOn = desired.mode === BYPASS_MODE || (id ? this.isBypass(id) : false);
+    const baseOpts = mounted?.configOptions?.length
+      ? mounted.configOptions
+      : (this.lastCatalog?.configOptions || []);
+    const configOptions = decorateModeOptions(
+      baseOpts.map((opt) => {
+        if (!opt || typeof opt !== 'object') return opt;
+        const key = opt.id || opt.category;
+        if (key === 'model' && desired.model) return { ...opt, currentValue: desired.model };
+        if (key === 'thought_level' && desired.thought_level) return { ...opt, currentValue: desired.thought_level };
+        if (key === 'mode' && desired.mode) return { ...opt, currentValue: toAcpMode(desired.mode) };
+        return opt;
+      }),
+      bypassOn,
+    );
+    const baseModes = mounted?.modes || this.lastCatalog?.modes || null;
+    const modes = baseModes
+      ? decorateModes(desired.mode ? { ...baseModes, currentModeId: toAcpMode(desired.mode) } : baseModes, bypassOn)
+      : null;
+    const baseModels = mounted?.models || this.lastCatalog?.models || null;
+    const models = baseModels && desired.model
+      ? { ...baseModels, currentModelId: desired.model }
+      : baseModels;
+    return {
+      sessionId: id,
+      cwd: mounted?.cwd || this.knownSessions.get(id)?.cwd || '',
+      configOptions,
+      modes,
+      models,
+      commands: mounted?.commands || [],
+      title: mounted?.title || '',
+      rawUsage: mounted?.rawUsage || null,
+      usage: mounted?.usage || null,
+      tier: mounted?.tier || this.lastTier || null,
+    };
   }
 
   // 在跑会话「本轮开始之前」的原始历史；不在跑、或本进程没有它的历史时返回 null
@@ -437,6 +520,7 @@ export class AcpClient {
     this.knownSessions.delete(id);
     this.mountedSessions.delete(id);
     this.historyUpdates.delete(id);
+    this.historyDiskStamps.delete(id);
   }
 
   /**
@@ -1876,6 +1960,7 @@ export class AcpClient {
     // 历史里先记下本轮的用户消息；historyBase 之前的部分就是「本轮开始之前」的历史
     const hist = this.historyUpdates.get(activeId);
     if (hist) {
+      this.historyDiskStamps.delete(activeId);
       turn.historyBase = hist.length;
       for (const block of (Array.isArray(promptBlocks) ? promptBlocks : [])) {
         if (block?.type !== 'text' && block?.type !== 'image') continue;

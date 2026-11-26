@@ -13,6 +13,7 @@
   import SToggle from '../settings/SToggle.svelte';
   import { G, svg, normUrl, urlOk, hostOf, isLocal, tailText, ago, edgeFade, cleanKey, pasteKey, connMoved } from './HsKit.js';
   import { hubPost, hubAsk, PROTO_NAME, lineNote } from '../../lib/modelHub.svelte.js';
+  import { bal, loadBalance, lineBalance, itemMain, itemParts, isLow } from '../../lib/modelHubBalance.svelte.js';
   import { cp, loadProviders, canUseCustomApi } from '../../lib/claudeProviders.svelte.js';
   import { providerOf, FEATURED_PROVIDERS } from '../../../../src/model-knowledge/brands.mjs';
   import { DUR } from '../../lib/motion.js';
@@ -20,11 +21,12 @@
 
   // locked：外面正在保存模型去向——这期间不许识别（识别结果会和刚落库的目录对不上）
   // onadvanced：已有服务才给，打开「高级设置」（兼容项、超时、重试、鉴权、请求头；HsServiceAdv）
+  // onchatgpt：第一步给了它，快捷选择最前面多一张「ChatGPT 订阅」（不走地址 + Key，换成登录面板 HsChatgptLogin）
   let {
     mode = 'first', d = $bindable(), svc = null, narrow = false,
     detecting = false, detErr = '', detWarn = [], stale = false, catAt = 0, now = Date.now(),
     ondetect, onsaved, ondelete, testModel = '', dirty = $bindable(false), connErr = '', locked = false,
-    onadvanced = undefined,
+    onadvanced = undefined, onchatgpt = undefined,
   } = $props();
 
   // 「共享给成员」只有多用户服务器的管理员有（cp.canShare，随 Claude 服务的配置下发）：还没拉过就拉一次
@@ -207,6 +209,11 @@
   };
   const cooling = (l) => l.enabled && (l.state?.coolUntil || 0) > now;
   const when = $derived(catAt ? ago(catAt, now) : '');
+
+  // —— 余额（只有服务商有查余额接口的服务：svc.balance）：进来查一次，换了 Key（尾号变了）再查；服务端 60 秒内走缓存 ——
+  const balSig = $derived(mode === 'service' && svc?.balance ? svc.id + '|' + (svc.lines || []).map((l) => l.id + ':' + (l.keyTail || '')).join(',') : '');
+  $effect(() => { if (balSig) untrack(() => loadBalance(svc.id)); });
+  const balSt = $derived(svc?.balance ? bal[svc.id] || null : null);
 </script>
 
 {#snippet slot()}
@@ -244,6 +251,13 @@
 {#if mode === 'first'}
   <form class="first" class:narrow onsubmit={submit} novalidate>
     <div class="feat" class:scroll={narrow} use:edgeFade role="group" aria-label={t('快捷选择')}>
+      {#if onchatgpt}
+        <button type="button" class="fc plan" title={t('ChatGPT 订阅：登录账号用套餐额度，不用 API Key')} onclick={() => onchatgpt?.()}>
+          <BrandLogo size={24} logo="openai" name="ChatGPT" />
+          <span class="fn">{t('ChatGPT 订阅')}</span>
+          <span class="fs">{t('登录即用，不用 Key')}</span>
+        </button>
+      {/if}
       {#each FEATURED_PROVIDERS as p (p.key)}
         {@const on = prov?.key === p.key}
         <button type="button" class="fc" class:on aria-pressed={on} title={tr(p.name)} onclick={() => pick(p)}>
@@ -332,7 +346,14 @@
     <!-- 接口类型不在这里重复：顶栏名字下面那行已经写着「host · 接口类型 · Key 尾号」 -->
     <div class="keys">
       <div class="kh">
-        <span class="fl">{t('API Key')}</span>
+        <div class="khl">
+          <span class="fl">{t('API Key')}</span>
+          {#if svc.balance}
+            <button type="button" class="tbtn sm bref" disabled={balSt?.busy} onclick={() => loadBalance(svc.id, { force: true })}>
+              {@html svg(G.refresh)}{balSt?.busy ? t('查询中…') : t('刷新余额')}
+            </button>
+          {/if}
+        </div>
         {#if ed.lines.length >= 2}
           <div class="strat"><HsSeg label={t('多把 Key 的用法')} options={strategyOpts} value={ed.strategy} onchange={(v) => { ed.strategy = v; }} /></div>
         {/if}
@@ -364,6 +385,21 @@
                 <button type="button" class="tbtn sm" disabled={busy === 'reset:' + l.id} onclick={() => resetLine(l)}>{t('现在就再用')}</button>
               {/if}
             </div>
+          {/if}
+          {#if balSt && l.id && !l.editing}
+            {@const b = lineBalance(svc.id, l.id)}
+            {#if b || balSt.busy || balSt.err}
+              <div class="lbal" class:bad={b ? !b.ok : !!balSt.err && !balSt.busy} aria-live="polite">
+                {#if b?.ok}
+                  {#each b.items as it, j (j)}
+                    {@const p = itemParts(it)}
+                    <span class="bi" class:low={isLow(it)}>{itemMain(it)}</span>{#if p}<span class="bp">{p}</span>{/if}
+                  {/each}
+                {:else if b}{tr(b.error || '')}
+                {:else if balSt.busy}{t('查询余额…')}
+                {:else}{balSt.err}{/if}
+              </div>
+            {/if}
           {/if}
         {/each}
       </div>
@@ -460,6 +496,10 @@
   .fc.on { background: var(--st-sel); box-shadow: inset 0 0 0 1.5px var(--text); }
   .fc:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--text); }
   .fn { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 订阅那张占两格：名字放得下，副标题也把它和同一枚标的「OpenAI」（API Key）分开 */
+  .feat:not(.scroll) .fc.plan { grid-column: span 2; }
+  .fs { margin-left: auto; padding-left: 8px; font-size: 12px; color: var(--st-muted); white-space: nowrap; }
+  .scroll .fs { display: none; }
   .narrow .fc { height: 52px; border-radius: 14px; background: var(--st-surface); box-shadow: none; font-size: 14px; }
   .narrow .fc.on { background: var(--st-sel); box-shadow: inset 0 0 0 1.5px var(--text); }
   .first .fl { margin-top: 16px; }
@@ -498,7 +538,17 @@
   .lines { display: flex; flex-direction: column; border-radius: 12px; box-shadow: inset 0 0 0 1px var(--st-line); }
   .narrow .lines { box-shadow: none; background: var(--st-field); }
   .ln { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 5px 8px 5px 12px; }
-  .ln + .ln, .lres + .ln { box-shadow: inset 0 1px 0 var(--st-hair); }
+  .ln + .ln, .lres + .ln, .lbal + .ln { box-shadow: inset 0 1px 0 var(--st-hair); }
+  .khl { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .bref { gap: 5px; color: var(--st-text2); }
+  .bref :global(svg) { width: 13px; height: 13px; }
+  /* 余额：Key 那一行下面的一行小字；主数字用正文色，明细次要色，用完了标红 */
+  .lbal { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 0 12px 9px; margin-top: -4px; font-size: 12.5px; color: var(--st-muted);
+    font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .lbal.bad { color: var(--pm-red); }
+  .bi { color: var(--text); font-weight: 500; }
+  .bi.low { color: var(--pm-red); }
+  .bp { color: var(--st-muted); }
   .ln.off .lbl, .ln.off .tail { opacity: .55; }
   .lbl { flex: 1 1 120px; min-width: 60px; height: 32px; padding: 0 8px; margin-left: -8px; border: 0; border-radius: 8px; background: transparent; color: var(--text);
     font: inherit; font-size: 13.5px; font-weight: 500; outline: none; transition: background-color var(--mo-micro) var(--ea-fade), box-shadow var(--mo-micro) var(--ea-fade); }
@@ -567,6 +617,7 @@
   .tbtn.sm { height: 26px; padding: 0 6px; }
   .narrow .tbtn { height: 44px; padding: 0 10px; font-size: 14px; }
   .narrow .tbtn.sm { height: 44px; }
+  .narrow .lbal { font-size: 13.5px; }
   .ib { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--st-muted); cursor: pointer;
     transition: background-color var(--mo-micro) var(--ea-fade), color var(--mo-micro) var(--ea-fade), transform var(--mo-tap) var(--ea-std); }
   .ib :global(svg) { width: 16px; height: 16px; }

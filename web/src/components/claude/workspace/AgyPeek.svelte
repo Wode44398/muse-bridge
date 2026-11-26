@@ -136,6 +136,8 @@
   .apk { flex: none; width: 0; overflow: hidden; position: relative; z-index: 35; background: var(--bg);
     border-left: 1px solid transparent; transition: width 200ms cubic-bezier(.165, .84, .44, 1), border-color 200ms cubic-bezier(.165, .84, .44, 1); }
   .apk.on { width: 372px; border-left-color: var(--divider); }
+  /* 收着时还剩 1px 透明左边框、又压在工作区之上（z 35）：正好盖在工作区左缘把手的骑缝处，按中就被它吞掉、拖不动宽度 */
+  .apk:not(.on) { pointer-events: none; }
   /* 内层贴右缘：宽度展开时像整根栏从右边滑进来，而不是从左往右揭开 */
   .apk-in { position: absolute; top: 0; right: 0; bottom: 0; width: 372px; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
   /* 手机：盖满全屏，从右边推进来 */

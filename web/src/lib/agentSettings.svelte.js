@@ -9,7 +9,10 @@
 // 旧后端回 404 → 对应的 ok 位保持 false，设置页不出现那一节（绝不给一个点了报错的入口）。
 import { api } from './api.js';
 import { t, tr } from './i18n.js';
+import { recall, remember } from './lastKnown.js';
 
+// 记进快照的只有「拉到的数据」，忙闲与报错不记
+const SNAP_KEYS = ['agents', 'multiUser', 'poolOk', 'accounts', 'apiKeyMode', 'usage', 'router', 'resetsOk', 'resets', 'policyOk', 'policy', 'regOpen'];
 export const ags = $state({
   agents: null,          // { edition, features, agents:[{id,label,multiUser,switch,runnable,authed,enabled,note}] }
   agentBusy: '',
@@ -28,20 +31,37 @@ export const ags = $state({
   regOpen: false,
   multiUser: false,
   err: '',               // 最近一次失败的人话（子页脚注里显示，下次成功即清）
+  // 上次拉到的那份（lib/lastKnown）：冷开设置第一帧就是完整的 agent 列表、号池与用量，网络回来再原地换
+  ...pickSnap(recall('ags')),
 });
+
+function pickSnap(o) {
+  if (!o || typeof o !== 'object') return {};
+  const r = {};
+  for (const k of SNAP_KEYS) if (k in o) r[k] = o[k];
+  return r;
+}
+function keep() { remember('ags', pickSnap(ags)); }
+// 401 / 403 / 404 = 这个身份没有这个接口（换了人、老服务端）：那份快照作废；别的失败（断网、超时）留着上次的，别让界面退回空白
+const gone = (e) => [401, 403, 404].includes(e?.status);
+// 同一个请求在路上就别再发一份：账户卡一打开就预取（warmSettings），紧接着打开设置时各控制器又各拉一次
+const inflight = {};
+const once = (key, fn) => (inflight[key] ||= fn().finally(() => { delete inflight[key]; }));
 
 const fail = (e, fallback) => { ags.err = tr(e?.body?.error || e?.message) || fallback || t('失败'); };
 const ok = () => { ags.err = ''; };
 
 // —— Agent 开关 ——
-export async function loadAgents() {
-  try { ags.agents = await api.get('/api/agents'); ags.multiUser = !!ags.agents?.features?.multiUser; }
-  catch { ags.agents = null; }
+export function loadAgents() {
+  return once('agents', async () => {
+    try { ags.agents = await api.get('/api/agents'); ags.multiUser = !!ags.agents?.features?.multiUser; keep(); }
+    catch (e) { if (gone(e) || !ags.agents) { ags.agents = null; if (gone(e)) keep(); } }
+  });
 }
 export async function setAgentOn(a, next) {
   if (!a?.runnable || ags.agentBusy) return false;
   ags.agentBusy = a.id;
-  try { const r = await api.post('/api/agents', { id: a.id, enabled: next }); ags.agents = { ...ags.agents, agents: r.agents }; ok(); return true; }
+  try { const r = await api.post('/api/agents', { id: a.id, enabled: next }); ags.agents = { ...ags.agents, agents: r.agents }; ok(); keep(); return true; }
   catch (e) { fail(e); return false; }
   finally { ags.agentBusy = ''; }
 }
@@ -52,11 +72,13 @@ export const agentById = (id) => ags.agents?.agents?.find((a) => a.id === id) ||
 // CLI 见到它就不用订阅令牌；'desktop' 桌面安装包的本机服务端、安装向导里选了 API Key（同 env，号池令牌不生效，
 // 改订阅号要去那台电脑托盘的「本机服务端 › 重新配置…」）；'config' 配置文件里的 API Key 在用（使用中的号没令牌时才注入）；
 // 'config-unused' config.json 写了 anthropicApiKey 但号池里有令牌、没在用；'' 没走 API Key。
-function adoptPool(r) { ags.accounts = r?.accounts || []; ags.apiKeyMode = r?.apiKeyMode || ''; }
-export async function loadPool() {
-  try { adoptPool(await api.get('/api/admin/claude-accounts')); ags.poolOk = true; }
-  catch { ags.poolOk = false; return; }
-  loadRouter();   // 逐号用量（Claude Code 真实请求带回的额度，闲置的号是上次使用时的数据）由 Claude 页打开时再拉
+function adoptPool(r) { ags.accounts = r?.accounts || []; ags.apiKeyMode = r?.apiKeyMode || ''; keep(); }
+export function loadPool() {
+  return once('pool', async () => {
+    try { adoptPool(await api.get('/api/admin/claude-accounts')); ags.poolOk = true; keep(); }
+    catch (e) { if (gone(e) || !ags.accounts.length) { ags.poolOk = false; keep(); } return; }
+    loadRouter();   // 逐号用量（Claude Code 真实请求带回的额度，闲置的号是上次使用时的数据）由 Claude 页打开时再拉
+  });
 }
 /** 号池区的提示：服务端在用 API Key 时说清楚号池令牌生不生效；不用 API Key 时回空串。 */
 export function apiKeyNote() {
@@ -69,10 +91,10 @@ export function apiKeyNote() {
 export async function loadUsage(force = false) {
   if (ags.usageBusy) return;
   ags.usageBusy = true;
-  try { ags.usage = (await api.get('/api/admin/claude-accounts/usage' + (force ? '?force=1' : '')))?.usage || {}; } catch {}
+  try { ags.usage = (await api.get('/api/admin/claude-accounts/usage' + (force ? '?force=1' : '')))?.usage || {}; keep(); } catch {}
   ags.usageBusy = false;
 }
-export async function loadRouter() { try { ags.router = await api.get('/api/admin/claude-accounts/router'); } catch {} }
+export async function loadRouter() { try { ags.router = await api.get('/api/admin/claude-accounts/router'); keep(); } catch {} }
 // —— 重置卡（Anthropic 偶尔发给订阅号的限额重置；官方在 claude.ai 设置 › 用量 › Resets 里用）——
 // 读账号级信息要给这个号做一次「完整登录」（号池里的 setup-token 权限不够）；没登录的号服务端不发请求、回 needLogin。
 export async function loadResets({ force = false, id = '' } = {}) {
@@ -83,7 +105,8 @@ export async function loadResets({ force = false, id = '' } = {}) {
     const r = await api.get('/api/admin/claude-accounts/resets' + (q ? '?' + q : ''));
     ags.resetsOk = !!r?.available;
     ags.resets = id ? { ...ags.resets, ...(r?.accounts || {}) } : (r?.accounts || {});
-  } catch { if (!id) ags.resetsOk = false; }
+    keep();
+  } catch (e) { if (!id && gone(e)) ags.resetsOk = false; }
   ags.resetsBusy = false;
 }
 // 这几个动作的错误交给调用方就地显示（重置卡面板自己有错误行），不写进 ags.err。
@@ -236,16 +259,18 @@ export const PLAN_CHOICES = () => [{ value: '', label: t('自动') }, { value: '
 export const usageTone =(b) => (b.status === 'rejected' || b.pct >= 100 ? 'red' : b.pct >= 80 ? 'amber' : 'ok');
 
 // —— 额度与注册 ——
-export async function loadPolicy() {
-  try { const r = await api.get('/api/admin/policy'); ags.policy = r.policy; ags.regOpen = !!r.registrationOpen; ags.multiUser = !!r.multiUser; ags.policyOk = true; }
-  catch { ags.policyOk = false; }
+export function loadPolicy() {
+  return once('policy', async () => {
+    try { const r = await api.get('/api/admin/policy'); ags.policy = r.policy; ags.regOpen = !!r.registrationOpen; ags.multiUser = !!r.multiUser; ags.policyOk = true; keep(); }
+    catch (e) { if (gone(e) || !ags.policy) { ags.policyOk = false; keep(); } }
+  });
 }
 // quota 是整体替换（policy.mjs setPolicy），改一项也要带上其余三项
 export async function savePolicy(patch) {
   try {
     const r = await api.post('/api/admin/policy', patch);
     if (r?.error) throw new Error(r.error);
-    ags.policy = r.policy; ags.regOpen = !!r.registrationOpen; ok();
+    ags.policy = r.policy; ags.regOpen = !!r.registrationOpen; ok(); keep();
     return true;
   } catch (e) { fail(e, t('保存失败')); return false; }
 }

@@ -37,7 +37,7 @@ const ROOTS = {
   files: '.fd-root:not(.embedded), .ws-root:not(.embedded)',
 };
 // 入口：手机四宫格里是 [data-entry=<key>] .tile；桌面 Dock 按 aria-label 找图标
-const DOCK_LABEL = { claude: 'Claude', chatgpt: 'ChatGPT', agy: 'Antigravity', harness: 'dimensio', studio: 'Media Studio' };
+const DOCK_LABEL = { claude: 'Claude', chatgpt: 'Codex', agy: 'Antigravity', harness: 'dimensio', studio: 'Media Studio' };
 
 const html = () => document.documentElement;
 const vp = () => ({ W: innerWidth, H: innerHeight });

@@ -43,11 +43,16 @@
   );
   // 快照桶目录名是 UUID，只有项目名读得懂（快照桶的名字是服务端给的「快照对话」，显示时过一道 tr）
   // 其余认注册表里的显示名（改过名的、快照存成的工作空间——后者目录名也是 UUID），没登记过才退回文件夹名
-  const wsName = $derived(
-    wsQuick
-      ? tr(quickProj!.name)
-      : (app.projects.find((p) => !!wsPath && pathKey(p.path) === pathKey(wsPath))?.name ?? (wsPath.split(/[\\/]/).filter(Boolean).pop() ?? "")),
-  );
+  // 目录名是 UUID、又还没对上注册表里的名字时宁可先不写：项目表常比会话晚到，先写一串 UUID、
+  // 一秒后改成「快照对话」，就是顶栏的一次改写；名字到了再淡入
+  const UUID_DIR = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const wsName = $derived.by(() => {
+    if (wsQuick) return tr(quickProj!.name);
+    const named = app.projects.find((p) => !!wsPath && pathKey(p.path) === pathKey(wsPath))?.name;
+    if (named) return named;
+    const dir = wsPath.split(/[\\/]/).filter(Boolean).pop() ?? "";
+    return UUID_DIR.test(dir) ? "" : dir;
+  });
   // 标题可能是服务端写的中文（「[已从检查点恢复] …」等）：显示时过一道 tr
   const title = $derived(empty ? "" : tr(pane.chat.title?.trim() ?? "") || t("新对话"));
 
@@ -71,7 +76,7 @@
     {/if}
     <button class="where" class:static={wide && !menuVisible} onclick={titleClick} title={wsPath || undefined} aria-label={wide && !menuVisible ? undefined : t("打开项目与会话")}>
       {#if wsName}
-        <span class="ws">
+        <span class="ws" in:fade={{ duration: 160 }}>
           <Icon name={wsQuick ? "bolt" : "folder"} size={15} />
           <span class="ws-name">{wsName}</span>
         </span>

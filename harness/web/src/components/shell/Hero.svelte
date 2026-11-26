@@ -6,6 +6,7 @@
   // 换了厂商（dimensio-pulse）标志重演一遍入场——空间本身在应答。
   // 标志可点：点一下切明暗（ThemeMark：悬停浮起、按下收紧、翻面换场）。
   import { onMount } from "svelte";
+  import { slide } from "svelte/transition";
   import { app, hostBuiltins, openHostModelHub, openSettings, vendorId, vendorInfo } from "../../lib/state.svelte.ts";
   import { greeting } from "../../lib/theme.ts";
   import { rise } from "../../lib/motion.ts";
@@ -38,7 +39,8 @@
     {/key}
     <h1 in:rise={{ y: 10, delay: 120 }}>{greeting()}</h1>
     {#if !app.config && !app.connError}
-      <p class="connecting" in:rise={{ y: 8, delay: 200 }}>{t("正在连接…")}</p>
+      <!-- 连上了这一行收起高度退场：整组是垂直居中的，直接拿掉会让标志和问候一帧之内往下跳半行 -->
+      <p class="connecting" in:rise={{ y: 8, delay: 200 }} out:slide={{ duration: 220 }}>{t("正在连接…")}</p>
     {/if}
 
     {#if app.connError}

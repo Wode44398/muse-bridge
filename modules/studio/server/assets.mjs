@@ -14,6 +14,7 @@ import { safeJoin, mimeType } from '@bridge/core/runtime/http-file.mjs';
 import { protectedTarget, uniquePath } from '@bridge/core/routes/file-core.mjs';
 import { IMG_OPENROUTER } from '@bridge/core/config/capabilities.mjs';
 import { googleDialectOf } from './cards/google.mjs';
+import { hydrate } from './media-probe.mjs';
 
 export const ASSET_KINDS = ['image', 'video', 'audio', 'music'];
 export const KIND_DIR = { image: '图像', video: '视频', audio: '配音', music: '音乐' };
@@ -37,7 +38,7 @@ export function publicAsset(rec) {
   const kind = rec.kind || 'video';
   const params = rec.params && typeof rec.params === 'object'
     ? rec.params
-    : Object.fromEntries(LEGACY_PARAM_KEYS.filter((k) => rec[k] !== undefined && rec[k] !== '').map((k) => [k, rec[k]]));
+    : Object.fromEntries(LEGACY_PARAM_KEYS.filter((k) => rec[k] !== undefined && rec[k] !== '' && !(rec.dimsProbed && (k === 'width' || k === 'height'))).map((k) => [k, rec[k]]));
   const dialect = rec.dialect || inferDialect(rec.model);
   return {
     id, kind, mime: mimeType('x.' + (rec.ext || 'mp4')), url,
@@ -46,6 +47,7 @@ export function publicAsset(rec) {
     model: rec.model || '', params, parents: Array.isArray(rec.parents) ? rec.parents : [],
     ...(rec.width || rec.w ? { w: rec.width || rec.w } : {}), ...(rec.height || rec.h ? { h: rec.height || rec.h } : {}),
     ...(rec.duration ? { duration: rec.duration } : {}),
+    ...(Array.isArray(rec.peaks) && rec.peaks.length ? { peaks: rec.peaks } : {}),
     createdAt: rec.created || 0,
     ...(rec.wsPath ? { wsPath: rec.wsPath } : {}),
     ...(rec.sessionId ? { thread: rec.sessionId } : {}),
@@ -76,7 +78,8 @@ export function listAssets(dir, { kind, cursor, q, thread, limit } = {}) {
   const n = Math.min(200, Math.max(1, Number(limit) || PAGE));
   const page = recs.slice(0, n);
   const last = page[page.length - 1];
-  return { items: page.map(publicAsset), cursor: recs.length > n && last ? `${last.created}_${last.id}` : null };
+  // 缺宽高 / 波形的现补或排进后台（media-probe.mjs）：墙要按真实比例排、音频行要画真波形
+  return { items: page.map((r) => publicAsset(hydrate(dir, r))), cursor: recs.length > n && last ? `${last.created}_${last.id}` : null };
 }
 
 // —— 存进工作空间 ——
@@ -155,5 +158,5 @@ export function assetExists(ctx, id) { return ID_RE.test(String(id)) && !!media.
 
 export function getAsset(ctx, id) {
   const rec = ID_RE.test(String(id)) ? media.get(id, ctx.media) : null;
-  return rec && ASSET_KINDS.includes(rec.kind || 'video') ? publicAsset(rec) : null;
+  return rec && ASSET_KINDS.includes(rec.kind || 'video') ? publicAsset(hydrate(ctx.media, rec)) : null;
 }

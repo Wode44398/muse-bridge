@@ -585,13 +585,30 @@ function scrollableAt(x, y) {
   return null;
 }
 
+// 滚动容器里内容真正露出来的上下沿：贴顶 / 贴底的 sticky 子元素（侧栏底部账户卡、吸顶标题）要扣掉，
+// 否则感应带整段落在吸附条上，拖到列表最后一行下面反而不滚。
+export function scrollEdges(el) {
+  const r = el.getBoundingClientRect();
+  let top = r.top, bottom = r.bottom;
+  for (const c of el.children) {
+    let p = '';
+    try { p = getComputedStyle(c).position; } catch {}
+    if (p !== 'sticky') continue;
+    const cr = c.getBoundingClientRect();
+    if (cr.bottom >= r.bottom - 1) bottom = Math.min(bottom, cr.top);
+    else if (cr.top <= r.top + 1) top = Math.max(top, cr.bottom);
+  }
+  return { left: r.left, right: r.right, top, bottom: Math.max(top, bottom) };
+}
+
 function armAutoScroll(x, y) {
   const el = scrollableAt(x, y);
   if (!el) { stopAutoScroll(); return; }
-  const r = el.getBoundingClientRect();
+  const { top, bottom } = scrollEdges(el);
+  const band = Math.min(EDGE, (bottom - top) / 3);
   let v = 0;
-  if (y < r.top + EDGE) v = -Math.ceil(((r.top + EDGE - y) / EDGE) * EDGE_MAX);
-  else if (y > r.bottom - EDGE) v = Math.ceil(((y - (r.bottom - EDGE)) / EDGE) * EDGE_MAX);
+  if (band > 0 && y < top + band) v = -Math.ceil(Math.min(1, (top + band - y) / band) * EDGE_MAX);
+  else if (band > 0 && y > bottom - band) v = Math.ceil(Math.min(1, (y - (bottom - band)) / band) * EDGE_MAX);
   if (!v) { stopAutoScroll(); return; }
   scrollEl = el;
   scrollVec = v;

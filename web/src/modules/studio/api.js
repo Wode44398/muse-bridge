@@ -69,6 +69,9 @@ export const studioApi = {
   assets: ({ kind, cursor, q: text, thread } = {}) => req('GET', '/api/studio/assets' + q({ kind, cursor, q: text, thread })),
   saveAsset: (id, dir) => req('POST', '/api/studio/assets/' + encodeURIComponent(id) + '/save', { dir }),
   deleteAsset: (id) => req('POST', '/api/studio/assets/' + encodeURIComponent(id) + '/delete', {}),
+  asset: (id) => req('GET', '/api/studio/assets/' + encodeURIComponent(id)),
+  // 配音 / 音乐的真波形 { ok, peaks: 120 个 0–1, duration }；服务器没有 ffmpeg 时 peaks 可能缺，dev fixture 回 404，调用方退回 WebAudio 解码
+  peaks: (id) => req('GET', '/api/studio/assets/' + encodeURIComponent(id) + '/peaks'),
   settings: () => req('GET', '/api/studio/settings'),
   // 备选（shelf）模型的完整卡（§9.3：目录里只给轻条目，选了再取）
   resolve: (key) => req('GET', '/api/studio/models/resolve' + q({ key })),

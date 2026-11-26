@@ -182,6 +182,9 @@
   --ag-inv-bg: #e3e3e3;
   --ag-inv-on: #1f1f1f;
   --ag-inv-acc: #0b57d0;
+  /* 滚动条令牌：原样取自 Gemini 网页版（--gem-sys-color--surface-container-highest / --outline-variant） */
+  --ag-sb-thumb: #333537;
+  --ag-sb-thumb-hover: #444746;
   --ag-mono: 'Google Sans Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
   --ag-sans: var(--gm-font-sans, 'Google Sans'), 'PingFang SC', 'Microsoft YaHei UI', system-ui, sans-serif;
 
@@ -286,6 +289,8 @@ html[data-wco="1"] .agy-root {
   --ag-inv-bg: #303030;
   --ag-inv-on: #f2f2f2;
   --ag-inv-acc: #a8c7fa;
+  --ag-sb-thumb: #dde3ea;
+  --ag-sb-thumb-hover: #c4c7c5;
   color-scheme: light;
 }
 
@@ -602,4 +607,84 @@ html[data-wco="1"] .agy-root {
 @keyframes agy-caret-flow-fl { to { background-position: 0 0, 0 0.88em; } }
 @media (prefers-reduced-motion: reduce) {
   .agy-root .agy-caret::before, .agy-root .agy-caret .fl::before { animation: none; }
+}
+
+/* —— Antigravity 列表滚动条：原样复刻 Gemini 网页版（gemini.google.com/app）——
+   Gemini 全局规则：12px 槽 + 透明 2px 边（content-box 画出 8px 圆角胶囊）、min-height 48px、无箭头无轨道；
+   平时完全透明，悬停滚动区显 --gem-sys-color--surface-container-highest（暗 #333537 / 亮 #dde3ea），
+   悬停或拖动拇指显 --gem-sys-color--outline-variant（暗 #444746 / 亮 #c4c7c5）。
+   Gemini 侧栏列表（infinite-scroller.lr26-theme）额外收成 width: 8px、border: none、scrollbar-gutter: stable。
+   四段选择器压过 app.css 里的 html[data-wco="1"] 与 scrollbars.js 的 [data-sb]，确保与 Gemini 原件逐像素一致。 */
+@media (pointer: fine) {
+  /* 在容器自身随 :hover 切换自定义属性（而非只写在 ::-webkit-scrollbar-thumb 上），
+     迫使 Chromium Blink 在移入 / 移出列表时立刻重绘滚动条伪元素，避免首次悬停列表不显形。 */
+  html .agy-root .agy-sidebar .sb-list,
+  html .agy-root .agy-pop-card .pop-body {
+    --ag-sb-cur: transparent;
+  }
+  html .agy-root .agy-sidebar .sb-list:hover,
+  html .agy-root .agy-pop-card .pop-body:hover {
+    --ag-sb-cur: var(--ag-sb-thumb);
+  }
+
+  html .agy-root .agy-sidebar .sb-list::-webkit-scrollbar,
+  html .agy-root .agy-sidebar .sb-list::-webkit-scrollbar-corner {
+    width: 8px;
+    height: 8px;
+    background: transparent;
+  }
+  html .agy-root .agy-sidebar .sb-list::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  html .agy-root .agy-sidebar .sb-list::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+  html .agy-root .agy-sidebar .sb-list::-webkit-scrollbar-thumb,
+  html .agy-root .agy-sidebar .sb-list[data-sb]::-webkit-scrollbar-thumb {
+    background: content-box var(--ag-sb-cur);
+    background-clip: content-box;
+    border: none;
+    border-radius: 9999px;
+    min-height: 48px;
+    min-width: 48px;
+  }
+  html .agy-root .agy-sidebar .sb-list::-webkit-scrollbar-thumb:hover,
+  html .agy-root .agy-sidebar .sb-list::-webkit-scrollbar-thumb:active {
+    background: content-box var(--ag-sb-thumb-hover);
+    background-clip: content-box;
+    border: none;
+  }
+
+  /* 弹出列表（模型 / 文件夹 / 已隐藏）：原样套 Gemini 全局 12px 槽 + 2px 透明边（8px 圆角胶囊） */
+  html .agy-root .agy-pop-card .pop-body::-webkit-scrollbar,
+  html .agy-root .agy-pop-card .pop-body::-webkit-scrollbar-corner {
+    width: 12px;
+    height: 12px;
+    background: transparent;
+  }
+  html .agy-root .agy-pop-card .pop-body::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  html .agy-root .agy-pop-card .pop-body::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+  html .agy-root .agy-pop-card .pop-body::-webkit-scrollbar-thumb,
+  html .agy-root .agy-pop-card .pop-body[data-sb]::-webkit-scrollbar-thumb {
+    background: content-box var(--ag-sb-cur);
+    background-clip: content-box;
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    min-height: 48px;
+    min-width: 48px;
+  }
+  html .agy-root .agy-pop-card .pop-body::-webkit-scrollbar-thumb:hover,
+  html .agy-root .agy-pop-card .pop-body::-webkit-scrollbar-thumb:active {
+    background: content-box var(--ag-sb-thumb-hover);
+    background-clip: content-box;
+    border: 2px solid transparent;
+  }
 }

@@ -14,7 +14,7 @@ import { agyGenKey } from '../agents/agy.mjs';
 import { loadAgySettings } from '../settings.mjs';
 import { getSessionMeta, resolveVerifiedSessionCwd } from '../sessions.mjs';
 import { authorizeProjectPath } from '../projects.mjs';
-import { listHubTools, resolveHubTool, callHubTool, hubToolUnavailableReason } from '../mcp/hub.mjs';
+import { listAgyBridgeCatalog, resolveHubTool, callHubTool, hubToolUnavailableReason } from '../mcp/hub.mjs';
 import { effectiveBridgeToolCategories } from '../mcp/config.mjs';
 import { recordToolOutput, toolResultText } from '../tool-outputs.mjs';
 import { registerAgyUiOpenRoute } from './agy-ui-open.mjs';
@@ -408,8 +408,9 @@ export function registerAgyInternalRoutes(router, { parseJsonBody, sendJson }) {
       // categories：子进程本地那几组（媒体 / 界面 / 手机文件）此刻该不该列出来。类别不再写进子进程的环境变量——
       // agy 按「服务名 + 配置」复用子进程，环境变量一变就另起一个并把工具改名成 mcp_bridge_<哈希>_*。
       const categories = effectiveBridgeToolCategories(settings, { ctx });
-      const tools = categories.includes('hub') ? await listHubTools(ctx, settings) : [];
-      sendJson(res, 200, { ok: true, tools, categories });
+      // local：子进程本地工具的定义也由这里出（精简、合并、和中枢工具一起夹进 bridge 的份额，见 catalog.mjs）
+      const { local, hub, withheld } = await listAgyBridgeCatalog(ctx, settings, { categories });
+      sendJson(res, 200, { ok: true, tools: hub, local, categories, withheld });
     } catch (err) {
       sendJson(res, 500, { ok: false, error: err?.message || String(err) });
     }
@@ -489,7 +490,8 @@ export function registerAgyInternalRoutes(router, { parseJsonBody, sendJson }) {
       return;
     }
 
-    const { gen, error: genErr } = await resolveCallingAgyGen(ctx, [`phone_${op}`], body);
+    // 手机文件对 agy 是一个合并工具 phone_files（catalog.mjs）；旧版 agy 不带会话 id 时按在执行的工具名认，两个名字都认
+    const { gen, error: genErr } = await resolveCallingAgyGen(ctx, [`phone_${op}`, 'phone_files'], body);
     if (!gen || gen.done) {
       sendJson(res, 409, { ok: false, error: genErr || '当前没有活跃的 Antigravity 对话流，无法向手机下发文件命令' });
       return;

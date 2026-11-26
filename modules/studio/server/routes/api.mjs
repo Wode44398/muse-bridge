@@ -24,6 +24,8 @@
 //       POST /api/studio/jobs/<id>/cancel              → { ok, job }
 // 作品  GET  /api/studio/assets?kind=&cursor=&q=&thread= → { ok, items, cursor }
 //       GET  /api/studio/assets/<id>                   → { ok, asset }
+//       GET  /api/studio/assets/<id>/peaks             → { ok, peaks?, duration? }（配音 / 音乐的 120 格波形，算过的写回侧车；
+//                                                       ffmpeg 不在且不是 16-bit WAV 时 ok:false，可能只有 duration，前端退回 WebAudio）
 //       POST /api/studio/assets/<id>/save  { dir?, name? } → { ok, wsPath, asset }
 //       POST /api/studio/assets/<id>/delete { withFile? }  → { ok }；推总线 { type:'studio.asset.deleted', id }
 // 设置  GET  /api/studio/settings → { ok, host?: { values, changed }, mine: { values, changed }, effective, canEditHost }
@@ -51,6 +53,7 @@ import { syncProvider, syncOwner, maybeSyncStale, ensureSchema, discoverable } f
 import { syncView } from '../discovery/store.mjs';
 import { startJob, listJobs, getJob, cancelJob, forgetResult } from '../jobs.mjs';
 import { listAssets, saveAsset, deleteAsset, getAsset, assetExists } from '../assets.mjs';
+import { ensurePeaks } from '../media-probe.mjs';
 import { providerLog, logCall, dropLog } from '../log.mjs';
 import { importVertex, importAvailable, lastImport } from '../migrate.mjs';
 import { registerModelConfigRoutes } from './model-config.mjs';
@@ -294,6 +297,13 @@ export function registerStudioApi(router, { identify }) {
   });
   router.prefix('GET', '/api/studio/assets/', async (req, res, url) => {
     const g = guard(req, res); if (!g) return;
+    const pk = /^\/api\/studio\/assets\/([0-9a-f-]{36})\/peaks$/.exec(url.pathname);
+    if (pk) {
+      // 只在这个人自己的媒体目录里找（g.ctx.media 按身份分份），别人的作品 id 在这里就是 404
+      const r = await ensurePeaks(g.ctx.media, pk[1]).catch(() => null);
+      if (!r) return assetExists(g.ctx, pk[1]) ? json(res, 400, { error: '只有配音和音乐有波形' }) : json(res, 404, { error: '没有这个作品' });
+      return json(res, 200, { ok: !!r.peaks, peaks: r.peaks || null, duration: r.duration || null });
+    }
     const id = url.pathname.slice('/api/studio/assets/'.length);
     const asset = ID_RE.test(id) ? getAsset(g.ctx, id) : null;
     if (!asset) return json(res, 404, { error: '没有这个作品' });

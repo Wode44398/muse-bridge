@@ -126,7 +126,7 @@ function headLine(sc, workflowOn) {
  * 有性价比快照（model-ratings.mjs）时给四档阶梯：每档首选 + 备选、auto:<档> 写法；没有快照就是老的「分档 + 全清单」。
  * 两种写法都按范围裁剪：只管工作流就只讲 agent()，只管普通子 agent 就只讲 Agent 工具。口述备注排最后，压过上面的一切。
  */
-export function dispatchNudge({ on = true, policy = null, custom = null, catalog = [], routed = false, workflowOn = false, plan, owner } = {}) {
+export function dispatchNudge({ on = true, policy = null, custom = null, catalog = [], routed = false, workflowOn = false, plan, owner, lookup = false } = {}) {
   const sc = dispatchScopes(policy, workflowOn);
   if (!on || (!sc.workflow && !sc.subagent)) return '';
   const st = activeStrategy(policy);
@@ -135,7 +135,7 @@ export function dispatchNudge({ on = true, policy = null, custom = null, catalog
   const head = headLine(sc, workflowOn);
   // 有性价比快照、且至少一个能派的模型评上了分：给阶梯（model-ratings.mjs），不再让 Claude 自己从清单里比较
   const ladder = buildLadder({ catalog, official: !custom, routed, plan: plan || 'pool', allowThirdParty: atp, owner: owner || undefined, strategy: st });
-  if (ladder) return NL + ['', head, ...ladderLines(ladder, { custom, routed, catalog, sc, atp }), ...prefLines(note)].join(NL);
+  if (ladder) return NL + ['', head, ...ladderLines(ladder, { custom, routed, catalog, sc, atp, lookup }), ...prefLines(note)].join(NL);
   const lines = [
     '',
     head,
@@ -196,7 +196,7 @@ function cell(c) {
 // 一档落点后面的来源标记：档位自定义压过图谱的标「用户指定」；判定线谁都够不着、取了最强的标出来
 const tierMark = (t) => (t.source === 'override' ? '（用户指定）' : t.short ? '（没有模型够得着这条线，取最强的）' : '');
 
-function ladderLines(L, { custom, routed, catalog, sc, atp }) {
+function ladderLines(L, { custom, routed, catalog, sc, atp, lookup = false }) {
   // auto:* 要经过 bridge 换名：自定义 API 会话恒走本机代理，官方会话要这一轮挂了上游代理；只有工作流范围开着才教这个写法
   const auto = sc.workflow && (!!custom || routed);
   const out = [];
@@ -238,8 +238,15 @@ function ladderLines(L, { custom, routed, catalog, sc, atp }) {
   if (!sc.workflow || !rows.length) return out;
   // 显示名和型号名只差大小写 / 标点的不重复写
   const named = (name, label) => (normKey(name) === normKey(label) ? name : `${name}（${label}）`);
-  if (L.others.length) out.push('· 其余已配模型（被表里更便宜或更聪明的选项胜出，只在用户点名时用）：' + L.others.map((c) => named(c.write, c.label)).join('、'));
-  if (L.unrated.length) out.push('· 未评分（库里没有数据，只在用户点名时用）：' + L.unrated.map((m) => named(m.name, m.label)).join('、'));
+  // lookup = 这一轮有 bridge 工具（mcp__bridge__call）：表外模型不再逐个列出（11-26 系统提示精简，常有几十个、几乎只在点名时用），
+  // 改成一句「点名时用 dispatch.get 查准确写法」；没有 bridge 工具的身份照旧列全。
+  const extra = L.others.length + L.unrated.length;
+  if (lookup && extra) {
+    out.push(`· 表外还有 ${extra} 个已配模型，只在用户点名时用：先用 mcp__bridge__call 调 dispatch.get（candidates:true）查它的准确写法，别凭印象拼模型名。`);
+  } else {
+    if (L.others.length) out.push('· 其余已配模型（被表里更便宜或更聪明的选项胜出，只在用户点名时用）：' + L.others.map((c) => named(c.write, c.label)).join('、'));
+    if (L.unrated.length) out.push('· 未评分（库里没有数据，只在用户点名时用）：' + L.unrated.map((m) => named(m.name, m.label)).join('、'));
+  }
   out.push('  写法 / 模型名只写进代码；跟用户说话、列分工表、汇报结果时一律用括号里的显示名（如「' + rows[0].pick.label + '」）'
     + (auto ? '，auto:<档> 说成「自动·难」这样' : '') + (catalog.length ? '，custom:<服务>:<型号> 这类 id 不要写给用户看' : '') + '。');
   return out;

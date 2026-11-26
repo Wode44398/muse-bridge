@@ -7,11 +7,14 @@
 //     页面带插件票据（#t=）调接口。旧版 App 没有这个桥就用系统浏览器打开（同样带票）。
 
 import { api } from './api.js';
+import { recall, remember } from './lastKnown.js';
 import { apiUrl } from './server.js';
 import { busOn } from './bus.js';
 import { isEn, tr } from './i18n.js';
 
-export const pluginPanels = $state({ list: [], loaded: false });
+// 起始值是上次拉到的清单（lib/lastKnown）：设置根页「插件」那一组第一帧就在，不会晚一两秒才插进来把下面推开
+const lastPanels = recall('plugin.panels');
+export const pluginPanels = $state({ list: Array.isArray(lastPanels) ? lastPanels : [], loaded: false });
 
 // 面板标题：英文界面有插件自带的英文标题（清单 ui.panel.titleEn）就用它，否则照旧查 bridge 的字典
 export const panelTitle = (p) => (p ? (isEn() && p.titleEn ? p.titleEn : tr(p.title || '')) : '');
@@ -60,8 +63,8 @@ export const plSchema = (p) => {
 
 let started = false;
 export async function loadPluginPanels() {
-  try { const r = await api.get('/api/plugins/panels'); pluginPanels.list = Array.isArray(r?.panels) ? r.panels : []; }
-  catch { pluginPanels.list = []; }
+  try { const r = await api.get('/api/plugins/panels'); pluginPanels.list = Array.isArray(r?.panels) ? r.panels : []; remember('plugin.panels', pluginPanels.list); }
+  catch (e) { if (!pluginPanels.list.length || [401, 403, 404].includes(e?.status)) { pluginPanels.list = []; remember('plugin.panels', []); } }
   pluginPanels.loaded = true;
 }
 export function watchPluginPanels() {

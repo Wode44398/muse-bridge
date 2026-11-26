@@ -59,7 +59,11 @@
   let fetched = $state(EMPTY);
   let reqSeq = 0, inflight = false;
   const fkey = $derived(agentId && session.id ? session.id + ':' + agentId : '');
-  const wantFetch = $derived(!!fkey && (isWf || (!running && !liveEntries.length)));
+  // Agent 工具的子 agent 只要没有直播条目就走磁盘：不光是历史（已结束），还有【运行中却收不到 agent_msg】的——
+  // 后台 agent（run_in_background）跨轮、刷新/换设备后发起它的工具行来自历史重建、不在 toolById 里，
+  // 它的 agent_msg 全被丢掉，面板只剩「Thinking…」。这种情况和工作流 agent 一样按 2s 增量轮询。
+  // 一旦磁盘拉成功就粘住（半路才开始收到 agent_msg 时直播只有后半截，别把完整的磁盘版换掉）。
+  const wantFetch = $derived(!!fkey && (isWf || !liveEntries.length || (fetched.key === fkey && fetched.state === 'ok')));
   async function load(key, id) {
     if (inflight) return;   // 上一拉还没回：跳过这一拍（增量靠 offset 串行，并发会重复拼接）
     const cur = untrack(() => fetched);
@@ -91,7 +95,7 @@
   }
   $effect(() => {
     if (!wantFetch) return;
-    const key = fkey, id = agentId, poll = isWf && running;
+    const key = fkey, id = agentId, poll = running;
     if (untrack(() => fetched.key) !== key) { reqSeq++; inflight = false; fetched = { ...EMPTY, key, state: 'loading' }; }
     load(key, id);   // 首拉；running 翻成 false 时 effect 重跑，顺手补最后一拉把尾巴收全
     if (!poll) return;
@@ -102,7 +106,7 @@
     return () => { clearInterval(tid); document.removeEventListener('visibilitychange', onVis); };
   });
   const fx = $derived(fkey && fetched.key === fkey ? fetched : null);
-  const entries = $derived(liveEntries.length ? liveEntries : (fx && fx.state === 'ok' ? fx.entries : []));
+  const entries = $derived(fx && fx.state === 'ok' && fx.entries.length ? fx.entries : liveEntries);
   const model = $derived(isWf ? (agent.model || (fx ? fx.model : '')) : (task ? (task.model || (fx ? fx.model : '')) : ''));
   const diskPrompt = $derived(fx && fx.state === 'ok' ? fx.prompt : '');
   const prompt = $derived(isWf ? (diskPrompt || agent.promptPreview || '') : (task ? (task.prompt || diskPrompt) : ''));

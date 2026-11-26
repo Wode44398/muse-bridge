@@ -25,10 +25,13 @@ const studioProvidersMods = import.meta.glob('../components/studio/settings/Medi
 const missing = (what) => Promise.reject(new Error(what + ' is not in this build'));
 
 export const loadPage = {
-  chatgpt: once('chatgpt', () => import('../components/ChatGPTPage.svelte')),
+  chatgpt: once('chatgpt', () => import('../components/codex/CodexPage.svelte')),
   agy: once('agy', () => import('../components/agy/AgyPage.svelte')),
   agyDeskSettings: once('agyDeskSettings', () => import('../desktop/settings/AgySection.svelte')),
   agyIosSettings: once('agyIosSettings', () => import('../components/settings/ios/agy/AgySettingsPages.svelte')),
+  // 设置 › Codex 的正文（号池、配置、个性化、外观、运行、已归档的对话）：桌面 / 手机各一份，归 codex 扩展
+  codexDeskSettings: once('codexDeskSettings', () => import('../desktop/settings/CodexSection.svelte')),
+  codexIosSettings: once('codexIosSettings', () => import('../components/settings/ios/codex/CodexSettingsPages.svelte')),
   studio: once('studio', () => import('../components/studio/StudioPage.svelte')),
   studioSettings: once('studioSettings', () => {
     const load = Object.values(studioSettingsMods)[0];

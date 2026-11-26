@@ -536,6 +536,12 @@ test('bridge 工具的审批文案：看得清要动什么、落在哪（终端�
   assert.equal(k('phone_delete', { path: '@r1/a.mp4' }).verb, '删除手机文件');
   assert.equal(k('phone_delete', { path: '@r1/a.mp4' }).bridge, 'phone_delete');
   assert.equal(k('phone_list', {}).summary, '');
+  // 合并工具（服务端 catalog.mjs）：文案照 action 对应的原工具来
+  assert.equal(k('phone_files', { action: 'delete', path: '@r1/a.mp4' }).verb, '删除手机文件');
+  assert.match(k('phone_files', { action: 'delete', path: '@r1/a.mp4' }).note, /不能撤回/);
+  assert.equal(k('pr', { action: 'set_auto_merge', enabled: true }).verb, '开启自动合并');
+  assert.equal(k('pr', { action: 'status' }).verb, '查看拉取请求');
+  assert.equal(k('project_memory', { action: 'write', name: 'a.md' }).verb, '写入项目记忆');
   // bridge 操作：审批卡那一行带参数
   assert.match(k('call', { op: 'routines.create', args: { name: '晨报' } }).detail, /routines\.create .*晨报/);
   assert.equal(k('call', { op: 'routines.list' }).summary, 'routines.list');

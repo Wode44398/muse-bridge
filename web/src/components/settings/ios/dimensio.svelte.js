@@ -3,7 +3,7 @@ import { untrack } from 'svelte';
 import { t } from '../../../lib/i18n.js';
 import { agentById } from '../../../lib/agentSettings.svelte.js';
 import {
-  ds, loadDimensio, dimReady, errOf, setErr, setWorkspace, addRules,
+  ds, loadDimensio, errOf, setErr, setWorkspace, addRules,
   prefLabel, prefDesc, setPref, parsePrefNumber,
 } from '../../../lib/dimensioSettings.svelte.js';
 
@@ -19,8 +19,8 @@ export function createDimensio(S) {
   const dimEnabled = $derived.by(() => { const a = agentById('dimensio'); return !a || (a.switch && a.runnable); });
   const dimOpen = $derived(S.nav.stack.includes('ag-dimensio'));
   $effect(() => { if (dimOpen && dimEnabled) untrack(() => loadDimensio({ quiet: true })); });
-  // dimensio 读到了设置才取它那份调用策略（入口行的副标题要读）
-  $effect(() => { if (dimOpen && dimEnabled && dimReady()) untrack(S.dp.ddpLoad); });
+  // 调用策略（入口行的副标题要读）与 dimensio 的设置一起发：以前等设置读到了才发，第一次进来那一行要多等一个来回
+  $effect(() => { if (dimOpen && dimEnabled) untrack(S.dp.ddpLoad); });
   let dmEdit = $state(null);   // null | { kind:'ws'|'num'|'text', id?, title, message, value, multiline?, placeholder?, busy, err }
   let dmPicking = $state(false);
   function openWsEdit() {

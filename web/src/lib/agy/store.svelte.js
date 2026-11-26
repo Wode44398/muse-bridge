@@ -28,6 +28,7 @@ import { registerNoticeAgent, noticeSessionSeen, noticesLiveFor } from '../notic
 import { thisDeviceId } from '../devices.svelte.js';
 import { agyArtifactUrl } from '../preview.svelte.js';
 import { loadDrafts, saveDrafts, putDraft, draftKeyOf, cleanAtts, loadSessionsCache, saveSessionsCache } from './persist.js';
+import { cacheAgySession, getCachedAgySessionMeta } from '../cache.js';
 import { applyLiveSnapshot, setSessionPending, returnQueuedToDraft, loadAgyDeviceLink } from './remote.js';
 import { isVoiceAtt, saveVoicePeaks } from './voice-peaks.js';
 
@@ -269,6 +270,73 @@ export async function refreshAgyProjects({ preserveDefault = false } = {}) {
   } catch {}
 }
 
+// —— 单会话正文 IndexedDB 缓存与空闲预取（对齐 Claude 分页 stale-while-revalidate 秒开机制）——
+let lastSessionsSyncedAt = 0;
+export function agySessionsSyncedRecently(withinMs = 3000) {
+  return lastSessionsSyncedAt > 0 && Date.now() - lastSessionsSyncedAt < withinMs;
+}
+
+function slimDetailForCache(detail) {
+  if (!detail || typeof detail !== 'object' || !Array.isArray(detail.messages)) return null;
+  return {
+    title: detail.title || '',
+    customTitle: detail.customTitle || '',
+    cwd: detail.cwd || '',
+    projectId: detail.projectId || null,
+    messages: detail.messages,
+    usage: detail.usage || null,
+    commands: Array.isArray(detail.commands) ? detail.commands : [],
+    model: detail.model || null,
+    thoughtLevel: detail.thoughtLevel || null,
+    mode: detail.mode || null,
+  };
+}
+
+function agyMessagesSignature(list) {
+  if (!Array.isArray(list) || !list.length) return '';
+  return list.map((m) => {
+    if (!m) return '';
+    if (m.role === 'user') return `u:${(m.text || '').length}:${(m.atts || []).length}`;
+    const b = Array.isArray(m.blocks) ? m.blocks.length : 0;
+    const a = Array.isArray(m.attachments) ? m.attachments.length : 0;
+    return `a:${m.status || ''}:${(m.md || '').length}:${(m.thinking || '').length}:${b}:${a}:${m.stats?.ms ?? ''}`;
+  }).join('|');
+}
+
+let prefetchTimer = null;
+let prefetchRunning = false;
+function scheduleAgyPrefetch(list) {
+  clearTimeout(prefetchTimer);
+  const rows = Array.isArray(list) ? list : [];
+  if (!rows.length || ui.offline) return;
+  prefetchTimer = setTimeout(() => { prefetchAgySessions(rows); }, 600);
+}
+
+async function prefetchAgySessions(list) {
+  if (prefetchRunning || ui.offline || agy.busy) return;
+  prefetchRunning = true;
+  try {
+    const activeSet = new Set(agy.activeSessionIds || []);
+    for (const s of (Array.isArray(list) ? list : []).slice(0, 5)) {
+      if (agy.busy || ui.offline) break;
+      const sid = s?.sessionId;
+      if (!sid || activeSet.has(sid) || agy.pendingSessions[sid]) continue;
+      const cached = await getCachedAgySessionMeta(sid);
+      if (cached?.v && cached.fp && s.updatedMs && cached.ts >= s.updatedMs) continue;
+      try {
+        const d = await agyApi.getSession(sid, s.cwd || '', cached?.fp || '');
+        if (!d || d.unchanged || d.live) continue;
+        const slim = slimDetailForCache(d);
+        if (slim) await cacheAgySession(sid, slim, d.fp || '');
+      } catch {
+        break;
+      }
+    }
+  } finally {
+    prefetchRunning = false;
+  }
+}
+
 export async function refreshAgySessions({ refresh = false } = {}) {
   agy.loadingList = true;
   try {
@@ -289,9 +357,11 @@ export async function refreshAgySessions({ refresh = false } = {}) {
     if (act && Array.isArray(act.activeSessions)) applyLiveSnapshot(act.activeSessions);
     if (act && Array.isArray(act.bgSessions)) agy.bgSessionIds = act.bgSessions;
     saveSessionsCache(fresh);
+    lastSessionsSyncedAt = Date.now();
     // 正看着的会话在别处被改了名：标题跟上
     const cur = agy.sessionId ? fresh.find((s) => s.sessionId === agy.sessionId) : null;
     if (cur && (cur.customTitle || cur.title)) agy.title = cur.customTitle || cur.title;
+    scheduleAgyPrefetch(fresh);
   } catch {} finally {
     agy.loadingList = false;
   }
@@ -378,6 +448,8 @@ async function reconcileAgySessionSilent(sid) {
     if (detail && Array.isArray(detail.messages)) {
       syncConfigFromSnapshot(detail);
       agy.messages = normalizeHistoryMessages(detail.messages, sid);
+      const slim = slimDetailForCache(detail);
+      if (slim) cacheAgySession(sid, slim, detail.fp || '');
     }
   } catch {} finally {
     reconciling = false;
@@ -890,21 +962,66 @@ export async function openAgySession(sessionId, { _retry = 0 } = {}) {
     await attachLiveTurn(id, seq, { onMissing: async () => { if (_retry < 1) await openAgySession(id, { _retry: _retry + 1 }); } });
   };
 
+  let paintedFromCache = false;
+  let cachedFp = '';
+  let cachedSig = '';
+
   try {
-    const act = await agyApi.active(id).catch(() => null);
+    // 1) 先极速读取本地 IndexedDB 缓存（~1–3ms）：命中即秒出历史，不闪骨架屏
+    const cached = await getCachedAgySessionMeta(id);
     if (stale()) return;
+    if (cached?.v && Array.isArray(cached.v.messages) && cached.v.messages.length > 0) {
+      const snap = cached.v;
+      agy.title = snap.customTitle || snap.title || rowTitle || '';
+      if (snap.cwd) agy.cwd = snap.cwd;
+      if (snap.projectId) {
+        agy.projectId = snap.projectId;
+        writeStored(LAST_PROJ_KEY, snap.projectId);
+      }
+      syncConfigFromSnapshot(snap);
+      const cachedMsgs = normalizeHistoryMessages(snap.messages, id);
+      agy.messages = cachedMsgs;
+      cachedSig = agyMessagesSignature(cachedMsgs);
+      cachedFp = cached.fp || '';
+      paintedFromCache = true;
+      agy.loadingSession = false;
+      syncDockContext();
+    }
+
+    // 2) 并行拉取在跑状态与服务端详情（带上 cachedFp，未变时服务端只回几十字节 unchanged）
+    const hintCwd = row?.cwd || (paintedFromCache ? agy.cwd : '') || '';
+    const [act, detailRes] = await Promise.all([
+      agyApi.active(id).catch(() => null),
+      agyApi.getSession(id, hintCwd, cachedFp).then(
+        (data) => ({ ok: true, data }),
+        (err) => ({ ok: false, err }),
+      ),
+    ]);
+    if (stale()) return;
+
     const liveNow = !!(act?.active && act.sessionId === id);
     agy.queue = liveNow && Array.isArray(act.queue) ? act.queue : [];
 
-    const hintCwd = row?.cwd || act?.cwd || '';
     let detail = null;
-    try {
-      detail = await agyApi.getSession(id, hintCwd);
-    } catch (err) {
-      // 旧服务端对在跑会话回 409：没有历史可拿，只挂实时流
-      if (err?.status !== 409 && !liveNow) throw err;
+    if (detailRes.ok) {
+      detail = detailRes.data;
+    } else {
+      const err = detailRes.err;
+      // 旧服务端对在跑会话回 409：没有历史可拿，只挂实时流；离线且已有本地缓存时静默保住缓存视图
+      if (err?.status !== 409 && !liveNow) {
+        if (paintedFromCache) return;
+        throw err;
+      }
     }
-    if (stale()) return;
+
+    // 内容未变且不在跑：缓存视图已是最新，直接收工（零闪烁、零滚动跳动）
+    if (detail?.unchanged) {
+      if (liveNow) {
+        agy.loadingSession = false;
+        await attachLive(act?.userText || '');
+      }
+      return;
+    }
 
     if (detail) {
       agy.title = detail.customTitle || detail.title || rowTitle || '';
@@ -914,7 +1031,14 @@ export async function openAgySession(sessionId, { _retry = 0 } = {}) {
         writeStored(LAST_PROJ_KEY, detail.projectId);
       }
       syncConfigFromSnapshot(detail);
-      agy.messages = normalizeHistoryMessages(detail.messages || [], id);
+      const nextMsgs = normalizeHistoryMessages(detail.messages || [], id);
+      if (!paintedFromCache || agyMessagesSignature(nextMsgs) !== cachedSig) {
+        agy.messages = nextMsgs;
+      }
+      if (!detail.live) {
+        const slim = slimDetailForCache(detail);
+        if (slim) cacheAgySession(id, slim, detail.fp || '');
+      }
     } else if (act?.cwd) {
       agy.cwd = act.cwd;
       agy.projectId = act.projectId || agy.projectId;
@@ -928,7 +1052,7 @@ export async function openAgySession(sessionId, { _retry = 0 } = {}) {
       await attachLive(act?.userText || '');
     }
   } catch (err) {
-    if (!stale()) showToast(tr(err?.body?.error || err?.message) || t('加载对话失败'), 'err');
+    if (!stale() && !paintedFromCache) showToast(tr(err?.body?.error || err?.message) || t('加载对话失败'), 'err');
   } finally {
     if (!stale()) agy.loadingSession = false;
   }

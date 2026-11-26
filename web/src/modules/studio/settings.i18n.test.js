@@ -36,6 +36,7 @@ globalThis.__bridgeI18n = { lang: 'en', dict, pats: null };
 const STUBS = {
   'lib/api.js': `export const api = { async get() { return {}; }, async post() { return {}; } };`,
   'lib/bus.js': `export const busOn = () => () => {};`,
+  'lib/lastKnown.js': `export const recall = () => undefined; export const remember = () => {}; export const forget = () => {};`,
   'lib/state.svelte.js': `export const me = { kind: 'admin' };`,
   'lib/i18n.js': `export * from '${realI18n}';`,
   'lib/providerLogos.js': readFileSync(join(webRoot, 'src', 'lib', 'providerLogos.js'), 'utf8'),

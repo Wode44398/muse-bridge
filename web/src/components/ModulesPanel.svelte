@@ -17,7 +17,7 @@
   // 功能扩展的展示信息（顺序同服务端目录；状态以 /api/modules 为准）
   const INFO = {
     studio: { c: '#1d1b18', desc: t('Media Studio 分页：图像 / 视频 / 配音 / 音乐，接自己的服务与 Key；以及 Claude 的媒体工具') },
-    codex: { c: '#10a37f', desc: t('ChatGPT · Codex 分页（本机常驻 Codex，含 Codex 程序）') },
+    codex: { c: '#10a37f', desc: t('Codex 分页（本机常驻 Codex，含 Codex 程序）') },
     agy: { c: '#4d8dff', desc: t('Antigravity 分页（Google 官方 CLI 常驻 ACP 接入，含多模型对话与侧边工作区）') },
     dimensio: { c: '#ff9f0a', desc: t('dimensio 分页（独立的多模型 agent 底座）') },
   };

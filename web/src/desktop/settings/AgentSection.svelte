@@ -307,7 +307,16 @@
   {/await}
 {/if}
 
-{#if !a && id !== 'claude' && id !== 'dimensio'}<p class="note">{t('只有管理员能改这里')}</p>{/if}
+{#if id === 'codex'}
+  <!-- 正文归 codex 扩展（懒加载）：管理员（a 有值）看全部；成员拿不到 /api/agents（a 为空），正文只给他看自己的默认档与已归档的对话 -->
+  {#await loadPage.codexDeskSettings() then m}
+    <m.default fl={D.fl} enabled={!a || Boolean(a.switch && a.runnable)} openExt={D.openExtType} />
+  {:catch}
+    <p class="note">{t('Codex 设置没加载出来：这台服务器可能没装 Codex 扩展。')}</p>
+  {/await}
+{/if}
+
+{#if !a && id !== 'claude' && id !== 'dimensio' && id !== 'codex'}<p class="note">{t('只有管理员能改这里')}</p>{/if}
 
 <style>
   @import './kit.css';

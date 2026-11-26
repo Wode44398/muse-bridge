@@ -1,6 +1,7 @@
 <script>
   import { tick } from 'svelte';
   import { chat, answerQuestion, send, rewindToMessage, attImgFallback, openSession, retractSteer, forceSteer } from '../lib/chat.svelte.js';
+  import { attVideoCover } from '../lib/chat/attachments.js';
   import { IS_CSNAP } from '../lib/csnap.js';
   import { session, settings, prefs, ui } from '../lib/state.svelte.js';
   import { switchPageTheme } from '../lib/homeTheme.js';
@@ -364,6 +365,12 @@
   function openUserImage(a, el) {
     if (!openChatImage(attKey(a), el)) openChatItem(attDescriptor(a), el);
   }
+  // 视频附件的封面来源（attVideoCover 给的候选按序试）：加载失败就换下一条，全挂了 vidSrc 给 null，气泡回落文件卡。
+  // 失败计数按附件身份记在组件里，不写回消息对象（免得进缓存后永远认定「这条封面坏了」）。
+  let vidStage = $state({});
+  const vidKey = (a) => attKey(a) + '|' + (a.vurl || '');
+  const vidSrc = (a) => { const c = attVideoCover(a, session.id); return c ? c[vidStage[vidKey(a)] || 0] || null : null; };
+  const vidFail = (a) => { const k = vidKey(a); vidStage[k] = (vidStage[k] || 0) + 1; };
 </script>
 
 <div class="thread">
@@ -378,7 +385,7 @@
       <div class="turn-user" use:skipWhen={skippable}>
         <div class="u-col">
           {#if m.attachments && m.attachments.length}
-            {@const imgCount = m.attachments.filter((x) => x.kind === 'image' && x.url).length}
+            {@const imgCount = m.attachments.filter((x) => (x.kind === 'image' && x.url) || vidSrc(x)).length}
             <div class="u-atts">
               {#each m.attachments as a}
                 {#if a.kind === 'image' && a.url}
@@ -386,6 +393,19 @@
                        没有 thumb（用的是本地 blob:），回落 a.url 不受影响。 -->
                   <button class="u-att u-img" class:single={imgCount === 1} aria-label={t('预览图片')} use:dragOut={() => attDragSrc(a)} onclick={(e) => openUserImage(a, e.currentTarget)}>
                     <img src={a.thumb || a.url} alt={a.name} loading="lazy" decoding="async" onerror={(e) => attImgFallback(e.currentTarget, a)} />
+                  </button>
+                {:else if vidSrc(a)}
+                  <!-- 视频：和图片同一套瓦片（单个按原比例、多个 120² 切图），封面＝首帧，中间一枚播放标；点开进查看器直接播 -->
+                  {@const vs = vidSrc(a)}
+                  {@const vdesc = IS_CSNAP ? null : attDescriptor(a)}
+                  <button class="u-att u-img u-vid" class:single={imgCount === 1} aria-label={t('预览 {name}', { name: a.name })} title={a.name} use:dragOut={() => attDragSrc(a)} onclick={(e) => vdesc && openChatItem(vdesc, e.currentTarget)}>
+                    {#if vs.video}
+                      <!-- svelte-ignore a11y_media_has_caption -->
+                      <video src={vs.video} muted playsinline preload="metadata" tabindex="-1" onerror={() => vidFail(a)}></video>
+                    {:else}
+                      <img src={vs.img} alt={a.name} loading="lazy" decoding="async" onerror={() => vidFail(a)} />
+                    {/if}
+                    <span class="u-play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9.2 6.6v10.8a.7.7 0 0 0 1.07.6l8.5-5.4a.7.7 0 0 0 0-1.2l-8.5-5.4a.7.7 0 0 0-1.07.6Z"/></svg></span>
                   </button>
                 {:else if a.kind === 'chat'}
                   <!-- 引用对话（侧栏拖进来的另一条会话）：点卡＝打开被引的那段对话；快照访客只看 -->
@@ -693,6 +713,22 @@
   .u-img.single { width: auto; height: auto; }
   .u-img.single img { width: auto; height: auto; max-width: min(280px, 72vw); max-height: 320px; object-fit: contain; }
   .u-img:active { filter: brightness(.94); }
+  /* 视频瓦片：封面同图片；video 只当定格帧用（不吃点击、不出原生控件），中间一枚磨砂圆底播放标 */
+  .u-vid { position: relative; cursor: pointer; padding: 0; }
+  .u-vid video { display: block; width: 100%; height: 100%; object-fit: cover; pointer-events: none; background: #000; }
+  .u-img.single video { width: auto; height: auto; max-width: min(280px, 72vw); max-height: 320px; object-fit: contain; }
+  .u-play {
+    position: absolute; left: 50%; top: 50%; width: 40px; height: 40px; margin: -20px 0 0 -20px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; pointer-events: none;
+    background: rgba(0, 0, 0, .42); -webkit-backdrop-filter: blur(8px) saturate(1.4); backdrop-filter: blur(8px) saturate(1.4);
+    box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .22), 0 2px 8px rgba(0, 0, 0, .18);
+    transition: transform .18s cubic-bezier(.3, .7, .4, 1), background-color .18s;
+  }
+  .u-play svg { width: 18px; height: 18px; fill: #fff; margin-left: 2px; }
+  .u-img:not(.single) .u-play { width: 32px; height: 32px; margin: -16px 0 0 -16px; }
+  .u-img:not(.single) .u-play svg { width: 15px; height: 15px; }
+  @media (hover: hover) { .u-vid:hover .u-play { transform: scale(1.08); background: rgba(0, 0, 0, .56); } }
+  .u-vid:active .u-play { transform: scale(.94); }
   /* 检查点回滚（用户气泡右下）：默认一枚半透明 ↺，点开变就地确认排 */
   .u-acts { display: flex; align-items: center; gap: 6px; justify-content: flex-end; flex-wrap: wrap; min-height: 26px; }
   .rw-ico { width: 28px; height: 28px; opacity: .4; }

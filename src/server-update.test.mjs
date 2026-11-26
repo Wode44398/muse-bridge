@@ -23,9 +23,9 @@ const { serverHostDevice } = await import('./runtime/devices.mjs');
 
 const V_OLD = '2026.10.24.0534', V_NEW = '2026.10.28.0328';
 const SHA_A = 'a'.repeat(64), SHA_B = 'b'.repeat(64);
-const asset = (v) => `https://github.com/Wode44398/claude-bridge-releases/releases/download/v${v}/bridge-client-setup-${v}.exe`;
+const asset = (v) => `https://github.com/Wode44398/bridge/releases/download/v${v}/bridge-client-setup-${v}.exe`;
 const man = (version, sha = SHA_A) => ({ version, file: `bridge-client-setup-${version}.exe`, size: 10, sha256: sha, mirrors: [asset(version)], notes: '说明 ' + version, buildId: version + '+abc1234' });
-const TAG = (v) => `https://github.com/Wode44398/claude-bridge-releases/releases/download/v${v}/latest.json`;
+const TAG = (v) => `https://github.com/Wode44398/bridge/releases/download/v${v}/latest.json`;
 // 假 GitHub：按地址回清单，没有的回 404；calls 记下问过哪些地址
 function fakeGitHub(map) {
   const calls = [];
@@ -54,8 +54,8 @@ test('同版本发布清单的地址按发版仓库拼；更新源关了 / 不�
   setEnv('BRIDGE_CLIENT_UPDATE_FEED', 'https://mirror.example.com/latest.json');
   assert.equal(cr.taggedManifestUrl(V_OLD), '');
   setEnv('BRIDGE_CLIENT_UPDATE_FEED', null);
-  assert.equal(cr.releasePageUrl(V_NEW), 'https://github.com/Wode44398/claude-bridge-releases/releases/tag/v' + V_NEW);
-  assert.equal(cr.releasePageUrl(), 'https://github.com/Wode44398/claude-bridge-releases/releases/latest');
+  assert.equal(cr.releasePageUrl(V_NEW), 'https://github.com/Wode44398/bridge/releases/tag/v' + V_NEW);
+  assert.equal(cr.releasePageUrl(), 'https://github.com/Wode44398/bridge/releases/latest');
 });
 
 test('有人在等的检查：缓存旧了就当场重查 GitHub（以前只读 6 小时缓存，发新版后头一次检查说「已是最新」）；查不到照实报原因', async () => {
@@ -191,7 +191,7 @@ test('桌面托管形态：查 GitHub 有新版；一键更新交给服务端所
     assert.equal(st.latest, V_NEW);
     assert.equal(st.newer, true);
     assert.match(st.notes, new RegExp(V_NEW.replace(/\./g, '\\.')));
-    assert.equal(st.page, 'https://github.com/Wode44398/claude-bridge-releases/releases/tag/v' + V_NEW);
+    assert.equal(st.page, 'https://github.com/Wode44398/bridge/releases/tag/v' + V_NEW);
     // 那台电脑的客户端没连上设备通道
     assert.equal(st.oneClick, false);
     assert.equal(st.how, su.HOW_DESKTOP_OFFLINE);

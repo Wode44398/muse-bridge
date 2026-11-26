@@ -1,3 +1,14 @@
+<script module>
+  import { loadAgyPool } from '../../../../lib/agy/pool.svelte.js';
+  import { ensureAgySettingsLoaded, agyHostAdmin as hostAdmin } from '../../../../lib/agy/settings.svelte.js';
+  // 设置页一挂上（lib/settings/warm 空闲预取到这块代码后）就把这页要的数据发出去：离用户点进 Antigravity 通常还有一两秒，
+  // 点进来时号池与用量多半已经回来。核心不能静态 import 扩展的控制器，所以入口放在这个懒加载模块里
+  export function warmAgySettings() {
+    if (hostAdmin()) loadAgyPool({ usage: true });
+    ensureAgySettingsLoaded();
+  }
+</script>
+
 <script>
   // 手机 / 网页设置（iOS 外壳）› Antigravity 主页与子页路由入口（懒加载模块边界，避免扩展代码漏入核心主包）。
   import { untrack } from 'svelte';
@@ -9,6 +20,7 @@
   import { fmtUptime } from '../../../../lib/settings/common.js';
   import { SI } from '../../../../lib/settingsIcons.js';
   import { t } from '../../../../lib/i18n.js';
+  import { swap } from '../../../../lib/arrive.js';
   import { refreshAgySessions } from '../../../../lib/agy/store.svelte.js';
   import { modelDisplayName } from '../../../../lib/agy/catalog.js';
   import {
@@ -112,9 +124,10 @@
 {#if pid === 'ag-agy'}
   {#if !enabled}
     <!-- 顶部开关已说明当前不可用或已关闭 -->
-  {:else if agyPrefs.loading && !agyPrefs.loaded}
-    <p class="gfoot">{t('读取中…')}</p>
+  {:else if !agyPrefs.loaded && !agyPrefs.snap}
+    <!-- 第一次用、还什么都不知道：先不画（不出「读取中…」再被整页换掉），到了整页原地淡入；页面下面没有别的东西，不会推开谁 -->
   {:else}
+    <div in:swap>
     <!-- 1. 订阅号池与智能换号（只给主机管理员） -->
     {#if agyHostAdmin()}
       <AgyPoolSection {push} />
@@ -362,6 +375,7 @@
       {#if agyPrefs.errors.debug}<p class="gfoot err">{agyPrefs.errors.debug}</p>{/if}
       <p class="gfoot">{agyDebugDesc()}</p>
     {/if}
+    </div>
   {/if}
 
 {:else if pid.startsWith('agy:acct')}

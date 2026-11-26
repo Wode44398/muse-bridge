@@ -20,10 +20,12 @@ test('控件挑选：短枚举分段、十项以内直接摆成小块、再多 /
   // 方案 §11：选项直接摆出来，一步点到——分段放不下的、5–10 项的都是小块排，不再弹菜单
   assert.equal(controlOf({ type: 'enum' }, [{ value: 'a fairly long label' }, { value: 'b' }], { labelOf: lab, room: 130 }), 'pills');
   assert.equal(controlOf({ type: 'enum' }, Array.from({ length: 5 }, (_, i) => ({ value: 'v' + i })), { labelOf: lab }), 'pills');
-  assert.equal(controlOf({ type: 'enum' }, Array.from({ length: 10 }, (_, i) => ({ value: 'opt' + i })), { labelOf: lab }), 'pills');
+  assert.equal(controlOf({ type: 'enum' }, Array.from({ length: 8 }, (_, i) => ({ value: 'opt' + i })), { labelOf: lab }), 'pills');
+  assert.equal(controlOf({ type: 'enum' }, Array.from({ length: 9 }, (_, i) => ({ value: 'opt' + i })), { labelOf: lab }), 'select');
   assert.equal(controlOf({ type: 'enum' }, Array.from({ length: 11 }, (_, i) => ({ value: 'v' + i })), { labelOf: lab }), 'select');
   assert.equal(controlOf({ type: 'enum' }, [{ value: 'an option label that is far too long to sit in a pill' }, { value: 'b' }], { labelOf: lab }), 'select');
   assert.equal(controlOf({ type: 'number', min: 1, max: 10, step: 1, format: 'count' }), 'stepper');
+  assert.equal(controlOf({ type: 'number', min: 1, max: 4, step: 1, format: 'count' }), 'steps');
   assert.equal(controlOf({ type: 'number', min: 2, max: 16, step: 1 }), 'slider');
   assert.equal(controlOf({ type: 'enum', format: 'aspect' }, [{ value: 'auto' }, { value: '16:9' }], { labelOf: lab }), 'aspect');
   assert.equal(controlOf({ type: 'number', min: 1, max: 4, step: 1 }), 'steps');

@@ -25,6 +25,19 @@ const st = (sid, lid) => {
 /** 给界面看的线路状态（没请求过的回零值）。 */
 export const lineState = (sid, lid) => ({ ...st(sid, lid) });
 export function clearCooldown(sid, lid) { const s = st(sid, lid); s.coolUntil = 0; s.coolWhy = ''; }
+/**
+ * 自己发请求的上游（ChatGPT 订阅，不走 makePoolHandler）把结果记进同一张线路状态表：取线路、冷却、界面上的状态都认它。
+ * ok：成功（清冷却）；否则 status / error 记下来，coolMs > 0 时这条线路冷却这么久（why 给界面看）。
+ */
+export function noteLine(sid, lid, { ok = false, status = 0, error = '', coolMs = 0, why = '', counted = true } = {}) {
+  const s = st(sid, lid);
+  if (counted) { s.requests += 1; s.lastAt = Date.now(); }
+  s.lastStatus = status;
+  if (ok) { s.ok += 1; s.lastError = ''; s.coolUntil = 0; s.coolWhy = ''; return; }
+  s.fail += 1;
+  s.lastError = String(error || (status ? `HTTP ${status}` : '')).slice(0, 160);
+  if (coolMs > 0) { s.coolUntil = Date.now() + coolMs; s.coolWhy = why; }
+}
 export function forgetService(sid) { for (const k of [...states.keys()]) if (k.startsWith(sid + '/')) states.delete(k); cursors.delete(sid); }
 export function _resetPoolForTests() { states.clear(); cursors.clear(); }
 

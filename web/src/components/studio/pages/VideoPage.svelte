@@ -1,9 +1,9 @@
 <script>
-  // 视频（原 Vertex 视频面板）：任务由素材决定（参考图 → 参考生成，有尾帧 → 首尾插值，有首帧 → 图生，
-  // 否则文生），后端按 inputs 的角色判断；这里只管把首帧 / 尾帧 / 参考图挂对。有素材时正文可以不写。
+  // 视频：任务由素材决定（参考图 → 参考生成，有尾帧 → 首尾插值，有首帧 → 图生，否则文生），后端按 inputs 的角色判断；
+  // 这里只管把首帧 / 尾帧 / 参考图挂对。有素材时正文可以不写。画布是视频作品墙（wall/Wall）。
   import { t } from '../../../lib/i18n.js';
   import CreateFrame from '../CreateFrame.svelte';
-  import FocusCanvas from '../FocusCanvas.svelte';
+  import Wall from '../wall/Wall.svelte';
   import { studio } from '../../../modules/studio/media.svelte.js';
 
   let { active = false, sideOpen = false, wide = false } = $props();
@@ -16,7 +16,7 @@
 </script>
 
 {#snippet canvas()}
-  <FocusCanvas page="video" {sideOpen} />
+  <Wall page="video" {active} />
 {/snippet}
 
 <CreateFrame page="video" {active} {wide} title={t('视频')} {placeholder} sendLabel={t('生成')} {needText} {canvas} />

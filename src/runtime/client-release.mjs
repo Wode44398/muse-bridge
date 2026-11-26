@@ -8,7 +8,7 @@
 //
 // 上游更新源（S10）：第三方服务器、桌面安装包里的本机服务端，client-dist 里只有装机时那一版（或者干脆没有），
 // 自己永远比不出「有新版」。所以再问一个上游清单——config.clientUpdateFeed，默认公开发布仓库
-// Wode44398/claude-bridge-releases 的 releases/latest/download/latest.json——本地清单缺失或比上游旧时，
+// Wode44398/bridge（开源库，11-24 起发布也放这里）的 releases/latest/download/latest.json——本地清单缺失或比上游旧时，
 // 发上游那份（只发清单：安装包由客户端按清单里的镜像地址去下，sha256 校验不过就换源）。
 // 上游清单 6 小时拉一次（失败半小时后再试）；客户端来问版本时缓存已过 2 分钟就当场重查（最多等 8 秒，查不到照旧发缓存）——
 // 10-28 服主反馈「点检查更新升不了」：以前请求路径上只读缓存、后台再刷，发新版后的头一次检查（往往就是用户点的那一下）
@@ -28,7 +28,9 @@ import path from 'node:path';
 import { config } from '../config/index.mjs';
 import { DATA_ROOT, PROGRAM_ROOT } from './paths.mjs';
 
-export const DEFAULT_CLIENT_FEED = 'https://github.com/Wode44398/claude-bridge-releases/releases/latest/download/latest.json';
+// 11-24 起发布从 claude-bridge-releases 迁到开源库 Wode44398/bridge，旧库已归档、Latest 停在 2026.11.24.0643（这一版起
+// 问这里）。装着更早版本的服务端问旧库，先升到 0643，再从这里升到最新——两步，不会卡住。
+export const DEFAULT_CLIENT_FEED = 'https://github.com/Wode44398/bridge/releases/latest/download/latest.json';
 const FEED_OK_MS = 6 * 3600_000;
 const FEED_FAIL_MS = 30 * 60_000;
 const FEED_FRESH_MS = 2 * 60_000;     // 客户端来问版本时，缓存比这旧就当场重查

@@ -35,7 +35,12 @@ export async function launchEdge({ extraArgs = [] } = {}) {
     '--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${dir}`,
     '--no-first-run', '--no-default-browser-check', '--no-proxy-server',
     '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows', '--disable-background-timer-throttling',
-    '--disable-features=Translate,msEdgeTranslate', '--mute-audio', ...extraArgs, 'about:blank',
+    // 左缘右滑在桌面 Chromium 的触摸仿真里会触发「滑动后退」整页导航（WebView 没有这个手势），抽屉手势就测不了
+    '--overscroll-history-navigation=0',
+    // 每个状态复位时手动回收一次垃圾（__qa.reset / flows 的 soft 调 gc()）：没回收的离屏画布、解码过的图占着无头 Edge 那点光栅内存，
+    // 连跑几十个状态后合成器一阵一阵出不了帧（rAF 半秒一帧），动画走不完、截图干等、手势的弹簧落不了地
+    '--js-flags=--expose-gc',
+    '--disable-features=Translate,msEdgeTranslate,OverscrollHistoryNavigation', '--mute-audio', ...extraArgs, 'about:blank',
   ], { stdio: 'ignore', windowsHide: true });
   child.unref();
   let ver = null;

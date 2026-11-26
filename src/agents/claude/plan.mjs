@@ -210,11 +210,14 @@ export async function planTurn(req, res, { message, sessionId, model, effort, ul
   // 反提示：全局开关开着但本轮没注入时，明确告诉 Claude「这轮没有」——旧会话 transcript
   // 里可能有成功的 mcp__phone__* 调用记录，不说清它会照着历史声称/重试这些不存在的工具。
   // 只讲工具有没有、怎样才有，不报「这条消息从哪个客户端发来」——发送端由 devices 工具现查（runtime/client-origins.mjs）。
-  const noPhoneNudge = (!snap && ((phoneFsAvail && !phoneFsOn) || (phoneCtlAvail && !phoneControlOn)))
-    ? '\n\n[手机工具] '
-      + (phoneFsAvail && !phoneFsOn ? '「手机文件」工具（mcp__phone__*）本轮未注入（只有从手机 App 发消息时才有），无法查看/读写/拉取用户手机上的文件；' : '')
-      + (phoneCtlAvail && !phoneControlOn ? '「手机操控」工具（mcp__phoneControl__*）本轮未注入（手机端操控服务当前不在线）；' : '')
-      + '即使早前的对话历史里用过这些工具，本轮也没有——不要声称能操作用户的手机。用户需要手机侧操作时，请他改在手机 App 里发起对话' + (phoneCtlAvail && !phoneControlOn ? '（手机操控还需手机 App 设置里开启「手机操控」服务）' : '') + '。'
+  // 11-26 精简：一句话说清哪组没有、怎样才有。手机操控开着时不再说「不要声称能操作手机」（与同一提示里的手机操控段自相矛盾）。
+  const fsOff = phoneFsAvail && !phoneFsOn, ctlOff = phoneCtlAvail && !phoneControlOn;
+  const noPhoneNudge = (!snap && (fsOff || ctlOff))
+    ? '\n\n[手机工具] 本轮没有'
+      + [fsOff ? '手机文件（mcp__phone__*，只在从手机 App 发消息时才有）' : '', ctlOff ? '手机操控（mcp__phoneControl__*，手机端操控服务不在线）' : ''].filter(Boolean).join('和')
+      + '，对话历史里用过也一样。'
+      + (ctlOff ? '不要声称能操作用户的手机；要操作手机，请用户在手机 App 设置里开启「手机操控」服务。' : '')
+      + (fsOff ? '要读写手机里的文件，请用户改在手机 App 里发起对话。' : '')
     : '';
   // 插件的消息改写（ctx.claude.input）：只改发给 Claude 的那份，界面与转录前的用户原话不变
   const pIn = isSpare || snap ? null : await pluginInput({ kind: 'chat', ctx, snap: null, sessionId: sessionId || null, source, ...(viaAgent ? { via: viaAgent } : {}) }, { message, attachments });
@@ -248,6 +251,7 @@ export async function planTurn(req, res, { message, sessionId, model, effort, ul
     on: !snap, policy, workflowOn,
     custom: custom ? { main: custom.model.id, small: customSmall } : null,
     catalog, routed: !!subRoute, owner: cpOwner || undefined,
+    lookup: bridgeOn,   // 有 bridge 工具：表外模型不逐个列，点名时用 dispatch.get 查
   });
   // 插件给 Claude 的工具与提示段（plugins/claude-tools.mjs）：工具合成各插件自己的 MCP server，提示段排在内置提示之后、
   // 子 agent 调度说明之前；sig 进下面的停放签名。这一轮的 gen 要等开跑才有（runClaudeChat 把取它的函数填进 lateGen）——工具被调用时它早已就绪。

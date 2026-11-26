@@ -26,14 +26,19 @@
   import TempChatBand from '../TempChatBand.svelte';
   import { usePage } from '../../../lib/claudePage/context.js';
   import { touchGuard } from '../../../lib/selection.js';
+  import { chat } from '../../../lib/chat/store.svelte.js';
 
   const pc = usePage();
   const { saveCurQuick, onScroll, onWheel, onTouchStart, onTouchEnd, keepCurQuick } = pc;
 
   // 官方 /code 落地页问候（cc43287c9 nz，What’s up next, {name}?）
   const greetName = $derived(me.user ? t('{name}，接下来做什么？', { name: me.user }) : t('接下来做什么？'));
+  // 落地页的退场：发出第一条时问候 / 用量卡照旧飞走淡出（与输入框的形变是一套编排）；
+  // 打开一个已有会话时（退场那一刻 session.id 已经换成它）直接让位——否则用量卡和星标会压在刚摆上来的对话上半帧到三分之一秒。
+  // 给 1ms 而不是 0：时长 0 的退场 Svelte 不生成关键帧，元素原样可见，一直挂到输入框的形变（约 320ms）走完整块才拿掉
+  const quit = (d) => (session.id ? 1 : d);
 </script>
-<div class="stage">
+<div class="stage" class:opening={!!chat.opening}>
 {#if ui.view === 'greeting'}
   <!-- 空态 = Claude 桌面端 /code 落地页：左上问候 + 用量卡（claude/CodeStatsCard），输入框沉到底部——
        位置、外边距与聊天态 .composer-wrap/.composer-inner 完全一致（只挪位置、样式不动），
@@ -44,11 +49,12 @@
     <div class="hero-scroll">
       <div class="hero-col">
         <div class="greeting">
-          <span class="logo-fly" use:mountDrag={{ config: () => ({ kind: 'new', model: settings.model, effort: settings.effort }) }} in:fade={{ duration: 420, delay: 80 }} out:fly={{ x: -80, y: -22, duration: 320, easing: softDrop }}><ClaudeLogo anim="static" size={24} interactive onpress={switchPageTheme} /></span>
-          <h1 in:fly={{ y: 22, duration: 480, delay: 130 }} out:fade={{ duration: 150 }}>{greetName}</h1>
+          <span class="logo-fly" use:mountDrag={{ config: () => ({ kind: 'new', model: settings.model, effort: settings.effort }) }} in:fade={{ duration: 420, delay: 80 }} out:fly={{ x: -80, y: -22, duration: quit(320), easing: softDrop }}><ClaudeLogo anim="static" size={24} interactive onpress={switchPageTheme} /></span>
+          <h1 in:fly={{ y: 22, duration: 480, delay: 130 }} out:fade={{ duration: quit(150) }}>{greetName}</h1>
         </div>
         {#if !IS_CSNAP}
-          <div class="hero-stats" in:fly={{ y: 24, duration: 520, delay: 170 }} out:fade={{ duration: 120 }}><CodeStatsCard /></div>
+          <!-- 退场要 |global：它包在内层 {#if} 里，Svelte 的过渡默认局部，外层落地页整块退场时它不播、原样挂到输入框形变走完 -->
+          <div class="hero-stats" in:fly={{ y: 24, duration: 520, delay: 170 }} out:fade|global={{ duration: quit(120) }}><CodeStatsCard /></div>
         {/if}
       </div>
     </div>
@@ -105,16 +111,29 @@
   <!-- 会话信息面板（官方 Session rail）：停靠在舞台右侧 / 窄时弹层，开关在右上角工具条第一颗 -->
   {#if !IS_CSNAP}<SessionRail name={pc.dockName} path={pc.dockWs} />{/if}
 {/if}
+<!-- 正在打开一个本机没缓存的会话：旧内容已淡掉（见 .opening 样式），稍等一下还没到才出这个标记——快的时候不闪 -->
+{#if chat.opening}<div class="opening-mark" aria-hidden="true" in:fade={{ duration: 200, delay: 260 }} out:fade={{ duration: 100 }}><ClaudeLogo anim="thinking" size={26} /></div>{/if}
 </div>
 
 <style>
   .stage { flex: 1; position: relative; min-height: 0; display: flex; flex-direction: column; }
+  /* 打开没缓存的会话时：正文（落地页的问候与用量卡 / 上一个会话的转录）先淡掉，输入框不动；内容一到再淡回来 */
+  .hero-scroll, .scroll { transition: opacity 180ms var(--ea-fade); }
+  .stage.opening .hero-scroll, .stage.opening .scroll { opacity: 0; transition-duration: 120ms; }
+  .opening-mark { position: absolute; left: 0; right: 0; top: 38%; display: flex; justify-content: center; pointer-events: none; z-index: 2; }
   /* 空态（官方 /code 落地页）：上半区可滚（问候 + 用量卡），底部是输入框。
      edge-to-edge 后页面顶到物理屏顶，顶距要再加状态栏高度（--sat）。 */
   .hero { position: absolute; inset: 0; display: flex; flex-direction: column; }
   .hero > .hero-scroll, .hero > .hero-foot { position: relative; z-index: 1; }
+  /* 上下沿用 alpha 遮罩渐隐，不用页底色罩：用量卡垫着不透明页底色，屏矮时被滚动区下沿一刀切断，
+     看着像一条白块把画面截断（维护者 11-25 手机截图）。遮罩只淡化滚动区自己的内容，背后的字符风照常透出，
+     输入区就是浮在背景上。下沿渐隐段 = 底内边距（32px），滚到底时内容恰好落在全不透明段、不被淡掉；
+     上沿渐隐段收在状态栏 + 48px 以内（右上那组悬浮按钮底下），静止时问候（顶距 ≥ 60px + 状态栏）碰不到。 */
   .hero-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch;
-    padding: calc(clamp(60px, 11vh, 112px) + var(--sat)) 16px 24px; }
+    padding: calc(clamp(60px, 11vh, 112px) + var(--sat)) 16px 32px;
+    --hero-fade-top: calc(var(--sat) + 48px); --hero-fade-bottom: 32px;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--hero-fade-top), #000 calc(100% - var(--hero-fade-bottom)), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 var(--hero-fade-top), #000 calc(100% - var(--hero-fade-bottom)), transparent 100%); }
   /* 与输入框卡片同一根轴（760 列、左缘对齐）：问候和卡片贴列左缘，官方同款 */
   .hero-col { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; align-items: flex-start; gap: 24px; }
   /* 官方问候（cc43287c9 nz）：22px 星芒 + text-title 22/28、常规字重（wght 360）、主文字色 */
@@ -191,11 +210,6 @@
      被卡片（z-index 更高）盖住，实底与卡片无缝相接。 */
   .scroll > .scroll-fade-strip-bottom { --scroll-fade-size: var(--sf-bottom); bottom: calc(var(--composer-card-top, var(--composer-h, 84px)) - var(--composer-h, 84px) - 10px); }
   @media (max-width: 599px), (max-width: 699px) and (max-device-aspect-ratio: 699/1000) { .scroll { --sf-top: 18px; --sf-lead: 0px; --sf-bottom: 28px; } }
-  /* 桌面壳 WCO：Electron 在窗口内沿留 5px 拉伸热区（系统层命中、先于页面），工作台收起时正文滚动区
-     贴着窗口右沿，官方款原生滚动条（槽 10px、拇指离右沿 ~3px）有一半拇指落进热区、一按变成拖窗口。
-     原生滚动条画在边框内侧，右边垫 4px 透明边框整条推进来，拇指离窗口右沿 ≥7px。--sb-w 量的是
-     offsetWidth-clientWidth，自动算上这 4px，输入栏照旧让开滚动条列。 */
-  :global(html[data-wco="1"]) .scroll, :global(html[data-wco="1"]) .hero-scroll { border-right: 4px solid transparent; }
   /* 输入栏卡片：绝对定位悬浮在正文之上，无实心背景/隔层——正文向上滚时从卡片下方穿过 */
   .composer-wrap { position: absolute; left: 0; right: var(--sb-w, 0px); bottom: 0; z-index: 5;
     padding: 6px 8px max(10px, var(--sab)); background: transparent; pointer-events: none; }

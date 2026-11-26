@@ -16,7 +16,7 @@ process.env.VAULT_PATH = path.join(tmp, 'vault');
 process.env.BRIDGE_CLAUDE_IN_CHROME = '0';
 process.env.BRIDGE_MODULES_SKIP = 'studio,codex';
 process.env.BRIDGE_EDITION = 'public';
-process.env.BRIDGE_CLIENT_UPDATE_FEED = 'https://github.com/Wode44398/claude-bridge-releases/releases/latest/download/latest.json';
+process.env.BRIDGE_CLIENT_UPDATE_FEED = 'https://github.com/Wode44398/bridge/releases/latest/download/latest.json';
 const BUILD = '2026.10.24.0150+abc1234';
 const VERSION = '2026.10.24.0150';
 process.env.BRIDGE_BUILD_ID = BUILD;
@@ -68,7 +68,7 @@ for (const [n, s] of Object.entries(servers)) {
 }
 after(() => { for (const s of Object.values(servers)) s.close(); rmSync(tmp, { recursive: true, force: true }); });
 
-const REL = `/Wode44398/claude-bridge-releases/releases/download/v${VERSION}`;
+const REL = `/Wode44398/bridge/releases/download/v${VERSION}`;
 const hooks = (extra = {}) => _setTestHooks({ origins: [origin.A, origin.B], manifestUrl: (repo, v) => `${origin.A}/${repo}/releases/download/v${v}/latest.json`, ...extra });
 const manifest = ({ buildId = BUILD, modules } = {}) => ({
   version: VERSION, buildId, file: 'setup.exe', sha256: 'a'.repeat(64), mirrors: [`https://github.com${REL}/setup.exe`],
@@ -97,7 +97,7 @@ beforeEach(() => {
 test('白名单：只认 https 的 GitHub 发版 / 资产域，别的一律不下', () => {
   _setTestHooks({});
   for (const u of [
-    'https://github.com/Wode44398/claude-bridge-releases/releases/download/v1/x.zip',
+    'https://github.com/Wode44398/bridge/releases/download/v1/x.zip',
     'https://release-assets.githubusercontent.com/github-production-release-asset/1/2?sig=x',
     'https://objects.githubusercontent.com/x', 'https://GitHub.com/a',
   ]) assert.equal(trustedUrl(u), true, u);
@@ -209,7 +209,7 @@ test('不出按钮的理由：没公开发布（404）、连不上 GitHub、发�
 
   process.env.BRIDGE_CLIENT_UPDATE_FEED = '';
   try { assert.equal((await releaseSource()).code, 'feed-off'); }
-  finally { process.env.BRIDGE_CLIENT_UPDATE_FEED = 'https://github.com/Wode44398/claude-bridge-releases/releases/latest/download/latest.json'; }
+  finally { process.env.BRIDGE_CLIENT_UPDATE_FEED = 'https://github.com/Wode44398/bridge/releases/latest/download/latest.json'; }
 });
 
 test('本地发版目录的清单对得上：直接用安装包旁的离线包，不联网', async () => {

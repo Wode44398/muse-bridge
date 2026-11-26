@@ -45,11 +45,20 @@ import { detectModels } from './detect.mjs';
 import { NATIVE_VENDOR_IDS, nativeVendor, nativeVendorOf, nativeEndpoint, hostedForeign } from '../../model-knowledge/dimensio-native.mjs';
 import { cleanOver, cleanParams, cleanCompat, autoCompat, isCustomized, cleanResponsesApi, autoResponsesApi } from './advanced.mjs';
 import { probeLineModel } from './probe.mjs';
+import { balanceSupported } from './balance.mjs';
+import { KIND as CHATGPT, PLAN_BASE, USAGE_URL } from './chatgpt/const.mjs';
+import { handleChatgpt } from './chatgpt/upstream.mjs';
+import { setChatgptRoot } from './chatgpt/store.mjs';
+import { startKeepAlive } from './chatgpt/tokens.mjs';
+import { serviceCatalog, forgetAccounts, accountsOf } from './chatgpt/accounts.mjs';
 
 export const HUB_PLUGIN = 'model-hub';
 export const HUB_NAME = '模型中心';
 export const VERTEX_ID = 'vertex';
 const KINDS = ['openai', 'anthropic', 'gemini'];
+// ChatGPT 订阅（chatgpt/）：不是「地址 + Key」，线路 = 登录的 ChatGPT 账号；对两边 agent 说 OpenAI（Chat Completions）协议
+const SERVICE_KINDS = [...KINDS, CHATGPT];
+const protoOf = (s) => (s?.kind === CHATGPT ? 'openai' : s?.kind);
 const AUTH_STYLES = ['bearer', 'x-api-key', 'goog', 'none'];
 const MODEL_ID_RE = /^[^\s\u0000-\u001f]{1,200}$/;
 const CLAUDE_ID_RE = /^[\w.:\/@+-]{1,200}$/;   // Claude 自定义服务的模型 id 规则（claude-providers.mjs），不合的进不了它的菜单
@@ -83,6 +92,7 @@ let dirOverride = '';
 const dir = () => dirOverride || path.join(DATA_ROOT, 'model-hub');
 const file = () => path.join(dir(), 'services.json');
 setCatalogRoot(() => dir());   // 目录跟着注册表的数据目录走（测试换目录时一起换）
+setChatgptRoot(() => dir());
 
 let data = null;
 function load() {
@@ -418,13 +428,15 @@ function serviceAdv(s, prev, lenient) {
 // 有 prev（改服务）时模型清单沿用 prev 的：模型与去向只经 assign 改。
 function normalizeService(input, prev, { lenient = false, strictModels = true, id: presetId = '' } = {}) {
   const s = input && typeof input === 'object' ? input : {};
-  const kind = KINDS.includes(s.kind) ? s.kind : prev?.kind || (lenient ? 'openai' : null);
+  const kind = SERVICE_KINDS.includes(s.kind) ? s.kind : prev?.kind || (lenient ? 'openai' : null);
   if (!kind) throw bad('协议只能是 openai / anthropic / gemini');
+  const plan = kind === CHATGPT;
   const name = str(s.name ?? prev?.name, 40);
   if (!name) throw bad('要有名字');
-  const baseUrl = normalizeUrl(s.baseUrl ?? prev?.baseUrl, '接口地址');
+  // 订阅通道的地址是定死的（官方只认这一个）；账号的凭据不在线路上，另存在 chatgpt/
+  const baseUrl = plan ? PLAN_BASE : normalizeUrl(s.baseUrl ?? prev?.baseUrl, '接口地址');
   const dflt = Array.isArray(s.agents) ? TEXT_AGENTS.filter((a) => s.agents.includes(a)) : [...DEFAULT_TEXT_AGENTS];
-  const models = prev ? prev.models : normalizeModels(s.models, kind, { strict: !lenient && strictModels, dflt });
+  const models = prev ? prev.models : normalizeModels(s.models, protoOf({ kind }), { strict: !lenient && strictModels, dflt });
   const prevLines = new Map((prev?.lines || []).map((l) => [l.id, l]));
   const lines = [], pendingKeys = [];
   for (const l of Array.isArray(s.lines) ? s.lines : prev?.lines || []) {
@@ -432,8 +444,8 @@ function normalizeService(input, prev, { lenient = false, strictModels = true, i
     const old = prevLines.get(l.id);
     const id = old ? old.id : lenient && /^l-[0-9a-f]{8}$/.test(l.id || '') ? l.id : newId('l-');
     const lb = str(l.baseUrl, 500);
-    lines.push({ id, label: str(l.label, 40) || `Key ${lines.length + 1}`, baseUrl: lb ? normalizeUrl(lb, '线路地址') : '', enabled: l.enabled !== false });
-    if (!lenient && typeof l.key === 'string' && l.key.trim()) {
+    lines.push({ id, label: str(l.label, 40) || (plan ? `账号 ${lines.length + 1}` : `Key ${lines.length + 1}`), baseUrl: lb && !plan ? normalizeUrl(lb, '线路地址') : '', enabled: l.enabled !== false });
+    if (!plan && !lenient && typeof l.key === 'string' && l.key.trim()) {
       const key = l.key.trim();
       // 中间夹换行 / 空白 / 控制字符 / 非 Latin-1 的 Key 进了请求头必炸（undici 的报错原文里还带着整段 Key）：存之前就挡
       if (BAD_KEY_RE.test(key)) throw bad(BAD_KEY_MSG);
@@ -447,13 +459,14 @@ function normalizeService(input, prev, { lenient = false, strictModels = true, i
   // native：这个服务对应 dimensio 自带适配的哪一家（dimensio-native.mjs）。只在建服务时定（按识别建的按地址认，迁移建的直接给），
   // 之后跟着服务走；改了地址才重认。以前就有的服务没有这个记号——它们在 dimensio 里的服务 id 不能变。
   const givenNative = NATIVE_VENDOR_IDS.includes(s.native) ? s.native : '';
-  const native = prev ? (prev.native ? (prev.baseUrl === baseUrl ? prev.native : nativeVendorOf(baseUrl)) : '') : givenNative;
+  const native = plan ? '' : prev ? (prev.native ? (prev.baseUrl === baseUrl ? prev.native : nativeVendorOf(baseUrl)) : '') : givenNative;
   const out = {
     id: prev?.id || presetId || (lenient && /^h-[0-9a-f]{8}$/.test(s.id || '') ? s.id : newServiceId()),
     name, kind, baseUrl,
-    authStyle: AUTH_STYLES.includes(s.authStyle) ? s.authStyle : prev?.authStyle || defaultAuthStyle(kind),
-    headers: s.headers !== undefined ? cleanHeaders(s.headers) : prev?.headers || [],
-    members: typeof s.members === 'boolean' ? s.members : prev?.members === true,
+    authStyle: plan ? 'bearer' : AUTH_STYLES.includes(s.authStyle) ? s.authStyle : prev?.authStyle || defaultAuthStyle(kind),
+    headers: plan ? [] : s.headers !== undefined ? cleanHeaders(s.headers) : prev?.headers || [],
+    // 一个人的 ChatGPT 套餐不能给别人用：订阅服务恒不共享给成员
+    members: plan ? false : typeof s.members === 'boolean' ? s.members : prev?.members === true,
     enabled: typeof s.enabled === 'boolean' ? s.enabled : prev?.enabled !== false,
     strategy: s.strategy === 'round-robin' || s.strategy === 'failover' ? s.strategy : prev?.strategy || 'failover',
     useProxy: typeof s.useProxy === 'boolean' ? s.useProxy : prev?.useProxy !== false,
@@ -578,11 +591,11 @@ function desiredSpecs() {
       // 这两个键每次都给全：已登记的服务是把新规格合并到旧规格上，不给就会留着旧值（改了地址、加了混挂线路之后还按官方处理）
       upstream,
       compat, retries: s.retries ?? null,
-      id: s.id, name: s.name, protocol: s.kind, baseUrl: gatewayUrl(s.id, s.kind), authStyle: 'none',
+      id: s.id, name: s.name, protocol: protoOf(s), baseUrl: gatewayUrl(s.id, protoOf(s)), authStyle: 'none',
       // codex 的 provider base_url 填它（Codex 自己在后面拼 /responses）；网关按 responsesApi 透传或转换
       responsesUrl: gatewayUrl(s.id, 'responses'),
       agents: TEXT_AGENTS.filter((a) => texts.some((m) => m.agents.includes(a))), members: s.members,
-      models: texts.map((m) => ({ ...modelSpec(m, s.kind, route), agents: [...m.agents] })),   // 不带 kind：Claude 的 normalizeModel 不认它
+      models: texts.map((m) => ({ ...modelSpec(m, protoOf(s), route), agents: [...m.agents] })),   // 不带 kind：Claude 的 normalizeModel 不认它
       defaultModel: pickDefault(texts, s.defaultModel), timeoutSec: s.timeoutSec, logo: brandLogoOf(s.baseUrl),
       native,
     });
@@ -600,7 +613,7 @@ function responsesProfile(service) {
   if (!s) return null;
   const upstream = upstreamHostOf(s), route = routeOf(upstream);
   const official = s.kind === 'anthropic' && upstream === 'api.anthropic.com';
-  const proto = s.kind === 'gemini' ? 'openai' : s.kind;
+  const proto = s.kind === 'gemini' ? 'openai' : protoOf(s);
   return {
     upstream,
     compat: { ...(official ? { promptCaching: true, slimBody: false, stripBetas: false } : {}), ...(s.compat || {}) },
@@ -887,6 +900,8 @@ export async function initModelHub() {
   registerUpstream('vertex', handleVertex);
   const pool = makePoolHandler(keyOf);
   for (const k of KINDS) registerUpstream(k, pool);
+  registerUpstream(CHATGPT, handleChatgpt);
+  startKeepAlive();
   await ensureGateway();
   publish();
 }
@@ -900,7 +915,9 @@ function serviceView(s, sec = secrets()) {
   for (const m of s.models) if (m.kind in counts) counts[m.kind] += 1;
   const brand = providerOf(s.baseUrl);
   let media = null;
-  try { media = mediaInfo(s, meta.media, k); } catch (e) { console.error('[model-hub] 媒体接口信息算不出来：', e?.message || e); }
+  // 订阅通道不能生成图像：没有媒体接口
+  if (s.kind !== CHATGPT) try { media = mediaInfo(s, meta.media, k); } catch (e) { console.error('[model-hub] 媒体接口信息算不出来：', e?.message || e); }
+  const plan = s.kind === CHATGPT ? accountsOf(s) : null;
   const upstream = upstreamHostOf(s), route = routeOf(upstream);
   const official = s.kind === 'anthropic' && upstream === 'api.anthropic.com';
   return {
@@ -911,7 +928,11 @@ function serviceView(s, sec = secrets()) {
     responsesApi: s.responsesApi || null, responsesAuto: autoResponsesApi(s),
     brand: brand ? { key: brand.key, name: brand.name, logo: brand.logo } : null,
     authStyle: s.authStyle, headers: s.headers, enabled: s.enabled, members: s.members, strategy: s.strategy, useProxy: s.useProxy, timeoutSec: s.timeoutSec,
-    lines: s.lines.map((l) => { const key = k(s.id, l.id); return { ...l, hasKey: !!key, keyTail: tail(key), state: lineState(s.id, l.id) }; }),
+    lines: s.lines.map((l) => {
+      if (plan) return { ...l, hasKey: plan.some((a) => a.lineId === l.id && a.status !== 'missing'), keyTail: '', state: lineState(s.id, l.id) };
+      const key = k(s.id, l.id); return { ...l, hasKey: !!key, keyTail: tail(key), state: lineState(s.id, l.id) };
+    }),
+    ...(plan ? { chatgpt: { usageUrl: USAGE_URL, accounts: plan } } : {}),
     // hostedForeign：自带适配的服务里托管的别家型号——dimensio 那边按这里的档位表发，思考写法对它也生效
     models: s.models.map((m) => ({ ...m, agents: [...m.agents], vendor: vendorOf(m.id) || '', ...(m.kind === 'text' ? textExtras(s, m, route) : {}),
       ...(s.native && hostedForeign(s.native, m.id) ? { hostedForeign: true } : {}) })),
@@ -920,6 +941,8 @@ function serviceView(s, sec = secrets()) {
     defaultModel: s.defaultModel, createdAt: s.createdAt,
     detectedAt: s.detectedAt || 0, catalogSize: meta.size, media,
     native: s.native || '',
+    // 能不能用 Key 查余额（POST /api/model-hub/balance）
+    balance: balanceSupported(s),
     // dimensio 那边走自带适配直连这家（不登记成卡）：思考写法只对托管的别家型号生效，其余高级设置（能力、缓存、调用参数、兼容项）两边都生效
     dimNative: !!s.native && hubFlag('dimensioNative') && load().services.find((x) => x.native === s.native && x.enabled)?.id === s.id,
     published: handles.has(s.id),
@@ -927,10 +950,10 @@ function serviceView(s, sec = secrets()) {
 }
 // 文本模型视图里多给的：提示缓存自动值、高级设置的自动值（auto）与生效值（eff）、改没改过（custom）
 function textExtras(s, m, route) {
-  const eff = modelSpec(m, s.kind, route);
+  const eff = modelSpec(m, protoOf(s), route);
   return {
     cacheAuto: autoCache(s, m.id),
-    auto: autoSpec(m, s.kind, route),
+    auto: autoSpec(m, protoOf(s), route),
     eff: {
       contextWindow: eff.contextWindow, maxOutput: eff.maxOutput, vision: eff.vision, alwaysThinks: !!eff.alwaysThinks,
       thinking: eff.thinking || 'none', efforts: eff.efforts || [], effortField: eff.effortField || '', effortDefault: eff.effortDefault || '',
@@ -1152,7 +1175,7 @@ export function updateHubV2(id, patch) {
   const pick = {};
   for (const k of UPDATE_FIELDS) if (p[k] !== undefined) pick[k] = p[k];
   const s = normalizeService({ ...pick, kind: prev.kind }, prev);   // 协议定了不改（两边会话里记着的模型按协议走）
-  if (!s.lines.length) throw bad('至少要留一条线路（Key）');
+  if (!s.lines.length) throw bad(s.kind === CHATGPT ? '至少要留一个 ChatGPT 账号（不要了就删掉整个服务）' : '至少要留一条线路（Key）');
   let cat = null, legacy = null;
   if (Array.isArray(p.models) || Array.isArray(p.agents)) {
     cat = readCatalog(s.id);
@@ -1160,7 +1183,8 @@ export function updateHubV2(id, patch) {
     if (legacy) { s.models = legacy.models; s.defaultModel = pickDefault(s.models, pick.defaultModel ?? s.defaultModel); }
   }
   const gone = prev.lines.filter((l) => !s.lines.some((x) => x.id === l.id));
-  setKeys([...s.pendingKeys.map(([lid, k]) => [id, lid, k]), ...gone.map((l) => [id, l.id, ''])]);
+  if (s.kind === CHATGPT) { if (gone.length) forgetAccounts(id, gone.map((l) => l.id)); }
+  else setKeys([...s.pendingKeys.map(([lid, k]) => [id, lid, k]), ...gone.map((l) => [id, l.id, ''])]);
   d.services[i] = s;
   save(); publish();
   if (legacy) keepInCatalog(s.id, cat, [...legacy.fresh, ...prev.models.filter((m) => !s.models.some((x) => x.id === m.id))]);
@@ -1182,7 +1206,8 @@ export function deleteHubV2(id) {
   const s = d.services.find((x) => x.id === id);
   if (!s) throw notFound();
   const key = mediaLine(s, keyOf).key;   // 清 Key 之前取：Studio 的报错里要是回显了它，抹掉
-  setKeys(s.lines.map((l) => [id, l.id, '']));
+  if (s.kind === CHATGPT) forgetAccounts(id);
+  else setKeys(s.lines.map((l) => [id, l.id, '']));
   d.services = d.services.filter((x) => x.id !== id);
   forgetService(id);
   removeCatalog(id);
@@ -1370,10 +1395,51 @@ function withNativeModels(models, vendorId) {
   return extra.length ? [...models, ...extra] : models;
 }
 
+/**
+ * 建一个 ChatGPT 订阅服务（chatgpt/service.mjs 在登录成功后调）→ { service, lineId, warnings }。
+ * attach(服务 id, 线路 id) 在落盘、发布之前调：先把这个账号的凭据存好，发布出去的服务第一个请求就能用。
+ */
+export function createHubChatgpt({ name, label, catalog, assign, defaultModel, attach }) {
+  catchUpStudio();
+  const d = load();
+  if (d.services.length >= MAX_SERVICES) throw bad(`最多 ${MAX_SERVICES} 个服务`);
+  const s = normalizeService({ name: str(name, 40) || 'ChatGPT 订阅', kind: CHATGPT, lines: [{ label: str(label, 40) || '账号 1' }], models: [] }, null);
+  const list = cleanCatalogList(catalog);
+  const catMap = new Map(list.map((m) => [m.id, m]));
+  s.models = applyAssign(s, assign ?? [], (id) => catMap.get(id), null);
+  s.defaultModel = pickDefault(s.models, defaultModel);
+  s.detectedAt = Date.now();
+  attach(s.id, s.lines[0].id);
+  d.services.push(s);
+  writeCatalog(s.id, { at: s.detectedAt, models: list });
+  save(); changed();
+  return { service: serviceView(s), lineId: s.lines[0].id, warnings: [] };
+}
+/** 给 ChatGPT 订阅服务再挂一个账号（新线路）→ { service, lineId }。attach 同上。 */
+export function addHubChatgptLine(id, { label, attach }) {
+  const d = load();
+  const s = d.services.find((x) => x.id === id);
+  if (!s) throw notFound();
+  if (s.kind !== CHATGPT) throw bad('这个服务不是 ChatGPT 订阅');
+  if (s.lines.length >= MAX_LINES) throw bad(`一个服务最多 ${MAX_LINES} 个账号`);
+  const lineId = newId('l-');
+  attach(s.id, lineId);
+  s.lines.push({ id: lineId, label: str(label, 40) || `账号 ${s.lines.length + 1}`, baseUrl: '', enabled: true });
+  save(); changed();
+  return { service: serviceView(s), lineId };
+}
+/** 这个服务的类型（路由分流用；没有这个服务回 null）。 */
+export function hubServiceKind(id) { return load().services.find((x) => x.id === id)?.kind || null; }
+/** 服务记录的副本（测试连接时把请求直接交给订阅的上游处理器）。 */
+export function hubServiceRecord(id) { const s = load().services.find((x) => x.id === id); return s ? { ...s, lines: s.lines.map((l) => ({ ...l })) } : null; }
+/** 账号重新登录完：清掉这条线路的冷却、重新发布（状态视图跟着变）→ ServiceView。 */
+export function touchHubLine(id, lineId) { clearCooldown(id, lineId); changed(); return getHubService(id); }
+
 export async function detectHub(b) {
   const body = b && typeof b === 'object' ? b : {};
   if (body.id) {
     const s = findService(String(body.id));
+    if (s.kind === CHATGPT) return detectChatgpt(s);
     const { key, baseUrl } = mediaLine(s, keyOf);
     // 已托管的服务按托管时 Studio 定下的方言问（收编来的「自定义地址 + 某方言」按地址认会认成 OpenAI 兼容，列出的媒体模型就不对了）
     const r = await detectModels({ baseUrl, key, kind: s.kind, lockKind: true, authStyle: s.authStyle, headers: s.headers, useProxy: s.useProxy, mediaDialect: s.studio?.dialect || '' });
@@ -1397,6 +1463,17 @@ export async function detectHub(b) {
   return native ? { ...r, models: withNativeModels(Array.isArray(r.models) ? r.models : [], native), native } : r;
 }
 
+// ChatGPT 订阅服务的「重新识别」：用第一个能用的账号拉 GET /v1/models（不同账号 / 套餐能用的模型不一样）
+async function detectChatgpt(s) {
+  const models = await serviceCatalog(s);
+  const cur = load().services.find((x) => x.id === s.id);
+  if (!cur) throw Object.assign(new Error('这个服务在识别期间被删掉了'), { status: 404 });
+  const cat = mergeCatalog(cur.id, models, {});
+  cur.detectedAt = Date.now();
+  save(); notify();
+  return { conn: null, models: cat.models, media: null, warnings: [], native: '' };
+}
+
 /** 目录（契约 GET /catalog）→ { at, models }：已添加但目录里没有的补在后面（source 'manual'）。 */
 export function catalogView(id) {
   const s = findService(id);
@@ -1408,7 +1485,7 @@ export function catalogView(id) {
 /** 手动加一个模型 ID 进目录（契约 POST /catalog/add 的前一半）→ { model }。只进目录，要用还得 assign。 */
 export function catalogAddModel(id, model) {
   const s = findService(id);
-  const m = addCatalogModel(s.id, model, { protocol: s.kind });
+  const m = addCatalogModel(s.id, model, { protocol: protoOf(s) });
   notify();
   return { model: m };
 }
@@ -1419,7 +1496,8 @@ export function catalogAddModel(id, model) {
 export async function catalogAddAndProbe(id, model) {
   const s = findService(id);
   const { model: m } = catalogAddModel(id, model);
-  if (m.kind !== 'text' || knownToTable(m.id, s.kind)) return { model: m };
+  // 订阅服务的模型能力按型号表来（探测要真打几次、吃套餐额度）
+  if (m.kind !== 'text' || s.kind === CHATGPT || knownToTable(m.id, protoOf(s))) return { model: m };
   try {
     const r = await probeHubModel(s.id, m.id);
     return { model: r.model || m, probe: r.probe };
@@ -1445,6 +1523,7 @@ export async function probeHubModel(id, modelId, lineId = '') {
   const added = s0.models.find((m) => m.id === mid);
   if (!inCat && !added) throw Object.assign(new Error('这个服务里没有这个模型'), { status: 404 });
   if ((added?.kind || readCatalog(s0.id).models.find((m) => m.id === mid)?.kind) !== 'text') throw bad('只有文本模型能探测能力');
+  if (s0.kind === CHATGPT) throw bad('ChatGPT 订阅服务的模型能力按官方型号表来，不用探测');
   const { service, line, key } = lineContext({ id: s0.id, lineId });
   const result = await probeLineModel(service, line, key, mid);
   if (result.error) throw Object.assign(new Error('探测失败：' + result.error), { status: 502 });
@@ -1506,6 +1585,7 @@ export { keyOf as _hubKeyForTests };
  */
 export function lineContext({ id, lineId, draft } = {}) {
   const saved = id ? load().services.find((x) => x.id === id) : null;
+  if (saved?.kind === CHATGPT && draft) throw bad('ChatGPT 订阅服务没有地址和 Key 可填');
   if (!draft) {
     const line = saved?.lines.find((l) => l.id === lineId) || saved?.lines.find((l) => l.enabled);
     if (!saved || !line) throw Object.assign(new Error('没有这条线路'), { status: 404 });

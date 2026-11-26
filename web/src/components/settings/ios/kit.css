@@ -150,6 +150,9 @@
 .settings.modal .edge, .settings.covered .edge { -webkit-backdrop-filter: none; backdrop-filter: none; }
 
 /* ── 分组卡片：圆角 18，发丝描边托出层次（不靠投影） ── */
+/* 一组（小标题 + 卡）整体晚到 / 撤掉时的包层（RootPages 的 grow 过渡挂在它上面）：flow-root 让卡的下外边距算在包层里，
+   过渡量到的高度与静止时一致，收放到头不会再跳 26px */
+.grp { display: flow-root; }
 .ig { position: relative; background: var(--i-card); border-radius: 18px; overflow: hidden; margin-bottom: 26px;
   box-shadow: inset 0 0 0 .5px var(--i-label4); transition: background-color 240ms var(--ea-fade); }
 .ig:has(+ .gfoot) { margin-bottom: 0; }
@@ -323,6 +326,8 @@ span.rc-x { color: var(--i-accent); }
 .mini-bar { display: block; height: 3px; border-radius: 2px; background: var(--i-fill3); overflow: hidden; }
 .mini-bar i { display: block; height: 100%; border-radius: 2px; background: var(--i-label2); transition: width .4s var(--ea-std); }
 .mini-bar i.amber { background: var(--i-warn); } .mini-bar i.red { background: var(--i-red); }
+/* 用量还在路上时的占位格：结构与到齐后一模一样，只是淡一些 */
+.mini-m.pend { opacity: .5; }
 .mini-r { min-height: 15px; font-size: 11px; line-height: 15px; color: var(--i-label2); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .u-v.hot { color: var(--i-red); }
 .bar-u i.warm { background: var(--i-warn); }

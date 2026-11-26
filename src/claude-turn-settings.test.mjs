@@ -281,6 +281,11 @@ test('有性价比快照：调度提示给四档阶梯（首选 + 备选、auto 
     assert.match(routed, /未评分[^\n]*odd-model（Odd）/);
     assert.match(routed, /以这里为准\]\n偏好原文$/);
     assert.doesNotMatch(routed, /^  - /m);                              // 不再列全清单
+    // 有 bridge 工具（lookup）：表外模型不逐个列，改成一句去 dispatch.get 查
+    const looked = T.dispatchNudge({ ...base, policy: POL({}, { note: '偏好原文' }), routed: true, plan: 'max20', lookup: true });
+    assert.doesNotMatch(looked, /odd-model/);
+    assert.match(looked, /表外还有 \d+ 个已配模型[^\n]*dispatch\.get（candidates:true）/);
+    assert.match(looked, /auto:top = opus · max/);                      // 四档阶梯照旧
     // 官方会话没挂上转发：只有 Claude 别名，不教 auto 写法
     const plain = T.dispatchNudge({ ...base, plan: 'max20' });
     assert.doesNotMatch(plain, /auto:/);

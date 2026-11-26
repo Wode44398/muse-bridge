@@ -28,6 +28,8 @@ export {
 export {
   CCPA_UPSTREAM,
   DEFAULT_AGY_UA,
+  oauthClientConfigured,
+  poolAuthMode,
   noteHostAuth,
   getHostAuth,
   effectiveAgyUserAgent,
@@ -43,6 +45,8 @@ export {
   cancelOAuthLogin,
   shutdownOAuthFlows,
 } from './oauth.mjs';
+
+export { deleteSlotDir } from './slots.mjs';
 
 export {
   normalizeQuotaSummary,

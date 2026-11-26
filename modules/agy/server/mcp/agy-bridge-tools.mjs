@@ -463,6 +463,20 @@ export function buildAgyBridgeToolDefs({
   return tools;
 }
 
+/** zod 参数表 → 给 agy 的 JSON Schema（子进程列清单与服务端算清单同一个口径）。 */
+export function agyToolJsonSchema(shape) {
+  const schema = z.toJSONSchema(z.object(shape || {}), { io: 'input', unrepresentable: 'any' });
+  delete schema.$schema;
+  return schema;
+}
+
+/** 只要定义不要执行：本地工具的 MCP 清单形状（服务端算总清单、给 tool_docs 出完整说明用）。 */
+export function localToolCatalog(categories = ['media', 'ui', 'phone']) {
+  const never = async () => { throw new Error('仅用于列清单'); };
+  return buildAgyBridgeToolDefs({ categories, phonePluginOn: true, callAgentOp: never, callInternal: never })
+    .map((d) => ({ name: d.name, description: d.description, inputSchema: agyToolJsonSchema(d.schema) }));
+}
+
 export function registerAgyBridgeTools(server, opts = {}) {
   const defs = buildAgyBridgeToolDefs(opts);
   for (const def of defs) {

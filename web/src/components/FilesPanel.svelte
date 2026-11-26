@@ -36,6 +36,7 @@
   import { filterFilesByName, makeFileComparator, nextSort, normalizeFileQuery } from '../lib/files-business.js';
   import { fmtSize, kindOf } from '../lib/files/common.js';
   import { AiSend } from '../lib/files/aiSend.svelte.js';
+  import { ROOT_LIST_KEY, forgetRoot, recallLocs, recallRoot, recallRootMeta, rememberLocs, rememberRoot, rememberRootMeta } from '../lib/files/lastSeen.js';
   import { G, fmtTime, locGlyph, locLabel, resolveStart, winAbs } from './files/panel/panelLook.js';
   import { createPanelDrag } from './files/panel/panelDrag.svelte.js';
   import { createPanelOps } from './files/panel/panelOps.svelte.js';
@@ -222,8 +223,13 @@
   // 快照对话 ~/.bridge-quickchat/… 落「主目录」），位置行、返回链、本地页签和库内会话逐字一致。
   // 哪个位置都不含它（非 admin 越界、位置没拉到）才退回老形态：以 ws 为根（fenced）。
   // 选择器形态 / 分享只读 / 快照访客维持围栏。
-  const LOC_CACHE = (window.__bridgeFilesLocs ||= { list: null });   // 上次拿到的位置：进页即出，不晚一拍冒出来
+  // 上次拿到的位置：进页即出，不晚一拍冒出来。冷启动从 lastKnown 快照起步——位置表常比列表还晚到，
+  // 等它到了才长出位置胶囊、撤掉路径条，整页会往上跳一截
+  const LOC_CACHE = (window.__bridgeFilesLocs ||= { list: me.kind === 'admin' ? recallLocs() : null });
   let cloudLocs = $state(me.kind === 'admin' ? LOC_CACHE.list || [] : []);
+  // 位置表这次还没回来：管理员一定有「工作空间 + 主目录 + 盘符」好几条，全新安装（没快照）时先按有胶囊排顶栏，
+  // 不先摆一行路径条再撤掉；真拉不到再退回路径条
+  let locsPending = $state(!(me.kind === 'admin' && LOC_CACHE.list?.length));
   let cloudLocId = $state('ws');
   const cloudLoc = $derived(cloudLocs.find((l) => l.id === cloudLocId) || null);
   // 挂载时拍下（宿主换 ws 会按 key 重挂）；卸载后不再回读 props
@@ -234,9 +240,26 @@
   const atPcLoc = $derived(!fenced && !!cloudRoot && !desktopNative);   // 此刻在「电脑位置」里，而不是身份工作空间（原生通道/这台电脑不算：那是另一套位置）
   const scoped = (url) => cloudRoot ? url + (url.includes('?') ? '&' : '?') + 'ws=' + encodeURIComponent(cloudRoot) : url;
 
+  // 列表内存缓存（SPA 存活期）：listKey → items；截断信息同样按 listKey 记（服务端对上千项的目录只回前 1500 项）
+  const LIST_CACHE = (window.__bridgeFilesListCache ||= new Map());
+  const LIST_META = (window.__bridgeFilesListMeta ||= new Map());     // listKey → { truncated, total }
+  const NO_META = { truncated: false, total: 0 };
+  // 进页默认落在身份工作空间根目录（独立分页、没指定起始路径、不走桌面壳原生通道）：内存缓存或上次的快照里有，
+  // 就拿它当起始值——推进来的第一帧就是上次的内容；正文分组的淡入（PanelBody 的 in:swap）只留给真晚到的列表
+  const startsAtRoot = untrack(() => !workspaceRoot && !readonly && (initialPath ?? ui.filesPath ?? '') === ''
+    && !(isNativeDesktop() && hasNativeWorkspaceOps()));
+  if (startsAtRoot && !LIST_CACHE.has(ROOT_LIST_KEY)) {
+    const seen = recallRoot();
+    if (seen) {
+      LIST_CACHE.set(ROOT_LIST_KEY, seen.items);
+      LIST_META.set(ROOT_LIST_KEY, seen.truncated ? { truncated: true, total: seen.total } : NO_META);
+    }
+  }
+  const items0 = (startsAtRoot && LIST_CACHE.get(ROOT_LIST_KEY)) || [];
+
   let path = $state('');           // 当前相对路径（'' = 根）
-  let items = $state([]);
-  let loading = $state(true);
+  let items = $state(items0);
+  let loading = $state(!items0.length);
   let scrolled = $state(false);
   let scroller = $state();
 
@@ -309,7 +332,7 @@
   const showCloudLocs = $derived(cloudLocsOn && !isLocal && !desktopNative && cloudLocs.length > 1);
   // 位置胶囊：顶栏返回键右边那枚「⌂ 主目录 ⌃⌄」——「在电脑的哪儿」恒在手边，任何深度都能一下换盘，
   // 不必先退回根目录找那排位置钮。菜单里另有一行「对话文件夹」：起点（会话目录）走远了一键回去。
-  const locPill = $derived(showCloudLocs);
+  const locPill = $derived(showCloudLocs || (locsPending && cloudLocsOn && !isLocal && !desktopNative && me.kind === 'admin'));
   const pillLabel = $derived(cloudLoc ? (cloudLoc.id === 'ws' ? t('工作空间') : locLabel(cloudLoc)) : t('工作空间'));
   let locMenu = $state(null);      // { x, y }
   // 顶栏「＋ / 位置胶囊 / 传输环」与路径条「…」的元素：点一下，菜单就从按钮本身长出来（ios27/MorphMenu）
@@ -416,10 +439,7 @@
   // 乐观导航：进目录/返回/面包屑点下去**当帧就切 path**——列表缓存命中立即出上次内容、
   // 网络退到点击之后后台对账刷新；没缓存才亮 loading。弱网里返回不再「点了等一拍才动」。
   // 同目录刷新（agent fs 事件/写操作后对账）保留现有内容静默换新，不清屏不回顶。
-  const LIST_CACHE = (window.__bridgeFilesListCache ||= new Map());   // listKey → items（SPA 存活期内存缓存）
-  // 截断信息同样按 listKey 记：服务端对上千项的目录（Temp、System32、下载）只回前 1500 项。
-  const LIST_META = (window.__bridgeFilesListMeta ||= new Map());     // listKey → { truncated, total }
-  const NO_META = { truncated: false, total: 0 };
+  // （LIST_CACHE / LIST_META 声明在 items 之前：起始值要从它们取）
   let listMeta = $state(NO_META);
   const listKey = (p) => (isLocal ? 'local' : desktopNative ? 'dt:' + desktopLocationId : readonly ? 'share' : 'cloud') + '\x1f' + (cloudRoot || '') + '\x1f' + p;
   let shownKey = null;   // 当前 items 属于哪个 listKey（跨 ws/位置切换时避免误判「同目录」）
@@ -452,11 +472,14 @@
       const meta = r.truncated ? { truncated: true, total: r.total || 0 } : NO_META;
       LIST_CACHE.set(listKey(r.path ?? p), r.items || []);
       LIST_META.set(listKey(r.path ?? p), meta);
+      if (listKey(r.path ?? p) === ROOT_LIST_KEY) rememberRoot(r.items || [], meta);
       if (my !== loadSeq) return;   // 已被更新的导航替代：结果只进缓存不上屏
       items = r.items || []; path = r.path || p; shownKey = listKey(path); loadErr = ''; listMeta = meta;
       if (desktopNative) hydrateDesktopThumbs(items, desktopLocationId);
     }
     catch (e) {
+      // 断网 / 超时不动快照；只有确定打不开了（没登录 / 没权限 / 不存在）才作废，下次冷开别再先画它
+      if (key === ROOT_LIST_KEY && [401, 403, 404].includes(e?.status)) forgetRoot();
       if (my !== loadSeq) return;
       const why = e?.name === 'AbortError' ? t('加载超时')
         : tr(e.body?.error || '') || (e.status === 404 ? t('这个文件夹不存在（可能已被移走或删除）') : e.status === 403 ? t('没有权限打开这个文件夹') : '') || tr(e.message || '');
@@ -467,7 +490,12 @@
   }
   // 缓存镜像：屏上列表怎么变（乐观删除/改名/上传后刷新），缓存跟着变——返回时不会把
   // 刚删的文件短暂「复活」。loading 中不写（别把还没到货的空列表当真相存起来）。
-  $effect(() => { const list = items; if (!loading && shownKey && !isLocal) LIST_CACHE.set(shownKey, list); });
+  $effect(() => {
+    const list = items;
+    if (loading || !shownKey || isLocal) return;
+    LIST_CACHE.set(shownKey, list);
+    if (shownKey === ROOT_LIST_KEY) untrack(() => rememberRoot(list, listMeta));
+  });
   // —— 补充元数据（/api/files/meta）：视频时长角标、文件夹项目数、查看器先按宽高占好比例 ——
   // 列表先上屏、这份后到（没算完的接口会说 pending，隔一会儿再要）；换目录清空。桌面原生位置不走服务端，没有这份。
   let meta = $state({});
@@ -477,9 +505,15 @@
     const on = !isLocal && !desktopNative && !loading && !(pcLocal && pcHome) && items.length > 0;
     const p = path, root = cloudRoot;
     return untrack(() => {
-      if (key !== metaKey) { metaKey = key; meta = {}; }
+      // 身份工作空间根目录：先摆上次的元数据（图标视图格子下的「N 项」跟列表一起出，不晚一拍填字）
+      const atRoot = listKey(p) === ROOT_LIST_KEY;
+      if (key !== metaKey) { metaKey = key; meta = (atRoot && recallRootMeta()) || {}; }
       if (!on) return;
-      return watchMeta(() => api.filesMeta(p, root), (m) => { if (metaKey === key) meta = { ...meta, ...m }; });
+      return watchMeta(() => api.filesMeta(p, root), (m) => {
+        if (metaKey !== key) return;
+        meta = { ...meta, ...m };
+        if (atRoot) rememberRootMeta(meta);
+      });
     });
   });
   // 手机本地 tab 没有这个接口：图标视图里文件夹的项目数现数——SAF 列目录是同步桥调用，一次数 6 个、让出主线程再数，最多 60 个
@@ -595,10 +629,12 @@
     const fetchLocs = () => api.projectLocations().then((r) => {
       const list = (r?.locations || []).filter((l) => l && l.id && l.path && l.id !== 'dimensio');
       cloudLocs = list;
+      locsPending = false;
       LOC_CACHE.list = me.kind === 'admin' ? list : null;
+      if (me.kind === 'admin') rememberLocs(list);
       if (cloudLocId !== 'ws' && !list.some((l) => l.id === cloudLocId)) selectCloudLoc('ws');   // 那个盘拔掉了
       return list;
-    });
+    }, (e) => { locsPending = false; throw e; });
     // 起点落位：startRoot + 初始相对路径 → 最深的那个位置 + 位置内相对路径
     const settle = (list) => {
       const hit = resolveStart(list, joinAbs(startRoot, p0));
@@ -955,7 +991,7 @@
     {#if locPill && !selecting}
       <GlassButton bind:el={locBtn} aria={t('位置：{name}', { name: pillLabel })} onclick={(e) => (locMenu = locMenu ? null : anchorBelow(e))}>
         <span class="lp-in">
-          <span class="lp-ic">{@html locGlyph(cloudLoc)}</span>
+          <span class="lp-ic">{@html locGlyph(cloudLoc || { id: cloudLocId })}</span>
           <span class="lp-nm">{pillLabel}</span>
           <span class="lp-chev"><Sym name="chevron.up.chevron.down" weight={600} size={12} /></span>
         </span>
@@ -1023,7 +1059,7 @@
       {:else}
         {#if pcLocal && !pcHome}<button class="pb-seg" onclick={showPcHome}>{t('这台电脑')}</button><span class="pb-sep">›</span>{/if}
         {#if locPill}
-          <button class="pb-root" class:dnd-on={drag.overKey === 'ws-crumb:-1'} use:dropZone={P.crumbZone(-1)} aria-label={rootLabel} onclick={goRoot}>{@html locGlyph(cloudLoc)}</button>
+          <button class="pb-root" class:dnd-on={drag.overKey === 'ws-crumb:-1'} use:dropZone={P.crumbZone(-1)} aria-label={rootLabel} onclick={goRoot}>{@html locGlyph(cloudLoc || { id: cloudLocId })}</button>
         {:else}
           <button class="pb-seg" class:cur={!segs.length} class:dnd-on={drag.overKey === 'ws-crumb:-1'} use:dropZone={P.crumbZone(-1)} onclick={goRoot}>{#if readonly}<svg class="pb-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 13.7a4.2 4.2 0 0 0 6.1.3l2.4-2.4a4.2 4.2 0 0 0-5.9-5.9l-1.3 1.3" /><path d="M13.7 10.3a4.2 4.2 0 0 0-6.1-.3l-2.4 2.4a4.2 4.2 0 0 0 5.9 5.9l1.3-1.3" /></svg>{/if}{rootLabel}</button>
         {/if}

@@ -1,5 +1,5 @@
 <script>
-  // Studio 的浮层壳（v3）：手机 → dimensio 式底部 Sheet；桌面 / 平板 → 贴着锚点的 Popover，没有锚点（或 dialog）→ 居中 Sheet 对话框。
+  // Studio 的浮层壳：手机 → 底部 Sheet；桌面 / 平板 → 贴着锚点的 Popover，没有锚点（或 dialog、或强制 sheet）→ 居中卡（Sheet 宽于手机时自己变卡）。
   // 调用方不管是哪种，只给标题、锚点、宽度和内容。挂进 layers.js 返回栈（Popover / Sheet 自己登记）。
   import { layout } from '../../../lib/layout.svelte.js';
   import Popover from './Popover.svelte';

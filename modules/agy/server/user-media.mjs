@@ -323,7 +323,9 @@ export function applyUserMedia(messages = [], {
           });
           setMessageImages(msg, upgraded);
         }
-      } else if (!hasAnyUsableImages(msg)) {
+      } else {
+        // 内存历史里由 runPrompt 存入的图片块只有 base64 data、不含 path 与原文件名；
+        // 只要盘上原图仍存在，优先升级为无损原图路径与原文件名（否则保住原有 base64 兜底）。
         const usable = usableMetaImages(mEntry);
         if (usable.length) setMessageImages(msg, usable);
       }

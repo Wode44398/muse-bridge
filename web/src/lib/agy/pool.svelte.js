@@ -2,6 +2,7 @@
 
 import { t, tr } from '../i18n.js';
 import { agyApi } from './api.js';
+import { recall, remember, forget } from '../lastKnown.js';
 import {
   agyAccLabel,
   agyPlanPill,
@@ -30,6 +31,17 @@ export {
   agyRouteLogSub as routeLogSub,
 };
 
+// 记进快照的只有拉到的数据（lib/lastKnown），忙闲与报错不记。要声明在 $state 之前（下面展开时就要用）
+const SNAP_KEYS = ['accounts', 'usage', 'router', 'upstream', 'localAuthed', 'authMode', 'manualTokenSupported'];
+function pickSnap(o) {
+  if (!o || typeof o !== 'object' || !Array.isArray(o.accounts)) return {};
+  const r = {};
+  for (const k of SNAP_KEYS) if (k in o) r[k] = o[k];
+  return r;
+}
+const SNAP = pickSnap(recall('agyPool'));
+const HAS_SNAP = 'accounts' in SNAP;
+
 export const agyPool = $state({
   ok: false,
   loading: false,
@@ -41,8 +53,18 @@ export const agyPool = $state({
   routerBusy: false,
   upstream: null,
   localAuthed: false,
+  authMode: 'oauth',
+  manualTokenSupported: true,
   err: '',
+  // 上次看到的号池与用量：冷开设置第一帧就是带用量表盘的账号行，网络回来原地换。
+  // snap 表示「现在画的是快照」；loaded 仍只在这次真拉到后才置真（子页据它决定要不要补拉）
+  snap: HAS_SNAP,
+  usageLoaded: HAS_SNAP && !!SNAP.usage,
+  ...SNAP,
 });
+function keep() { remember('agyPool', pickSnap($state.snapshot(agyPool))); }
+// 401 / 403 / 404 = 这个身份没有号池接口：快照作废；断网、超时留着上次的，别让界面退回空白
+const gone = (e) => [401, 403, 404].includes(e?.status);
 
 const setErr = (e, fallback) => {
   agyPool.err = tr(e?.body?.error || e?.message) || fallback || t('操作失败');
@@ -55,6 +77,9 @@ function adoptPool(res) {
   if (res.router) agyPool.router = res.router;
   if (res.upstream) agyPool.upstream = res.upstream;
   if (typeof res.localAuthed === 'boolean') agyPool.localAuthed = res.localAuthed;
+  if (typeof res.authMode === 'string' && res.authMode) agyPool.authMode = res.authMode;
+  if (typeof res.manualTokenSupported === 'boolean') agyPool.manualTokenSupported = res.manualTokenSupported;
+  keep();
 }
 
 export const routerStrategy = () => agyPool.router?.settings?.strategy || 'smart';
@@ -68,27 +93,44 @@ export async function loadAgyPoolUsage(force = false) {
   agyPool.usageBusy = true;
   try {
     const res = await agyApi.poolUsage(force);
-    if (res?.usage && typeof res.usage === 'object') agyPool.usage = res.usage;
+    if (res?.usage && typeof res.usage === 'object') { agyPool.usage = res.usage; keep(); }
   } catch {} finally {
     agyPool.usageBusy = false;
+    agyPool.usageLoaded = true;
   }
 }
 
-export async function loadAgyPool({ usage = true, forceUsage = false } = {}) {
-  agyPool.loading = true;
-  try {
-    const res = await agyApi.pool();
-    adoptPool(res);
-    agyPool.ok = true;
-    agyPool.loaded = true;
-    clearErr();
-    if (usage) loadAgyPoolUsage(forceUsage);
-  } catch (e) {
-    if (!agyPool.loaded) agyPool.ok = false;
-    setErr(e, t('读取号池状态失败'));
-  } finally {
-    agyPool.loading = false;
-  }
+// 同一个读在路上就别再发一份：设置页一挂上就预取（AgySettingsPages 的 warmAgySettings），紧接着点进来页面又拉一次
+let poolInflight = null;
+export function loadAgyPool({ usage = true, forceUsage = false } = {}) {
+  if (poolInflight && !forceUsage) return poolInflight;
+  const p = (async () => {
+    agyPool.loading = true;
+    try {
+      const res = await agyApi.pool();
+      adoptPool(res);
+      agyPool.ok = true;
+      agyPool.loaded = true;
+      agyPool.snap = false;
+      clearErr();
+      if (usage) loadAgyPoolUsage(forceUsage);
+    } catch (e) {
+      if (gone(e)) {
+        forget('agyPool');
+        agyPool.snap = false;
+        agyPool.accounts = [];
+        agyPool.usage = {};
+        agyPool.router = null;
+      }
+      if (!agyPool.loaded) agyPool.ok = false;
+      setErr(e, t('读取号池状态失败'));
+    } finally {
+      agyPool.loading = false;
+    }
+  })();
+  poolInflight = p;
+  p.finally(() => { if (poolInflight === p) poolInflight = null; });
+  return p;
 }
 
 export async function activateAgyAccount(acc) {

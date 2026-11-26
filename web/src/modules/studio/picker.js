@@ -101,3 +101,77 @@ export function paramSource(m) {
 
 /** 新发现的模型（7 天内且本人没用过；后端算 isNew，前端再扣掉本机刚选过的） */
 export const isFresh = (m, seen) => !!m?.isNew && !(seen && seen.has(m.key));
+
+// —— v4 选择器：按厂商分组，两家服务都有的同名模型合成一行（方案 §12.4）——
+// 直连服务的模型 id 不带厂商前缀（Vertex 的 gemini-3-pro-image），厂商按服务的方言推；聚合服务取 id 前缀 / 目录 vendor
+const DIALECT_VENDOR = { vertex: 'google', gemini: 'google', openai: 'openai', elevenlabs: 'elevenlabs', minimax: 'minimax', ark: 'bytedance' };
+/** 模型的厂商键（小写）：目录 vendor → id 前缀 → 服务方言 → 服务本身 */
+export function modelVendor(m, provider) {
+  const v = vendorOf(m) || DIALECT_VENDOR[provider?.dialect] || DIALECT_VENDOR[provider?.preset] || provider?.preset || provider?.dialect || provider?.id || '';
+  return String(v).toLowerCase();
+}
+// 行尾小分段里的服务短名：同一行里撞名了（两个 OpenRouter 账号）就退回服务全名
+const SERVICE_SHORT = { vertex: 'Vertex', gemini: 'Gemini', openrouter: 'OpenRouter', fal: 'fal', replicate: 'Replicate', openai: 'OpenAI', elevenlabs: 'ElevenLabs', minimax: 'MiniMax' };
+export const serviceShort = (p) => SERVICE_SHORT[p?.preset] || SERVICE_SHORT[p?.dialect] || String(p?.name || p?.id || '');
+
+/**
+ * 同名判定用的名字：去掉服务前缀后的 label（小写、空白归一）。
+ *   OpenRouter 的「Google: Nano Banana 2.1」、手填的「Vertex · Nano Banana 2.1」「Nano Banana 2.1 (Gemini API)」都归到「nano banana 2.1」；
+ *   「(free)」这类后缀是另一个模型，不去。
+ */
+const SERVICE_WORD = /(?:google\s+)?vertex(?:\s+ai)?|gemini\s+api|openrouter|fal(?:\.ai)?|replicate/.source;
+const PREFIX_RE = new RegExp('^(?:' + SERVICE_WORD + ')' + /\s*[·:：/|\-–—]\s*/.source, 'i');
+const SUFFIX_RE = new RegExp(/\s*/.source + '(?:[（(](?:' + SERVICE_WORD + ')[)）]|' + /[·|\-–—]\s*/.source + '(?:' + SERVICE_WORD + '))$', 'i');
+/** 显示名：去掉服务前缀 / 后缀和聚合服务的「厂商: 」，保留原大小写（合并行只写一个名字） */
+export function bareLabel(label) {
+  let s = String(label ?? '').trim();
+  s = s.replace(PREFIX_RE, '').replace(SUFFIX_RE, '');
+  // 「厂商: 名字」：冒号前不超过 3 个词才算前缀，免得把名字里本来的冒号当前缀
+  s = s.replace(/^[^:：]{1,32}[:：]\s+/, (m) => (m.trim().split(/\s+/).length <= 3 ? '' : m));
+  return s.trim() || String(label ?? '');
+}
+export const sameNameKey = (label) => bareLabel(label).toLowerCase().replace(/\s+/g, ' ').trim();
+
+/**
+ * v4 选择器的结构：[{ vendor, label, rows: [{ id, label, variants: [{ model, provider, short }], pick, on }] }]
+ *   主列表（q 非空时只留配得上的）+ 当前选中的 shelf 模型；按厂商分组（组序 = 目录里第一次出现的顺序）；
+ *   组内同名（sameNameKey 相同）且来自不同服务的合成一行，variants 按目录顺序；同一服务里重名的不合（那是两个模型）。
+ *   pick = 这一行现在指向哪家：当前选中的那家，否则 prefer[行 id] 记住的那家，否则第一家。
+ */
+export function modelRows(groups, { q = '', current = '', prefer = {} } = {}) {
+  const vendors = [];
+  const byVendor = new Map();
+  for (const g of groups || []) {
+    const { main, shelf } = splitGroup(g);
+    const pname = g.provider?.name || '';
+    const list = [...(q ? main.filter((m) => matches(m, q, pname)) : main), ...shelf.filter((m) => m.key === current)];
+    for (const m of list) {
+      const v = modelVendor(m, g.provider);
+      const vl = vendorName(v) || pname;
+      const vk = vl.toLowerCase();
+      let grp = byVendor.get(vk);
+      if (!grp) { grp = { vendor: v, label: vl, rows: [], names: new Map() }; byVendor.set(vk, grp); vendors.push(grp); }
+      const nk = sameNameKey(m.label || m.id);
+      const row = grp.names.get(nk);
+      const variant = { model: m, provider: g.provider };
+      if (row && !row.variants.some((x) => x.provider?.id === g.provider?.id)) row.variants.push(variant);
+      else {
+        const r = { id: nk + '|' + (row ? m.key : ''), label: bareLabel(m.label || m.id), variants: [variant] };
+        if (!row) grp.names.set(nk, r);
+        grp.rows.push(r);
+      }
+    }
+  }
+  for (const grp of vendors) {
+    delete grp.names;
+    for (const r of grp.rows) {
+      const shorts = r.variants.map((x) => serviceShort(x.provider));
+      r.variants.forEach((x, i) => { x.short = shorts.indexOf(shorts[i]) !== shorts.lastIndexOf(shorts[i]) ? String(x.provider?.name || shorts[i]) : shorts[i]; });
+      const cur = r.variants.findIndex((x) => x.model.key === current);
+      const pref = r.variants.findIndex((x) => x.provider?.id === prefer[r.id]);
+      r.pick = cur >= 0 ? cur : pref >= 0 ? pref : 0;
+      r.on = cur >= 0;
+    }
+  }
+  return vendors;
+}

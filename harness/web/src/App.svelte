@@ -137,11 +137,20 @@
     peek = false;
   });
 
-  // ── 分栏占比：交界处拖拽调宽，双击复位；比例持久化（拖拽与恢复用同一套边界）─────────────────
-  const RATIO_MIN = 0.26;
-  const RATIO_MAX = 0.72;
-  const clampRatio = (r: number) => Math.min(RATIO_MAX, Math.max(RATIO_MIN, r));
-  let paneRatio = $state(clampRatio(Number(localStorage.getItem("harness.paneRatio")) || 0.44));
+  // ── 工作区宽度：交界处拖拽调宽，双击复位 ─────────────────────────────────────────────────
+  // 规则与 bridge 的统一工作区同一套（web/src/lib/dock/sizing.js，改那边要同步改这里）：
+  //   给对话留 medium 300 / 宽屏 360；工作区一列下限 medium 300 / 宽屏 360，两列下限 560；
+  //   「这一行」（去掉侧栏后）≥ 1020 才摆两列。没拖过就用和外壳一样的默认宽度。
+  // 拖出来的宽度存成「占这一行的比例」，一列、两列各记各的（两列默认更宽，拖出来的也不该回灌给一列）。
+  const TWO_COL_MIN = 1020;
+  const chatMin = () => (roomy ? 360 : 300);
+  const dockMin = (two: boolean) => (two ? 560 : roomy ? 360 : 300);
+  const readRatio = (k: string) => {
+    const n = Number(localStorage.getItem(k));
+    return n > 0.1 && n < 0.95 ? n : null;
+  };
+  let paneRatio = $state<number | null>(readRatio("harness.dockRatio"));
+  let paneRatio2 = $state<number | null>(readRatio("harness.dockRatio2"));
   let splitting = $state(false);
   function splitDown(e: PointerEvent) {
     const bar = e.currentTarget as HTMLElement;
@@ -150,37 +159,37 @@
     bar.setPointerCapture(e.pointerId);
     splitting = true;
     const two = dockTwo;
+    const room = Math.max(1, rect.width - railW);
+    const lo = dockMin(two);
+    const hi = Math.max(lo, room - chatMin());
     const move = (ev: PointerEvent) => {
-      const px = Math.max(340, rect.right - ev.clientX);
-      if (two) paneRatio2 = Math.min(0.8, Math.max(0.3, px / rect.width));
-      else paneRatio = clampRatio(px / rect.width);
+      const px = Math.min(hi, Math.max(lo, rect.right - ev.clientX));
+      if (two) paneRatio2 = px / room;
+      else paneRatio = px / room;
     };
     const up = () => {
       splitting = false;
       bar.removeEventListener("pointermove", move);
       bar.removeEventListener("pointerup", up);
       bar.removeEventListener("pointercancel", up);
-      if (two) localStorage.setItem("harness.paneRatio2", String(paneRatio2));
-      else localStorage.setItem("harness.paneRatio", String(paneRatio));
+      bar.removeEventListener("lostpointercapture", up);
+      const r = two ? paneRatio2 : paneRatio;
+      if (r != null) localStorage.setItem(two ? "harness.dockRatio2" : "harness.dockRatio", String(r));
     };
     bar.addEventListener("pointermove", move);
     bar.addEventListener("pointerup", up);
     bar.addEventListener("pointercancel", up);
+    bar.addEventListener("lostpointercapture", up);
   }
   function splitReset() {
     if (dockTwo) {
-      paneRatio2 = RATIO2_DEFAULT;
-      localStorage.removeItem("harness.paneRatio2");
+      paneRatio2 = null;
+      localStorage.removeItem("harness.dockRatio2");
       return;
     }
-    paneRatio = 0.44;
-    localStorage.removeItem("harness.paneRatio");
+    paneRatio = null;
+    localStorage.removeItem("harness.dockRatio");
   }
-  // 工作区摆成两列时另记一份占比（两列默认更宽，拖出来的宽度也不该回灌给一列）。
-  // 两列的下限 680（每列 ≥ 336）、上限给对话留 380；够不够摆两列按「去掉侧栏后还剩多宽」判。
-  const RATIO2_DEFAULT = 0.58;
-  const TWO_COL_MIN = 1100;
-  let paneRatio2 = $state(Math.min(0.8, Math.max(0.3, Number(localStorage.getItem("harness.paneRatio2")) || RATIO2_DEFAULT)));
   let shellW = $state(0);
   let dockTwo = $state(false);
   $effect(() => {
@@ -188,9 +197,16 @@
   });
   const railW = $derived(railShown ? 272 : 0);
   const twoOk = $derived(dockCol && shellW - railW >= TWO_COL_MIN);
-  const dockW = $derived(
-    dockTwo ? `width:clamp(680px, ${paneRatio2 * 100}%, calc(100% - ${railW + 380}px))` : `width:${paneRatio * 100}%`,
-  );
+  // 宽度都按「这一行」（.shell 去掉侧栏）算，并钳住给对话留的下限——窗口变窄 / 侧栏展开时对话不会被挤没
+  const dockW = $derived.by(() => {
+    const row = `(100% - ${railW}px)`;
+    const two = dockTwo;
+    const r = two ? paneRatio2 : paneRatio;
+    const want = r != null ? `calc(${row} * ${r.toFixed(4)})`
+      : two ? `clamp(640px, calc(${row} * .62), 1180px)`
+      : roomy ? `clamp(400px, calc(${row} * .44), 760px)` : `clamp(320px, calc(${row} * .52), 560px)`;
+    return `width:clamp(${dockMin(two)}px, ${want}, calc(${row} - ${chatMin()}px))`;
+  });
 
   // ── 抽屉：一个显式的位置状态机（x = 抽屉的 translateX，-宽 = 收起，0 = 摊开）──────────────
   // 左缘右滑跟手拉出、抽屉里左滑跟手收回；松手（或点遮罩 / 返回键）都从【当前位置】用弹簧走到终点，
@@ -816,6 +832,41 @@
     left: 2px;
     width: 2px;
     background: var(--accent);
+  }
+  /* 触屏（折叠屏展开 / 平板）：6px 手指按不中、又没有悬停——热区放宽到 24px（照样骑缝），
+     缝的正中常亮一枚竖把手，按住时变长变实（与 bridge 统一工作区的左缘把手同一个样子） */
+  @media (pointer: coarse) {
+    .splitter {
+      width: 24px;
+      margin: 0 -12px;
+    }
+    .splitter::before {
+      content: "";
+      position: absolute;
+      z-index: 1;
+      left: 50%;
+      top: 50%;
+      width: 4px;
+      height: 40px;
+      margin: -20px 0 0 -2px;
+      border-radius: 2px;
+      background: color-mix(in srgb, var(--text3) 45%, transparent);
+      transition:
+        height var(--t-fast) var(--ease),
+        margin var(--t-fast) var(--ease),
+        background-color var(--t-fast) var(--ease);
+    }
+    .splitter::after {
+      left: 11.5px;
+    }
+    .splitting .splitter::after {
+      left: 11px;
+    }
+    .splitting .splitter::before {
+      height: 56px;
+      margin-top: -28px;
+      background: var(--accent);
+    }
   }
   .pv-col {
     position: relative;

@@ -4,6 +4,7 @@
 
 import { agy, newAgyChat, refreshAgySessions, refreshHiddenSessions } from './store.svelte.js';
 import { agyApi } from './api.js';
+import { removeCachedAgySession } from '../cache.js';
 import { showToast } from '../toast.svelte.js';
 import { t, tr } from '../i18n.js';
 import { busOn } from '../bus.js';
@@ -32,6 +33,7 @@ export async function setAgyFavorite(sessionId, favorite) {
 function dropLocal(sessionId) {
   agy.sessions = agy.sessions.filter((s) => s.sessionId !== sessionId);
   agy.hiddenSessions = agy.hiddenSessions.filter((s) => s.sessionId !== sessionId);
+  removeCachedAgySession(sessionId);
 }
 
 export async function purgeAgySession(sessionId) {

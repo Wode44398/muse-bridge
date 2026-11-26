@@ -1,6 +1,8 @@
-// 服务浮层两个组件的状态机——跑的是组件里真的那段 <script>：
-//   HubService.svelte：识别 / 保存互斥、去向片与保存、连接改动后的识别、置顶
+// 服务浮层几个组件的状态机——跑的是组件里真的那段 <script>：
+//   HubService.svelte：识别 / 保存互斥、去向片与保存、连接改动后的识别、置顶；ChatGPT 订阅的第一步与 chatgpt/create
 //   HsConn.svelte：    「重新识别」先存连接改动、保存连接时报出识别要用的那一段变没变、共享给成员、Key 框的粘贴 / 输入清洗
+//   HsChatgptLogin.svelte：登录（start → 打开登录页 → 轮询 / 粘贴回调地址 → done）、取消、卸载时收掉没完成的登录
+//   HsChatgptConn.svelte： 账号启停 / 移除当场生效（update 只带 lines、不带 key）、编辑态先存再识别、重新登录成功后刷新
 // 做法同 lib/dialogs.test.js：把 <script> 原样抠出来包成一个工厂函数，用 svelte 编译器编成客户端模块；
 // 子组件、总览状态、接口、对话框换成桩，HsKit / brands / motion / i18n 用真的。不画界面、不起浏览器、不碰数据根。
 // 跑法：node --test web/src/components/modelhub/HubService.logic.test.js
@@ -31,11 +33,16 @@ const dir = mkdtempSync(join(tmpdir(), 'hubservice-test-'));
 after(() => { try { rmSync(dir, { recursive: true, force: true }); } catch {} });   // 跑完把编出来的临时模块收走
 writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
 writeFileSync(join(dir, 'comp.js'), 'export default {};');
+// 余额不在这几份测试的范围里（总览的副行在 HubHome.test.js 测，取数在服务端 balance.test.mjs）
+writeFileSync(join(dir, 'bal.js'), 'export const bal = {}; export const loadBalance = async () => {}; export const lineBalance = () => null; '
+  + 'export const itemMain = () => ""; export const itemParts = () => ""; export const isLow = () => false;');
 writeFileSync(join(dir, 'misc.js'), [
   'export const pushBackLayer = () => () => {};',
   'export const uiConfirm = (...a) => globalThis.__hs.confirm(...a);',
   'export const activeRequest = () => null;',
   'export const showToast = (...a) => { globalThis.__hs.toasts.push(a); };',
+  'export const isNativeDesktop = () => false;',
+  'export const desktopOpenExternal = () => {};',
 ].join('\n'));
 
 const SV = {
@@ -50,7 +57,10 @@ const MAP = {
   ...SV,
   './HsKit.js': href(here, 'HsKit.js'),
   './mediaAdv.js': href(here, 'mediaAdv.js'),
+  './chatgptKit.js': href(here, 'chatgptKit.js'),
+  '../../lib/nativeDesktop.js': href(dir, 'misc.js'),
   '../../lib/modelHub.svelte.js': href(dir, 'hub.svelte.js'),
+  '../../lib/modelHubBalance.svelte.js': href(dir, 'bal.js'),
   '../../lib/claudeProviders.svelte.js': href(dir, 'cp.svelte.js'),
   '../../../../src/model-knowledge/brands.mjs': href(webRoot, '..', 'src', 'model-knowledge', 'brands.mjs'),
   '../../lib/nav.js': href(dir, 'misc.js'),
@@ -133,10 +143,17 @@ const M = await build('hs.svelte.js', componentModule('HubService.svelte', [
   'dests', 'changes', 'canSave', 'barNote', 'connOpen', 'connMoved', 'notes', 'listErr', 'listRetry', 'detErr', 'saveErr',
   'detect', 'redetectAny', 'save', 'onConnSaved', 'pick', 'toggleDest', 'pickKind', 'onAll',
   'counts', 'manualKinds', 'manualOk', 'addManual', 'delManual', 'openAdv', 'advFor', 'advModel',
+  'via', 'cg', 'pickChatgpt', 'useChatgpt', 'title', 'summary', 'logo', 'connPanel', 'canConn', 'back', 'guardedClose',
 ], ['connRef', 'sheet']));
 const Conn = await build('conn.svelte.js', componentModule('HsConn.svelte', [
   'ed', 'edDirty', 'dirty', 'err', 'busy', 'save', 'redetect', 'revert', 'onKeyPaste', 'onKeyInput',
 ], ['svc', 'mode', 'locked', 'detecting']));
+const CgLogin = await build('cglogin.svelte.js', componentModule('HsChatgptLogin.svelte', [
+  'login', 'phase', 'errText', 'busy', 'err', 'paste', 'pasteErr', 'start', 'poll', 'finish', 'cancel', 'ack',
+], ['paste']));
+const CgConn = await build('cgconn.svelte.js', componentModule('HsChatgptConn.svelte', [
+  'ed', 'edDirty', 'dirty', 'err', 'busy', 'accounts', 'loginFor', 'save', 'redetect', 'toggleAccount', 'removeAccount', 'openLogin', 'loggedIn', 'noteOf',
+], ['svc']));
 const { flushSync, tick } = await import(SV.svelte);
 const settle = async () => { flushSync(); await tick(); await new Promise((r) => setImmediate(r)); flushSync(); };
 const defer = () => { let res, rej; const promise = new Promise((a, b) => { res = a; rej = b; }); return { promise, res, rej }; };
@@ -693,4 +710,255 @@ test('手动添加的：行上标「手动」能删——草稿只删本地；�
     m.api.openAdv(A.id);
     assert.equal(m.api.advFor, '');
   } finally { m.stop(); }
+});
+
+// ———————————————————— ChatGPT 订阅 ————————————————————
+
+const GPT = { id: 'gpt-5.1', label: 'GPT-5.1', kind: 'text', vendor: 'openai', contextWindow: 400000, source: 'api' };
+const GPTC = { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex', kind: 'text', vendor: 'openai', contextWindow: 400000, source: 'api' };
+const LOGIN = (o = {}) => ({
+  id: 'lg-1', mode: 'new', status: 'pending', authUrl: 'https://auth.openai.com/api/accounts/authorize?x=1',
+  redirectUri: 'http://127.0.0.1:1455/auth/callback', expiresAt: Date.now() + 10 * 60000, ...o,
+});
+const CG_SID = 'h-cg000001';
+const cgService = (accounts, over = {}) => ({
+  id: CG_SID, name: 'ChatGPT', kind: 'chatgpt', baseUrl: 'https://api.openai.com/v1', host: 'api.openai.com', brand: null,
+  enabled: true, members: false, useProxy: true, strategy: 'failover', native: '', media: null,
+  lines: accounts.map((a) => ({ id: a.lineId, label: a.label, baseUrl: '', enabled: a.enabled, hasKey: false, keyTail: '', state: null })),
+  chatgpt: { usageUrl: 'https://chatgpt.com/settings/usage', accounts },
+  models: [], counts: {}, agents: [], detectedAt: Date.now(), catalogSize: 0, published: true, ...over,
+});
+const ACC = (o = {}) => ({ lineId: 'l1', email: 'a@x.com', label: 'a@x.com', enabled: true, status: 'ok', statusText: '', expiresAt: 0, refreshedAt: 0, ...o });
+
+test('ChatGPT 订阅（添加）：第一步换成登录、能退回；登录成功进勾选，去向只有文本那几个，保存走 chatgpt/create', async () => {
+  const calls = fresh();
+  Hub.hub.codexHub = true;
+  HS.ask = async (p, b) => { calls.push(['ask', p, b]); return {}; };
+  const { api, stop } = M.mount({ sheet: { type: 'service', add: true }, onClose() {} });
+  try {
+    api.pickChatgpt();
+    assert.equal(api.via, 'chatgpt');
+    assert.equal(api.title, 'ChatGPT 订阅');
+    assert.equal(api.logo, 'openai');
+    // Esc / 系统返回：先退回快捷选择，不关浮层
+    api.back();
+    assert.equal(api.via, '');
+    api.pickChatgpt();
+    // 没完成的登录交不进来
+    api.useChatgpt(LOGIN());
+    assert.equal(api.phase, 'first');
+    api.useChatgpt(LOGIN({ status: 'done', account: { email: 'a@x.com', planOk: true }, models: [GPT, GPTC] }));
+    await settle();
+    assert.equal(api.phase, 'models');
+    assert.deepEqual(api.rows.map((r) => r.id), [GPT.id, GPTC.id], '目录就是登录时拉到的');
+    assert.equal(api.connPanel, false, '草稿没有连接面板（没有地址、Key 可改）');
+    assert.equal(api.canConn, true, '操作条照常');
+    assert.equal(api.manualOk, false, 'create 不收目录：草稿不能手动加');
+    assert.match(api.summary, /a@x\.com · ChatGPT 订阅/);
+    api.pick([GPT.id], true);
+    assert.deepEqual(api.dests.map((x) => x.id), ['claude', 'dimensio', 'codex'], '没有 Media Studio');
+    api.toggleDest('claude'); api.toggleDest('codex');
+    HS.post = async (p, b) => {
+      calls.push(['post', p, b]);
+      const svc = cgService([ACC()], { models: [{ id: GPT.id, kind: 'text', agents: ['claude', 'codex'] }] });
+      Hub.hub.services = [svc];
+      return { service: svc, warnings: [] };
+    };
+    await api.save(); await settle();
+    const [, p, body] = calls.find((c) => c[0] === 'post');
+    assert.equal(p, 'chatgpt/create');
+    assert.deepEqual(body, { loginId: 'lg-1', assign: [{ id: GPT.id, agents: ['claude', 'codex'] }] }, '不带地址、Key、目录');
+    assert.equal(api.sid, CG_SID, '就地变成已有服务');
+    assert.equal(api.cg, null);
+    assert.equal(api.connPanel, true, '建成之后有账号面板');
+    assert.match(api.summary, /^a@x\.com · ChatGPT 订阅$/);
+  } finally { stop(); Hub.hub.codexHub = false; }
+});
+
+test('ChatGPT 订阅（添加）：登录好了没保存就关掉——确认后把那次登录取消掉', async () => {
+  const calls = fresh();
+  HS.ask = async (p, b) => { calls.push(['ask', p, b]); return {}; };
+  let asked = '';
+  HS.confirm = async (msg) => { asked = msg; return true; };
+  const { api, stop } = M.mount({ sheet: { type: 'service', add: true }, onClose() {} });
+  try {
+    api.pickChatgpt();
+    api.useChatgpt(LOGIN({ status: 'done', account: { email: 'a@x.com', planOk: true }, models: [GPT] }));
+    await settle();
+    await api.guardedClose();
+    assert.match(asked, /放弃这个服务/);
+    assert.deepEqual(asks(calls, 'chatgpt/login/cancel').map((c) => c[2]), [{ loginId: 'lg-1' }]);
+  } finally { stop(); }
+});
+
+// —— 登录面板 ——
+function fakeWindow() {
+  const opened = [];
+  globalThis.window.open = (url, target, feat) => {
+    const w = { url, target, feat, closed: false, location: { href: url }, document: { body: {} }, close() { this.closed = true; } };
+    opened.push(w);
+    return w;
+  };
+  return opened;
+}
+function mountLogin(P) {
+  const calls = fresh();
+  const done = [];
+  let cancelled = 0;
+  const m = CgLogin.mount({ ondone: (l) => done.push(l), oncancel: () => { cancelled++; }, ...P });
+  return { ...m, calls, done, cancelled: () => cancelled };
+}
+
+test('登录面板：start → 占位标签换成登录页 → 轮询到 done；新建要点「知道了」才交出去，只交一次', async () => {
+  const opened = fakeWindow();
+  const { api, stop, calls, done } = mountLogin({ mode: 'new' });
+  try {
+    HS.post = async (p, b) => { calls.push(['post', p, b]); return { login: LOGIN() }; };
+    HS.ask = async (p, b) => { calls.push(['ask', p, b]); return { login: LOGIN({ status: 'exchanging' }) }; };
+    await api.start(); await settle();
+    assert.deepEqual(calls[0], ['post', 'chatgpt/login/start', {}], '新建：两个 id 都不给');
+    assert.equal(opened.length, 1, '点击那一下先开占位标签');
+    assert.equal(opened[0].url, 'about:blank');
+    assert.equal(opened[0].location.href, LOGIN().authUrl, '拿到 authUrl 后占位标签跳过去');
+    assert.equal(api.phase, 'pending');
+    await api.poll('lg-1'); await settle();
+    assert.equal(api.phase, 'exchanging');
+    assert.deepEqual(asks(calls, 'chatgpt/login/status')[0][2], { loginId: 'lg-1' });
+    HS.ask = async (p, b) => { calls.push(['ask', p, b]); return { login: LOGIN({ status: 'done', account: { email: 'a@x.com', planOk: true }, models: [GPT] }) }; };
+    await api.poll('lg-1'); await settle();
+    assert.equal(api.phase, 'done');
+    assert.equal(done.length, 0, '先给人看「你正在使用 ChatGPT 套餐额度」');
+    api.ack(); api.ack();
+    assert.equal(done.length, 1);
+    assert.equal(done[0].models.length, 1);
+  } finally { stop(); }
+  assert.equal(asks(calls, 'chatgpt/login/cancel').length, 0, '交出去了的登录卸载时不取消');
+});
+
+test('登录面板：重新登录带 serviceId + lineId，done 直接交出去；粘贴地址先粗检再 finish；errorCode 说人话', async () => {
+  fakeWindow();
+  const { api, stop, calls, done } = mountLogin({ mode: 'relogin', serviceId: CG_SID, lineId: 'l1', email: 'a@x.com', compact: true });
+  try {
+    HS.post = async (p, b) => { calls.push(['post', p, b]); return { login: LOGIN({ mode: 'relogin', serviceId: CG_SID, lineId: 'l1' }) }; };
+    await api.start(); await settle();
+    assert.deepEqual(calls[0][2], { serviceId: CG_SID, lineId: 'l1' });
+    // 粘错了：不发请求
+    HS.ask = async (p, b) => { calls.push(['ask', p, b]); return { login: LOGIN({ status: 'error', errorCode: 'denied', error: 'access_denied' }) }; };
+    api.$set.paste('code=abc');
+    await api.finish();
+    assert.ok(api.pasteErr);
+    assert.equal(asks(calls, 'chatgpt/login/finish').length, 0);
+    api.$set.paste(' http://127.0.0.1:1455/auth/callback?error=access_denied&state=s ');
+    await api.finish(); await settle();
+    assert.deepEqual(asks(calls, 'chatgpt/login/finish')[0][2], { loginId: 'lg-1', url: 'http://127.0.0.1:1455/auth/callback?error=access_denied&state=s' });
+    assert.equal(api.phase, 'error');
+    assert.equal(api.errText, '你在登录页拒绝了授权');
+    // 再来一次：done 直接交出去（带更新后的服务视图）
+    HS.post = async (p, b) => { calls.push(['post', p, b]); return { login: LOGIN({ id: 'lg-2', mode: 'relogin' }) }; };
+    await api.start(); await settle();
+    HS.ask = async (p, b) => { calls.push(['ask', p, b]); return { login: LOGIN({ id: 'lg-2', mode: 'relogin', status: 'done', account: { email: 'a@x.com', planOk: true }, service: cgService([ACC()]) }) }; };
+    await api.poll('lg-2'); await settle();
+    assert.equal(done.length, 1);
+    assert.equal(done[0].service.id, CG_SID);
+  } finally { stop(); }
+});
+
+test('登录面板：过期了就不再等；取消 / 卸载时把没完成的登录收掉', async () => {
+  fakeWindow();
+  let m = mountLogin({ mode: 'add', serviceId: CG_SID });
+  try {
+    HS.post = async (p, b) => { m.calls.push(['post', p, b]); return { login: LOGIN({ expiresAt: Date.now() - 1 }) }; };
+    HS.ask = async (p, b) => { m.calls.push(['ask', p, b]); return {}; };
+    await m.api.start(); await settle();
+    assert.deepEqual(m.calls[0][2], { serviceId: CG_SID }, '加账号：只给 serviceId');
+    assert.equal(m.api.phase, 'expired');
+    assert.match(m.api.errText, /登录已过期/);
+    m.api.cancel(); await settle();
+    assert.equal(m.api.phase, 'idle');
+    assert.equal(m.cancelled(), 1, '交给外面收起面板');
+    assert.equal(asks(m.calls, 'chatgpt/login/cancel').length, 0, '已经过期的不用再取消');
+  } finally { m.stop(); }
+  // 等着的时候整个卸载（关浮层、退回快捷选择）
+  m = mountLogin({ mode: 'new' });
+  HS.post = async (p, b) => { m.calls.push(['post', p, b]); return { login: LOGIN({ id: 'lg-9' }) }; };
+  HS.ask = async (p, b) => { m.calls.push(['ask', p, b]); return {}; };
+  await m.api.start(); await settle();
+  assert.equal(m.api.phase, 'pending');
+  m.stop(); await settle();
+  assert.deepEqual(asks(m.calls, 'chatgpt/login/cancel').map((c) => c[2]), [{ loginId: 'lg-9' }]);
+});
+
+// —— 账号面板 ——
+async function openCgConn(calls, accounts, over = {}) {
+  HS.post = async (p, b) => { calls.push(['post', p, b]); return { service: cgService(accounts) }; };
+  const m = CgConn.mount({
+    svc: cgService(accounts), narrow: false,
+    ondetect: () => { calls.push(['detect']); },
+    onsaved: (svc, warnings, opts) => { calls.push(['saved', svc?.id || null, opts]); },
+    ...over,
+  });
+  await settle();
+  return m;
+}
+
+test('账号面板：启停、移除当场生效——update 只带 lines（不带 key）；移除先确认；只剩一个不给移除', async () => {
+  const calls = fresh();
+  const two = [ACC(), ACC({ lineId: 'l2', email: 'b@x.com', label: 'b@x.com', status: 'relogin', statusText: '' })];
+  const { api, stop } = await openCgConn(calls, two);
+  try {
+    assert.equal(api.accounts.length, 2);
+    assert.equal(api.noteOf(api.accounts[1]), '需要重新登录');
+    await api.toggleAccount(api.accounts[0], false); await settle();
+    const [, p, body] = calls.find((c) => c[0] === 'post');
+    assert.equal(p, 'update');
+    assert.deepEqual(body, { id: CG_SID, patch: { lines: [
+      { id: 'l1', label: 'a@x.com', baseUrl: '', enabled: false }, { id: 'l2', label: 'b@x.com', baseUrl: '', enabled: true },
+    ] } });
+    assert.deepEqual(calls.find((c) => c[0] === 'saved')[2], { quiet: true });
+    // 移除：取消了就不发
+    calls.length = 0;
+    let asked = null;
+    HS.confirm = async (msg, o) => { asked = [msg, o]; return false; };
+    await api.removeAccount(api.accounts[1]);
+    assert.match(asked[0], /b@x\.com/);
+    assert.equal(asked[1].danger, true);
+    assert.equal(calls.length, 0);
+    HS.confirm = async () => true;
+    await api.removeAccount(api.accounts[1]); await settle();
+    assert.deepEqual(calls.find((c) => c[0] === 'post')[2].patch.lines.map((l) => l.id), ['l1']);
+    assert.ok(HS.toasts.some((x) => /已移除账号/.test(x[0])));
+  } finally { stop(); }
+  const calls2 = fresh();
+  const one = await openCgConn(calls2, [ACC()]);
+  try {
+    HS.confirm = async () => { calls2.push(['confirm']); return true; };
+    await one.api.removeAccount(one.api.accounts[0]);
+    assert.equal(calls2.length, 0, '只剩一个：不问也不发');
+  } finally { one.stop(); }
+});
+
+test('账号面板：改了名字再「重新识别」——先存（patch 不带 lines），再识别；重新登录成功后刷新服务、重拉总览', async () => {
+  const calls = fresh();
+  let reloads = 0;
+  HS.loadHub = async () => { reloads++; };
+  const { api, stop } = await openCgConn(calls, [ACC()]);
+  try {
+    assert.equal(api.edDirty, false);
+    api.ed.name = '我的 ChatGPT';
+    await settle();
+    assert.equal(api.dirty, true);
+    assert.equal(await api.redetect(), true);
+    assert.deepEqual(calls.map((c) => c[0]), ['post', 'saved', 'detect']);
+    assert.deepEqual(calls[0][2], { id: CG_SID, patch: { name: '我的 ChatGPT', useProxy: true, enabled: true, strategy: 'failover' } });
+    assert.deepEqual(calls[1][2], { moved: '' });
+    // 重新登录
+    calls.length = 0;
+    api.openLogin('l1');
+    assert.equal(api.loginFor, 'l1');
+    api.loggedIn({ status: 'done', account: { email: 'a@x.com' }, service: cgService([ACC()]) });
+    assert.equal(api.loginFor, '');
+    assert.deepEqual(calls, [['saved', CG_SID, { quiet: true }]]);
+    assert.equal(reloads, 1);
+    assert.ok(HS.toasts.some((x) => /重新登录/.test(x[0])));
+  } finally { stop(); }
 });

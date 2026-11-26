@@ -43,6 +43,9 @@ const STUBS = {
     };
     export const api = { async get(p) { return hit('GET', p); }, async post(p, b) { return hit('POST', p, b); } };`,
   'lib/bus.js': `export const busOn = () => () => {};`,
+  // 上次数据快照（lib/lastKnown）：记下写了什么、作废了什么，不碰 localStorage
+  'lib/lastKnown.js': `export const kept = new Map(); export const recall = () => undefined;
+    export const remember = (k, v) => { kept.set(k, JSON.parse(JSON.stringify(v))); }; export const forget = (k) => { kept.delete(k); };`,
   'lib/state.svelte.js': `export const me = { kind: 'admin' };`,
   'lib/i18n.js': `const fill = (s, v) => String(s).replace(/\\{(\\w+)\\}/g, (m, k) => (v && k in v ? v[k] : m));
     export const t = (s, v) => fill(s, v); export const tr = (s) => (s == null ? '' : String(s));
@@ -64,6 +67,7 @@ globalThis.localStorage = { getItem: () => null };
 globalThis.location = { search: '' };
 const m = await import(pathToFileURL(join(dir, 'modules', 'studio', 'settings.svelte.js')).href);
 const stub = await import(pathToFileURL(join(dir, 'lib', 'api.js')).href);
+const lk = await import(pathToFileURL(join(dir, 'lib', 'lastKnown.js')).href);
 const posts = (path) => stub.calls.filter((c) => c.method === 'POST' && c.path === path);
 
 // 服务端 GET /api/studio/settings 的形状（studio-backend 定案）：管理员带 host，成员只有 mine
@@ -237,4 +241,25 @@ test('⑥ 注册表里每句界面文案在英文字典里都有', async () => {
   for (const g of reg.STUDIO_SETTING_GROUPS) { want(g.label); want(g.foot); }
   for (const s of reg.STUDIO_SETTINGS) { want(s.label); want(s.desc); for (const o of s.optionLabels || []) want(o); }
   assert.deepEqual(missing, []);
+});
+test('⑧ 快照：目录只记设置页要的几项（不带参数表）；设置照原样记；入口没了（403）作废', async () => {
+  stub.routes['GET /api/studio/catalog'] = { ok: true, kinds: { image: { defaults: { provider: 'p1', model: 'm1' }, groups: [
+    { provider: { id: 'p1', name: 'P1', dialect: 'vertex' }, models: [{ key: 'p1/m1', id: 'm1', label: 'M One', kind: 'image', params: [{ key: 'x' }] }], shelf: [{ id: 's1', label: 'S', params: [] }] },
+  ] } } };
+  await m.loadCatalog(true);
+  const c = lk.kept.get('studio.catalog');
+  assert.deepEqual(c.image.groups[0].models, [{ key: 'p1/m1', id: 'm1', label: 'M One', kind: 'image' }]);
+  assert.deepEqual(c.image.groups[0].shelf, [{ id: 's1', label: 'S' }]);
+  assert.deepEqual(c.image.defaults, { provider: 'p1', model: 'm1' });
+  assert.equal(m.resolvePick('image', { provider: 'p1', model: 'm1' }).label, 'M One');
+
+  stub.routes['GET /api/studio/settings'] = adminSettings();
+  await m.loadSettings();
+  assert.equal(lk.kept.get('studio.settings').canEditHost, true);
+  assert.equal(m.ss.loaded, true);
+
+  stub.routes['GET /api/studio/catalog'] = () => { const e = new Error('no'); e.status = 403; throw e; };
+  await m.loadCatalog(true);
+  assert.equal(lk.kept.has('studio.catalog'), false);
+  assert.deepEqual(m.cat.kinds, {});
 });

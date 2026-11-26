@@ -24,6 +24,8 @@ export function attDescriptor(a, sid = session.id) {
   if (a.file) return { ...base, origin: 'upload', file: a.file };
   if (a.rel) return { ...base, origin: 'cloud', rel: a.rel };
   if (isImg && a.url) return { ...base, origin: 'url', url: a.url, thumbUrl: a.thumb || null };
+  // 历史里的本机零拷贝引用只剩文件名：服务端按本会话的附件清单找回原文件（client-atts.mjs attachedPathOf）
+  if (a.lfile && sid) return { ...base, origin: 'claude', id: sid, path: 'bridge-att:' + a.lfile };
   // 桌面壳零拷贝附件（本机绝对路径，没进 uploads）：借会话的产物通道取（服务端照常鉴权）
   if (a.path && sid && a.kind !== 'folder') return { ...base, origin: 'claude', id: sid, path: a.path };
   return null;

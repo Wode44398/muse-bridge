@@ -47,7 +47,7 @@ import { installCoreResolver } from './core-resolve.mjs';
 export const MODULE_CATALOG = Object.freeze([
   // Media Studio（2026-11-04 接替 Vertex 扩展；Gemini 对话同日下线）：图像 / 视频 / 配音 / 音乐与给 Claude 的媒体工具。工具型页面，不能对话（agents.mjs tool:true）。
   { id: 'studio', label: 'Media Studio', agents: ['studio'] },
-  { id: 'codex', label: 'ChatGPT · Codex', agents: ['codex'] },
+  { id: 'codex', label: 'Codex', agents: ['codex'] },
   { id: 'agy', label: 'Antigravity', agents: ['agy'] },
   { id: 'dimensio', label: 'dimensio', agents: ['dimensio'] },
 ]);

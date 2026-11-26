@@ -22,6 +22,7 @@ export const sentAttachments = (list) => (list || []).map((a) => {
     ...(a.quoteId ? { quoteId: a.quoteId } : {}),
     ...(a.local ? { local: true } : {}),
     ...(a.device ? { device: a.device } : {}),   // 引用电脑上的文件夹：气泡卡写「在哪台电脑上」
+    ...(a.vurl ? { vurl: a.vurl } : {}),   // 视频的本地 blob：直播气泡用它定格首帧当封面（零网络）；落缓存前去掉
   };
 });
 
@@ -32,11 +33,13 @@ const isBlobUrl = (u) => typeof u === 'string' && u.startsWith('blob:');
 // 被系统回收后再打开会话，缓存里的图全是死链——破图，且之后的合并认为「没变」永远修不好。
 function persistable(list) {
   return (list || []).map((m) => {
-    if (!m || m.role !== 'user' || !(m.attachments || []).some((a) => isBlobUrl(a?.url))) return m;
+    if (!m || m.role !== 'user' || !(m.attachments || []).some((a) => isBlobUrl(a?.url) || a?.vurl)) return m;
     return {
       ...m,
-      attachments: m.attachments.map((a) => {
-        if (!isBlobUrl(a?.url)) return a;
+      attachments: m.attachments.map((x) => {
+        if (!x || (!isBlobUrl(x.url) && !x.vurl)) return x;
+        const { vurl, ...a } = x;   // 视频 blob 不落缓存：封面回落服务端抽帧（attVideoCover）
+        if (!isBlobUrl(a.url)) return a;
         return a.file ? { ...a, url: uploadRawUrl(a.file), thumb: uploadRawUrl(a.file, 'preview') } : { ...a, url: null };
       }),
     };
@@ -70,6 +73,7 @@ export function revokeMessageBlobUrls(list) {
       if (typeof a?.url === 'string' && a.url.startsWith('blob:')) {
         try { URL.revokeObjectURL(a.url); } catch {}
       }
+      if (isBlobUrl(a?.vurl)) { try { URL.revokeObjectURL(a.vurl); } catch {} }
     }
   }
 }
@@ -102,7 +106,7 @@ export function toUiAttachments(list) {
     if (a.kind === 'chat') return { name, kind: 'chat', url: null, quoteId: a.quoteId || null };   // 引用对话（sessions.mjs 按存盘名认出）
     if (a.kind === 'folder') return { name, kind: 'folder', url: null, ...(a.device ? { device: a.device } : {}) };   // 电脑上的文件夹（只引用没上传）
     const isImg = IMG_EXT.includes((name.split('.').pop() || '').toLowerCase());
-    if (!isImg) return { name, kind: 'file', url: null, ...(a.file ? { file: a.file } : {}), ...(a.rel ? { rel: a.rel } : {}) };
+    if (!isImg) return { name, kind: 'file', url: null, ...(a.file ? { file: a.file } : {}), ...(a.rel ? { rel: a.rel } : {}), ...(a.lfile ? { lfile: a.lfile } : {}) };
     const src = a.rel ? wsFileUrl : (a.file ? uploadRawUrl : null);
     const key = a.rel || a.file;
     return {
@@ -113,6 +117,26 @@ export function toUiAttachments(list) {
       ...(a.file ? { file: a.file } : {}), ...(a.rel ? { rel: a.rel } : {}),
     };
   });
+}
+
+// —— 用户消息里视频附件的封面：依次可试的来源（前一个加载失败就换下一个，全挂了气泡回落文件卡）——
+//   ① 直播刚发出的那条：输入栏留下的本地 blob（vurl），<video> 定格首帧，零网络；
+//   ② 服务端抽帧（ffmpeg，1280 档 webp）：上传的走 /api/upload/raw，工作空间里的走 /api/file，
+//      桌面壳零拷贝引用的本机文件走 /api/claude/artifact（直播那条有本机路径；历史只剩文件名 lfile，
+//      用 bridge-att:<名> 让服务端在本会话的附件清单里找回原路径）。
+// 浏览器解不了的编码（HEVC 之类）①会失败，②照样出得来。
+export const VIDEO_EXT_RE = /\.(mp4|webm|mov|m4v|mkv|avi|3gp)$/i;
+export const ATT_REF_PREFIX = 'bridge-att:';
+export function attVideoCover(a, sid) {
+  if (!a || a.kind === 'image' || a.kind === 'folder' || a.kind === 'chat' || a.device) return null;
+  if (!VIDEO_EXT_RE.test(a.name || a.file || a.lfile || a.path || '')) return null;
+  const out = [];
+  if (isBlobUrl(a.vurl)) out.push({ video: a.vurl + '#t=0.1' });
+  if (a.file) out.push({ img: uploadRawUrl(a.file, 'preview') });
+  else if (a.rel) out.push({ img: wsFileUrl(a.rel, 'preview') });
+  else if (sid && a.lfile) out.push({ img: claudeArtifactUrl(sid, ATT_REF_PREFIX + a.lfile) + '&thumb=preview' });
+  else if (sid && a.path) out.push({ img: claudeArtifactUrl(sid, a.path) + '&thumb=preview' });
+  return out.length ? out : null;
 }
 
 // —— 助手交付的产物附件（done 事件 / 历史重建共用）：补 kind + 预览/下载 URL ——

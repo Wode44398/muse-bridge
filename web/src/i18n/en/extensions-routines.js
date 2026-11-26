@@ -390,7 +390,7 @@ export default {
   '功能扩展': 'Modules',
   '技能 · 连接器 · 插件 · 功能扩展': 'Skills · Connectors · Plugins · Modules',
   'Gemini 分页与媒体生成（图像 / 视频 / 语音 / 音乐），以及 Claude 的媒体工具': 'The Gemini page and media generation (image / video / speech / music), plus Claude’s media tools',
-  'ChatGPT · Codex 分页（本机常驻 Codex，含 Codex 程序）': 'The ChatGPT · Codex page (resident local Codex; includes the Codex binaries)',
+  'Codex 分页（本机常驻 Codex，含 Codex 程序）': 'The Codex page (resident local Codex; includes the Codex binaries)',
   'dimensio 分页（独立的多模型 agent 底座）': 'The dimensio page (a standalone multi-model agent harness)',
   '重启后安装 {version}': 'Installs {version} after restart',
   '重启后卸载': 'Uninstalls after restart',

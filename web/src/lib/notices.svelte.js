@@ -121,7 +121,7 @@ export const noticesLiveFor = (agent) => live && liveAgents.has(agent);
 // —— 别的分页的会话（notice 带 agent）——
 // 它们的会话 id 和 Claude 的不是一个命名空间：「人是不是正看着它」「点开去哪一页」由那一页自己登记的钩子答。
 // 那一页的代码是懒加载的，没加载时 = 没在看；点开时由 agentUi 把页面带过去。
-const AGENT_LABEL = { agy: 'Antigravity' };
+const AGENT_LABEL = { agy: 'Antigravity', codex: 'Codex' };
 const agentHooks = new Map();          // agent -> { watching(sid) }
 export function registerNoticeAgent(agent, hooks) { if (agent && hooks) agentHooks.set(agent, hooks); }
 const sidAgent = new Map();            // 会话 id -> agent（只记非 Claude 的；原生通知点进来只给会话 id，靠它认回是哪一页）
@@ -230,7 +230,7 @@ export async function openBanner(b) {
 export async function openNoticeTarget(sid, sub, agent = null) {
   try {
     const resolvedAgent = sid ? (agent == null ? await agentOfSession(sid) : agent) : '';
-    const targetPage = resolvedAgent === 'agy' ? 'agy' : 'claude';
+    const targetPage = resolvedAgent === 'agy' ? 'agy' : resolvedAgent === 'codex' ? 'chatgpt' : 'claude';
     // 独立分页窗口里点到其它分页的通知横幅：经桌面壳路由到对应分页窗口或主窗，不把当前独立窗跳歪
     if (isPageWindow() && WINDOW_PAGE !== targetPage && hasDesktopPageWindows()) {
       if (sid) await routeToPageWindow({ key: targetPage, action: 'open-session', func: resolvedAgent, sessionId: sid });

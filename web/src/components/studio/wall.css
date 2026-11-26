@@ -1,0 +1,239 @@
+/* ═══════════════════════════════════════════════════════════════
+   Media Studio 第四版「作品台」：作品墙（图像 / 视频瀑布格、配音 / 音乐一行一件）、生成中的取景框、打开一件（焦点）。
+   设计见方案 §12.2；demo 是准绳（bridge前端设计/media-studio-demo）。令牌只用 --sd-*；所有选择器挂在 .studio-root 下。
+   动效只动 transform / opacity（位置、显影、FLIP 都在组件里用 WAAPI 做，这里只给静止的样子）。
+   ═══════════════════════════════════════════════════════════════ */
+
+.studio-root .sw-root, .studio-root .sf {
+  /* 墨：唯一的强调色（亮色是墨、暗色是象牙）；soft 两档是浅墨底；text4 是波形底色那一档最淡的字色 */
+  --sd-w-ink: var(--sd-primary);
+  --sd-w-on-ink: var(--sd-on-primary);
+  --sd-w-soft: var(--sd-accent-soft);
+  --sd-w-soft2: color-mix(in srgb, var(--sd-text) 12%, transparent);
+  --sd-w-text4: color-mix(in srgb, var(--sd-text3) 62%, var(--sd-bg));
+}
+
+/* —— 画布：占满整页、自己管滚动；输入栏浮在底部（CreateFrame 在 .cf 上写 --cf-dock-h）—— */
+.studio-root .sw-root { position: absolute; inset: 0; }
+/* 墙 / 焦点只竖着滚：横向的手指移动留给页面自己（左缘右滑拉出素材架、平板左缘预测式返回）。
+   不写的话浏览器一见横向移动就接管成平移、发 pointercancel，左缘手势在墙上起不了手 */
+.studio-root .sw-scroll, .studio-root .sf-scroll { touch-action: pan-y; }
+.studio-root .sw-scroll {
+  position: absolute; inset: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: var(--sd-border2) transparent;
+  padding: 2px 12px calc(var(--cf-dock-h, 160px) + 24px);
+}
+.studio-root.medium .sw-scroll { padding-left: 20px; padding-right: 20px; }
+.studio-root.expanded .sw-scroll { padding-left: 32px; padding-right: 32px; }
+.studio-root .sw-scroll[inert] { overflow: hidden; }
+.studio-root .sw-wall { position: relative; margin: 0 auto; }
+.studio-root .sw-more { height: 1px; }
+.studio-root .sw-empty { display: flex; flex-direction: column; min-height: calc(100% - var(--cf-dock-h, 160px)); }
+.studio-root .sw-loaderr { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 48px 12px; font-size: var(--sd-fs-md); color: var(--sd-text2); }
+
+/* —— 墙上的一格 —— */
+.studio-root .sw-it { position: absolute; left: 0; top: 0; border-radius: 10px; overflow: hidden; background: var(--sd-surface2); contain: layout paint; will-change: transform; }
+.studio-root.expanded .sw-it { border-radius: 12px; }
+.studio-root .sw-it.lifted { visibility: hidden; }
+.studio-root .sw-tile { position: absolute; inset: 0; cursor: zoom-in; container-type: inline-size; -webkit-touch-callout: none; }
+.studio-root .sw-tile:focus-visible { outline: 1.5px solid var(--sd-live); outline-offset: 2px; }
+.studio-root .sw-tile > img, .studio-root .sw-tile > .sw-hv {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none;
+  transition: transform 600ms var(--sd-ease-out);
+}
+.studio-root .sw-tile > .sw-hv { opacity: 0; }
+@media (hover: hover) and (pointer: fine) {
+  .studio-root .sw-tile:hover > img, .studio-root .sw-tile:hover > .sw-hv { transform: scale(1.03); }
+}
+.studio-root .sw-tile:active > img { transform: scale(.985); transition-duration: 120ms; }
+.studio-root .sw-dur {
+  position: absolute; right: 8px; bottom: 8px; z-index: 2; display: flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px; border-radius: 7px;
+  font-size: var(--sd-fs-xs); line-height: 1; color: #fff; background: rgba(18, 16, 14, .34); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); pointer-events: none;
+}
+.studio-root .sw-dur svg { width: 9px; height: 9px; }
+
+/* —— 生成中：取景框（四个角 + 一圈发丝线）、墨、角上的小签 —— */
+.studio-root .sw-dev { position: absolute; inset: 0; z-index: 3; border-radius: inherit; background: var(--sd-surface); container-type: size; }
+.studio-root .sw-dev canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.studio-root .sw-dev.err canvas { opacity: .16; }
+.studio-root .sw-line { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.studio-root .sw-line rect { fill: none; stroke: var(--sd-border2); stroke-width: 1; stroke-dasharray: 100; vector-effect: non-scaling-stroke; }
+.studio-root .sw-corner { position: absolute; width: 14px; height: 14px; pointer-events: none; color: var(--sd-w-ink); }
+.studio-root .sw-corner svg { width: 14px; height: 14px; display: block; }
+.studio-root .sw-corner.tl { left: 8px; top: 8px; }
+.studio-root .sw-corner.tr { right: 8px; top: 8px; transform: scaleX(-1); }
+.studio-root .sw-corner.bl { left: 8px; bottom: 8px; transform: scaleY(-1); }
+.studio-root .sw-corner.br { right: 8px; bottom: 8px; transform: scale(-1, -1); }
+.studio-root .sw-dev.err .sw-corner, .studio-root .sw-dev.err .sw-line, .studio-root .sw-dev.err .sw-meta { opacity: 0; pointer-events: none; }
+.studio-root .sw-meta {
+  position: absolute; left: 10px; bottom: 10px; z-index: 3; display: flex; align-items: center; gap: 5px; height: 1.85em; padding: 0 3px 0 5px; border-radius: 7px;
+  font-size: var(--sd-fs-xs); color: var(--sd-text2);
+  background: color-mix(in srgb, var(--sd-surface) 78%, transparent); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+.studio-root .sw-meta .sd-mk { color: var(--sd-text); }
+.studio-root .sw-tm, .studio-root .sw-at { font-family: var(--sd-font-mono); font-variant-numeric: tabular-nums; }
+.studio-root .sw-x { position: relative; flex: none; width: 18px; height: 18px; margin-left: 1px; border-radius: 5px; display: grid; place-items: center; color: var(--sd-text3); }
+.studio-root .sw-x svg { width: 12px; height: 12px; }
+.studio-root .sw-x::after { content: ''; position: absolute; inset: -9px -7px; }
+@media (hover: hover) { .studio-root .sw-x:hover { color: var(--sd-text); background: var(--sd-hover); } }
+
+/* 生成失败：墨淡下去，原地一张小卡（重试 / 改提示词 / 收起） */
+.studio-root .sw-err {
+  position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 16px 14px; text-align: center;
+  animation: swErrIn var(--sd-t-spring-soft, 420ms) var(--sd-spring-soft, var(--sd-ease-out)) 160ms backwards;
+}
+@keyframes swErrIn { from { opacity: 0; transform: translateY(6px); } }
+.studio-root.sd-noanim .sw-err { animation: none; }
+@media (prefers-reduced-motion: reduce) { .studio-root .sw-err { animation: none; } }
+.studio-root .sw-err-ic { color: var(--sd-err); }
+.studio-root .sw-err-ic svg { width: 18px; height: 18px; display: block; }
+.studio-root .sw-err-h { margin: 0; max-width: 24em; font-size: var(--sd-fs-md); line-height: 1.45; color: var(--sd-text); }
+.studio-root .sw-err-more { font-size: var(--sd-fs-sm); color: var(--sd-text3); text-decoration: underline; text-underline-offset: 3px; }
+.studio-root .sw-err-d { max-width: 100%; max-height: 7.5em; overflow: auto; font-size: var(--sd-fs-xs); line-height: 1.5; color: var(--sd-text3); white-space: pre-wrap; word-break: break-word; text-align: left; }
+.studio-root .sw-err-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 2px; }
+.studio-root .sw-err-x { position: absolute; top: 6px; right: 6px; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--sd-text3); }
+.studio-root .sw-err-x svg { width: 15px; height: 15px; }
+@media (hover: hover) { .studio-root .sw-err-x:hover { color: var(--sd-text); background: var(--sd-hover); } }
+/* 格子太矮（手机两列里的横图）：卡片压成一行半，详情不展开 */
+@container (max-height: 150px) { .studio-root .sw-err-ic, .studio-root .sw-err-more, .studio-root .sw-err-d { display: none; } }
+.studio-root .sw-tb {
+  position: relative; height: 2.3em; padding: 0 12px; border-radius: 9px; font-size: var(--sd-fs-md); font-weight: 500; color: var(--sd-text);
+  background: var(--sd-w-soft); transition: background-color var(--sd-t-fast) var(--sd-ease), transform 160ms var(--sd-ease-out);
+}
+@media (hover: hover) { .studio-root .sw-tb:hover { background: var(--sd-w-soft2); } }
+.studio-root .sw-tb:active { transform: scale(.95); }
+.studio-root .sw-tb.pri { background: var(--sd-w-ink); color: var(--sd-w-on-ink); }
+@media (pointer: coarse) {
+  .studio-root .sw-tb::after { content: ''; position: absolute; inset: -5px -2px; }
+  /* 触屏点按区至少 32：收起 ×、「详情」这一行小字 */
+  .studio-root .sw-err-x::after { content: ''; position: absolute; inset: -3px; }
+  .studio-root .sw-err-more { position: relative; }
+  .studio-root .sw-err-more::after { content: ''; position: absolute; inset: -8px -6px; }
+}
+
+/* ═══ 配音 / 音乐：一行一件 ═══ */
+.studio-root .sw-alist { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; }
+.studio-root .sw-aslot { padding-bottom: 8px; }
+.studio-root .sw-aslot.day { padding-bottom: 0; }
+.studio-root .sw-day { display: flex; align-items: flex-end; min-height: 2.6em; padding: 0 2px 8px; font-size: var(--sd-fs-md); font-weight: 600; color: var(--sd-text2); white-space: nowrap; }
+.studio-root .sw-aslot:first-child .sw-day { min-height: 0; padding-top: 6px; }
+.studio-root .sw-arow {
+  position: relative; display: flex; gap: 12px; padding: 14px 14px 12px; border-radius: 16px;
+  background: var(--sd-surface); box-shadow: var(--sd-lift-1); -webkit-touch-callout: none;
+}
+.studio-root.dark .sw-arow { background: var(--sd-surface2); }
+.studio-root .sw-aplay {
+  flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--sd-w-ink); color: var(--sd-w-on-ink);
+  transition: transform 200ms var(--sd-ease-out), background-color 200ms var(--sd-ease);
+}
+.studio-root .sw-aplay svg { width: 16px; height: 16px; }
+.studio-root .sw-aplay .sd-mk { width: 24px; height: 24px; color: var(--sd-text); }
+.studio-root .sw-aplay:active:not(:disabled) { transform: scale(.9); }
+.studio-root .sw-aplay:disabled { background: var(--sd-w-soft); color: var(--sd-text3); cursor: default; }
+.studio-root .sw-amain { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.studio-root .sw-atext {
+  font-size: var(--sd-fs-base); line-height: 1.45; color: var(--sd-text); cursor: pointer;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.studio-root.compact .sw-atext { font-size: var(--sd-fs-body); }
+.studio-root .sw-arow.music .sw-atext { display: block; white-space: nowrap; text-overflow: ellipsis; color: var(--sd-text2); }
+/* 点开全文：一行的文字（音乐）在触屏上也要 32 高的命中区——伸在外层，文字自己截行要 overflow:hidden */
+.studio-root .sw-ahit { min-width: 0; cursor: pointer; }
+@media (pointer: coarse) { .studio-root .sw-ahit { padding: 6px 0; margin: -6px 0; } }
+.studio-root .sw-atext.open { display: block; -webkit-line-clamp: unset; white-space: pre-wrap; overflow: visible; }
+.studio-root .sw-awave { position: relative; height: 34px; cursor: pointer; touch-action: none; color: var(--sd-text); }
+.studio-root .sw-awave:focus-visible { outline: 1.5px solid var(--sd-live); outline-offset: 2px; border-radius: 4px; }
+.studio-root .sw-awave canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; color: var(--sd-text); }
+.studio-root .sw-wave { position: absolute; inset: 0; transform-origin: 50% 50%; }
+.studio-root .sw-bars, .studio-root .sw-bars svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.studio-root .sw-bars rect { transform-box: fill-box; transform-origin: center; }
+.studio-root .sw-bars .w-base rect { fill: var(--sd-w-text4); }
+.studio-root .sw-bars .w-play rect { fill: var(--sd-w-ink); }
+.studio-root .sw-bars .w-play { clip-path: inset(0 calc(100% - var(--p, 0%)) 0 0); }
+.studio-root .sw-flat { position: absolute; left: 0; right: 0; top: 50%; height: 1.5px; margin-top: -.75px; border-radius: 1px; background: var(--sd-w-text4); }
+.studio-root .sw-flat.wait { opacity: .5; }
+.studio-root .sw-head { position: absolute; top: 2px; bottom: 2px; left: var(--p, 0%); width: 1.5px; margin-left: -.75px; border-radius: 1px; background: var(--sd-w-ink); opacity: 0; transition: opacity 200ms var(--sd-ease); }
+.studio-root .sw-wave.head .sw-head { opacity: 1; }
+.studio-root .sw-ameta { display: flex; align-items: center; gap: 8px; min-height: 1.9em; font-size: var(--sd-fs-sm); color: var(--sd-text3); white-space: nowrap; overflow: hidden; }
+.studio-root .sw-sp { flex: 1; }
+/* 失败的那一行没有音色、没有计时：元信息一行是空的，别白占一行高 */
+.studio-root .sw-ameta:not(:has(> :not(.sw-sp))) { display: none; }
+.studio-root .sw-at { flex: none; font-size: var(--sd-fs-xs); color: var(--sd-text2); }
+.studio-root .sw-am { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.studio-root .sw-vtag { flex: none; display: inline-flex; align-items: center; height: 1.85em; padding: 0 8px; border-radius: 7px; font-weight: 500; color: var(--sd-text2); background: var(--sd-w-soft); }
+/* 同一段文字的几个音色：并成一张卡，用一排音色名切换（同类只一个入口）；选中的是一块浮起的纸 */
+/* 窄屏 + 大字号放不下时音色分段先缩（自己横滑），别把右边的计时挤出卡片 */
+.studio-root .sw-takes { position: relative; flex: 0 1 auto; min-width: 0; display: inline-flex; padding: 2px; border-radius: 9px; background: var(--sd-w-soft); max-width: 70%; overflow-x: auto; scrollbar-width: none; }
+.studio-root .sw-take { position: relative; z-index: 1; height: 1.85em; padding: 0 8px; border-radius: 7px; font-size: var(--sd-fs-sm); font-weight: 500; color: var(--sd-text3); transition: color 180ms var(--sd-ease); white-space: nowrap; }
+.studio-root .sw-take.on { color: var(--sd-text); }
+/* 触屏：音色名 28 高、命中区再往上下各伸 2（伸进分段自己的内边距，不被横滑区裁掉）＝ 32 */
+@media (pointer: coarse) { .studio-root .sw-take { height: 28px; } .studio-root .sw-take::after { content: ''; position: absolute; inset: -2px 0; } }
+.studio-root .sw-pk { position: absolute; z-index: 0; top: 2px; left: 0; bottom: 2px; border-radius: 7px; background: var(--sd-surface); box-shadow: var(--sd-lift-1); transform-origin: 0 0; pointer-events: none; }
+.studio-root.dark .sw-pk { background: var(--sd-surface3); }
+.studio-root .sw-afail { flex: none; font-size: var(--sd-fs-xs); color: var(--sd-err); }
+.studio-root .sw-afail i { font-style: normal; margin: 0 4px; opacity: .6; }
+/* 失败的那一行：卡片排成一行（不是压在格子里的那种居中卡） */
+.studio-root .sw-arow .sw-err { position: relative; inset: auto; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; align-items: center; padding: 2px 30px 2px 0; text-align: left; gap: 6px 10px; }
+.studio-root .sw-arow .sw-err-row { margin: 0; }
+.studio-root .sw-arow .sw-err-x { top: 50%; right: 0; margin-top: -14px; }
+
+/* ═══ 打开一件：墙上那张原地放大 ═══ */
+.studio-root .sf { position: absolute; inset: 0; z-index: 8; }
+.studio-root .sf-bg { position: absolute; inset: 0; background: var(--sd-bg); }
+.studio-root .sf-scroll {
+  position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--sd-border2) transparent;
+  padding: 6px 16px calc(var(--cf-dock-h, 160px) + 28px);
+}
+.studio-root.expanded .sf-scroll { padding: 12px 40px calc(var(--cf-dock-h, 160px) + 28px); }
+.studio-root .sf-col { max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; }
+.studio-root .sf-media {
+  position: relative; flex: none; border-radius: 14px; overflow: hidden; background: var(--sd-surface2); box-shadow: var(--sd-shadow-2);
+  cursor: zoom-in; transform-origin: 0 0; will-change: transform; container-type: inline-size;
+}
+.studio-root .sf-media.video { cursor: pointer; }
+.studio-root .sf-media:focus-visible { outline: 1.5px solid var(--sd-live); outline-offset: 3px; }
+.studio-root .sf-media img, .studio-root .sf-media video, .studio-root .sf-media canvas, .studio-root .sf-layer {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.studio-root .sf-media video { background: transparent; }
+.studio-root .sf-layer > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.studio-root .sf-ink { z-index: 2; pointer-events: none; }
+.studio-root .sf-vc {
+  position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 3; display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 8px 0 4px; border-radius: 12px;
+  color: #fff; background: rgba(18, 16, 14, .36); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); cursor: default;
+}
+.studio-root .sf-vb { position: relative; flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; color: #fff; }
+.studio-root .sf-vb svg { width: 18px; height: 18px; }
+@media (hover: hover) { .studio-root .sf-vb:hover { background: rgba(255, 255, 255, .14); } }
+.studio-root .sf-bar { position: relative; flex: 1; min-width: 40px; height: 24px; cursor: pointer; touch-action: none; }
+.studio-root .sf-bar::before, .studio-root .sf-bar i { content: ''; position: absolute; left: 0; top: 50%; height: 3px; margin-top: -1.5px; border-radius: 2px; }
+.studio-root .sf-bar::before { right: 0; background: rgba(255, 255, 255, .3); }
+.studio-root .sf-bar i { width: var(--p, 0%); background: #fff; }
+.studio-root .sf-vtime { flex: none; font-size: var(--sd-fs-xs); }
+@container (max-width: 320px) { .studio-root .sf-vtime { display: none; } }
+
+.studio-root .sf-info { width: 100%; max-width: 680px; padding: 16px 2px 0; display: flex; flex-direction: column; gap: 12px; }
+.studio-root .sf-strip { display: flex; align-items: center; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 4px 3px; margin: -4px -3px; }
+.studio-root .sf-vt { position: relative; width: 52px; height: 36px; border-radius: 8px; overflow: hidden; background: var(--sd-surface2); flex: none; opacity: .62;
+  transition: opacity 180ms var(--sd-ease), transform 220ms var(--sd-ease-out); }
+.studio-root .sf-vt img, .studio-root .sf-vt canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.studio-root .sf-vt.on { opacity: 1; box-shadow: 0 0 0 1.5px var(--sd-bg), 0 0 0 3px var(--sd-w-ink); }
+.studio-root .sf-vt.dev { opacity: 1; background: var(--sd-surface); box-shadow: inset 0 0 0 1px var(--sd-border2); }
+@media (hover: hover) { .studio-root .sf-vt:hover { opacity: 1; } }
+.studio-root .sf-vt:active { transform: scale(.94); }
+.studio-root .sf-vn { flex: none; margin-left: 4px; font-size: var(--sd-fs-xs); font-variant-numeric: tabular-nums; color: var(--sd-text3); white-space: nowrap; }
+.studio-root .sf-prompt { margin: 0; font-size: var(--sd-fs-body); line-height: 1.55; color: var(--sd-text); white-space: pre-wrap; word-break: break-word; }
+.studio-root .sf-prompt:not(.open) { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.studio-root .sf.compact .sf-prompt:not(.open) { -webkit-line-clamp: 3; }
+.studio-root .sf-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: var(--sd-fs-xs); line-height: 1.6; color: var(--sd-text3); }
+.studio-root .sf-meta > span:first-child { font-family: var(--sd-font-ui); }
+.studio-root .sf-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.studio-root .sf-b {
+  height: 2.6em; padding: 0 12px 0 10px; border-radius: 11px; display: inline-flex; align-items: center; gap: 7px; font-size: var(--sd-fs-md); font-weight: 500; color: var(--sd-text);
+  background: var(--sd-w-soft); transition: background-color 140ms var(--sd-ease), transform 160ms var(--sd-ease-out);
+}
+.studio-root .sf-b svg { width: 18px; height: 18px; color: var(--sd-text2); }
+@media (hover: hover) { .studio-root .sf-b:hover { background: var(--sd-w-soft2); } }
+.studio-root .sf-b:active { transform: scale(.95); }
+.studio-root .sf-b.icon { width: 2.6em; padding: 0; justify-content: center; }
+.studio-root .sf-info .cv-err { margin: 0; }

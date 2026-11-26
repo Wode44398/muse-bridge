@@ -1,6 +1,7 @@
 // Shared reactive app state (Svelte 5 runes). Import these objects anywhere and
 // mutate their fields directly — reads inside components stay reactive.
 import { storeGet, storeSet } from './store.js';
+import { recall, remember } from './lastKnown.js';
 import { t } from './i18n.js';
 import { presets } from './liquidGlass.js';
 import { lastPrefs } from './chatPrefs.js';
@@ -168,7 +169,11 @@ export function singleMode() { return rootScreen() !== 'home'; }
 // session{swapped} / model_notice scope=session）后，Composer 的模型芯片据此标「本会话已切换到 X」。
 // suggestions：按会话记的输入建议 {text, at, dismissed?}——每轮定局后 CLI 预测的下一句（总线 suggestion /
 // hello 帧），输入框空着时当占位文字显示，Tab 填入（见 chat.svelte.js noteSuggestion）。
-export const status = $state({ limits: null, context: null, contexts: {}, usages: {}, efforts: {}, models: {}, suggestions: {}, commands: null, plan: null, noFiveHour: false, updatedAt: 0, fast: null });
+// 共享订阅的额度（账户卡、设置 › 账户、用量环都只拿它显示）：起始值是上次拿到的那份（lib/lastKnown），
+// 账户卡一展开就有两根条，而不是先「—」再跳成数字；接口回来再原地换。
+const lastStatus = recall('status') || {};
+export const status = $state({ limits: lastStatus.limits || null, context: null, contexts: {}, usages: {}, efforts: {}, models: {}, suggestions: {}, commands: null, plan: lastStatus.plan || null, noFiveHour: !!lastStatus.noFiveHour, updatedAt: 0, fast: null });
+$effect.root(() => { $effect(() => { const v = { limits: status.limits, plan: status.plan, noFiveHour: status.noFiveHour }; if (v.limits) remember('status', v); }); });
 
 // 任务详情（Agent 子转录 / Workflow 阶段面板）2026-09-05 起住进右侧工作台的「任务」视图
 //（lib/dock.svelte.js 的 tasksFocus / tasksAgent），旧的底部抽屉 TaskSheet 与 taskSheet/wf 状态已删。

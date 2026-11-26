@@ -36,7 +36,7 @@
   import { initRoute, onReachabilityChange, startReachabilityWatch } from '../lib/server.js';
   import { titleFor } from '../lib/library.svelte.js';
   import { dtHasWsFiles, wsDescriptorFrom, attachDescriptorToAgent } from '../lib/fileDrag.js';
-  import { IS_PANE, SOLO_ID, SOLO_CARD, SOLO_WS, PANE_MSG, isPaneMsg } from '../lib/solo.js';
+  import { IS_PANE, SOLO_ID, SOLO_CARD, SOLO_WS, SOLO_AGENT, SOLO_SID, SOLO_THEME, PANE_MSG, isPaneMsg } from '../lib/solo.js';
   import { isNewChatKey } from '../lib/quickChat.js';
   import { quoteSession, refClaudeFolder } from '../lib/chatQuote.js';
   import { dockOverlayFor } from '../lib/claudeSplit.js';
@@ -74,7 +74,8 @@
   const title = $derived(SOLO_CARD
     ? CARD_TITLES[SOLO_CARD] + (cardWsName ? ' · ' + cardWsName : '')
     : session.id ? (titleFor(session.id, firstAsk) || tc('claude', '对话')) : tc('claude', '新对话'));
-  $effect(() => { document.title = title + (SOLO_CARD ? '' : ' · Claude'); });
+  const CARD_AGENT = { codex: 'Codex', agy: 'Antigravity', dimensio: 'dimensio' };
+  $effect(() => { document.title = title + (SOLO_CARD ? (CARD_AGENT[SOLO_AGENT] ? ' · ' + CARD_AGENT[SOLO_AGENT] : '') : ' · Claude'); });
 
   // 这一格的宽度（决定工作台盖着还是挤开）。同 ClaudePage：自己挂 ResizeObserver，不靠 bind:clientWidth。
   function measureW(node) {
@@ -213,7 +214,7 @@
       if (me.kind === 'none') { state = 'login'; return; }
       if (SOLO_CARD) {
         if (SOLO_CARD === 'tasks' && SOLO_ID) { try { await openSession(SOLO_ID); } catch {} }
-        openDock(SOLO_CARD);
+        if (SOLO_AGENT === 'claude') openDock(SOLO_CARD);   // 别家的卡由 AgentCardWindow 自己摆
         state = 'ready';
         return;
       }
@@ -228,7 +229,12 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="solo-root cc-tone" class:pane={IS_PANE} class:row={sideDock && dock.open && !overlay} use:measureW
   onpointerdowncapture={claimFocus} onfocusincapture={claimFocus}>
-  {#if state === 'ready' && SOLO_CARD}
+  {#if state === 'ready' && SOLO_CARD && SOLO_AGENT !== 'claude'}
+    <!-- Codex / Antigravity / dimensio 工作区拖出来的卡：按需加载（带着各家的皮与令牌，对话窗用不着） -->
+    {#await import('./dock/AgentCardWindow.svelte') then m}
+      <m.default agent={SOLO_AGENT} card={SOLO_CARD} ws={SOLO_WS} sid={SOLO_SID} theme={SOLO_THEME} />
+    {/await}
+  {:else if state === 'ready' && SOLO_CARD}
     <ClaudeDock wide card={SOLO_CARD} />
   {:else if state === 'ready'}
     <!-- 顶栏挂在根上（这一格 / 这扇窗的右上角），同 ClaudePage：工作台展开时工具开关就在卡片上方那条带里 -->

@@ -11,6 +11,7 @@
 //   focus     = 被点名的卡 { view, seq }（已经开着时外壳描一圈提示）
 //   noAuto    = agent 动了浏览器 / 终端时不自动拉开工作区，只亮提示点
 import { api } from '../api.js';
+import { recall, remember } from '../lastKnown.js';
 import { normCols, normWeights } from './cards.js';
 import { openPatch, closeAllPatch, closeViewPatch, multiPatch, prunePatch } from './views.js';
 import { isPluginView, workbenchByKey, openWorkbenchStandalone } from '../pluginUi.svelte.js';
@@ -22,6 +23,19 @@ export const hostOf = (state) => hosts.get(state) || null;
 export const registerDockHost = (state, host) => { hosts.set(state, host); return host; };
 
 let seq = 0;
+
+// 各工作空间上次拿到的 meta（分支 / 是否 worktree / 能不能开 worktree 会话），按 ws 记最近的一批（lib/lastKnown）。
+// 新对话的归属芯片行要它：没有就先只画「电脑 · 文件夹」，一秒后分支胶囊补进来、芯片换行，整个输入区被顶高一截
+const META_MAX = 24;
+const metaMemo = (() => { const m = recall('dock.meta'); return m && typeof m === 'object' ? m : {}; })();
+function keepMeta(ws, m) {
+  if (!ws || !m || m.gone) return;
+  delete metaMemo[ws];
+  metaMemo[ws] = { rel: m.rel ?? null, git: !!m.git, branch: m.branch || null, worktree: !!m.worktree, shell: m.shell, wtNew: !!m.wtNew, ...(m.snap ? { snap: true } : {}) };
+  const keys = Object.keys(metaMemo);
+  for (const k of keys.slice(0, Math.max(0, keys.length - META_MAX))) delete metaMemo[k];
+  remember('dock.meta', metaMemo);
+}
 
 // id：宿主名（也是本机偏好的键前缀 bridge-<id>-dock-*）
 // keys()：这个宿主此刻认识的全部卡（含门禁藏掉的）；sortable：进拖动排序的那几张（缺省 = 构造时的 keys()）
@@ -90,8 +104,11 @@ export function createDockHost({ id, initialView = 'review', keys, sortable = nu
     const next = ws || '';
     if (state.ws === next) return;
     state.ws = next;
-    state.meta = null;
+    // 上次见过这个工作空间就先用上次的 meta 画，同时立刻复核一次（用的人只在 meta 为空时才自己去拉）
+    const last = next ? metaMemo[next] : null;
+    state.meta = last ? { ...last } : null;
     state.filesTarget = null;
+    if (last) ensureMeta();
   }
   // 文件卡定位到某个目录 / 文件：产物卡点开、agent 让界面跳过去都走这里
   function openFiles(target = {}) {
@@ -119,7 +136,7 @@ export function createDockHost({ id, initialView = 'review', keys, sortable = nu
   function ensureMeta() {
     const ws = state.ws;
     if (!ws) return Promise.resolve(null);
-    if (state.meta && metaWs === ws) return Promise.resolve(state.meta);
+    if (state.meta && metaWs === ws && !metaInflight) return Promise.resolve(state.meta);
     if (metaInflight && metaWs === ws) return metaInflight;
     metaWs = ws;
     metaInflight = (async () => {
@@ -131,6 +148,7 @@ export function createDockHost({ id, initialView = 'review', keys, sortable = nu
       if (!m) m = { rel: null, git: false, branch: null, worktree: false, shell: false, gone };
       // 拉取期间可能已切走工作空间——晚到的结果不许盖到新 ws 头上
       if (state.ws === ws) state.meta = m;
+      keepMeta(ws, m);
       metaInflight = null;
       return m;
     })();

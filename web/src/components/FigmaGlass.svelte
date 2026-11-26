@@ -71,8 +71,13 @@
     if (canvas.parentElement) io.observe(canvas.parentElement);
     // 入口网格靠 transform 居中、字体晚到会挪位：挂载后补量几次
     const timers = [0, 120, 360, 1000].map((ms) => setTimeout(measure, ms));
+    // 安卓上 app 退到后台再回来，GPU 那边的画布资源可能已被回收（离屏 2D 画布丢上下文时 drawImage 静默不画）。
+    // 回前台时作废背景缓存重画一次：只这一下，代价是每块玻璃重拷一遍壁纸。
+    const onVis = () => { if (document.visibilityState === 'visible') { bgKey = ''; schedule(); } };
+    document.addEventListener('visibilitychange', onVis);
     return () => {
       alive = false;
+      document.removeEventListener('visibilitychange', onVis); clearTimeout(retryTimer);
       window.removeEventListener('resize', onR); ro.disconnect(); io.disconnect(); timers.forEach(clearTimeout);
       bgTex?.destroy(); liveTex?.destroy();
     };
@@ -149,20 +154,42 @@
     return tex;
   }
 
+  // 背后的壁纸没画进离屏画布（尺寸为 0 算出 NaN、图没解码、2D 上下文丢了……drawImage 一律静默不画）时，
+  // 玻璃会照着一张全透明的底去渲染 = 一块实心深灰方块，而明亮主页的图标是深色的，整块几乎看不见。
+  // 以前这张空底还会按 bgKey 缓存下来、再也不重画（右上胶囊没重画所以不受影响）。现在：画完抽查中心一个像素
+  //（壁纸不透明，正常必是满 alpha），没画上就不上传、不记缓存，换一块新画布过一会儿再试。
+  let retries = 0, retryTimer = 0;
+  function retryLater() {
+    work = null;
+    if (retryTimer || retries >= 8) return;
+    retries++;
+    retryTimer = setTimeout(() => { retryTimer = 0; if (alive) schedule(); }, 250 * retries);
+  }
+
   function paintStatic() {
     if (!img) return;
     const low = strength < 1;
     const { TW, TH, x0, y0, S, PW, PH } = dims(low ? 1 : 2);
-    const b = bg.box?.() || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    let b = bg.box?.();
+    if (!b || !(b.width > 0) || !(b.height > 0)) b = { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
     const key = [bg.url, PW, PH, x0.toFixed(1), y0.toFixed(1), b.left, b.top, b.width, b.height].join();
     if (key !== bgKey) {
       // 壁纸 <img> 的 object-fit: cover（居中）映射：视口 css px → 原图像素
       const iw = img.naturalWidth, ih = img.naturalHeight;
+      if (!(iw > 0) || !(ih > 0)) { retryLater(); return; }
       const s = Math.max(b.width / iw, b.height / ih);
       const offX = b.left + (b.width - iw * s) / 2, offY = b.top + (b.height - ih * s) / 2;
       const g = scratch(PW, PH);
       g.drawImage(img, (x0 - offX) / s, (y0 - offY) / s, TW / s, TH / s, 0, 0, PW, PH);
       drawVeil(g, x0, y0, S);
+      let painted = false;
+      try { painted = !g.isContextLost?.() && g.getImageData(PW >> 1, PH >> 1, 1, 1).data[3] > 0; } catch {}
+      if (!painted) {
+        console.warn('[figmaHome] 壁纸没画进玻璃背景，稍后重试');   // i18n-ignore 只进控制台
+        retryLater();
+        return;   // 画布上保留上一帧，别拿空底去渲染
+      }
+      retries = 0;
       try { bgTex = upload(bgTex, PW, PH); } catch (e) { fail(e); return; }
       bgKey = key;
     }

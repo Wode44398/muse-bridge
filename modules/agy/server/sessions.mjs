@@ -20,10 +20,21 @@ import {
   getPassiveBackgroundGen,
   markSessionTranscriptSynced,
   noteSessionOwner,
+  syncDiskTailIntoHistory,
 } from './subagent-monitor.mjs';
 import { extractRecentSessionDirs } from './recent-dirs.mjs';
-import { resolveEffectiveContextUsage, getAgyContextLimits } from './context-limits.mjs';
+import {
+  resolveEffectiveContextUsage,
+  getAgyContextLimits,
+  peekAgyContextLimits,
+  warmAgyContextLimits,
+} from './context-limits.mjs';
 import { applyUserMedia } from './user-media.mjs';
+import {
+  getDiskHistoryStamp,
+  readDiskSessionHistory,
+  computeAgyDetailFingerprint,
+} from './disk-history.mjs';
 
 export { extractRecentSessionDirs };
 
@@ -61,6 +72,13 @@ function writeMetaStore(agyDir, store) {
 // 用代数作废在途的 session/list 请求，避免失效前发出的慢请求回包后把陈旧快照写回缓存
 export function invalidateSessionsCache() {
   listGen++;
+}
+
+// 零 RPC 查当前进程最近一次 session/list 内存缓存里的单条摘要（供详情快读兜底标题与 cwd）
+function peekCachedSessionEntry(client, sessionId) {
+  const c = client ? listCaches.get(client) : null;
+  if (!c || !Array.isArray(c.raw)) return null;
+  return c.raw.find((x) => x && x.sessionId === sessionId) || null;
 }
 
 // 回复正文里的交付物链接 → 这条消息的成品附件卡
@@ -655,9 +673,10 @@ export function applyToolApprovalsMeta(messages = [], meta = {}) {
   return messages;
 }
 
-export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
+export async function loadAgySessionDetail(ctx, sessionId, { cwd = '', fp = '' } = {}) {
   const id = String(sessionId || '').trim();
   if (!id) throw Object.assign(new Error('缺少会话 id'), { status: 400 });
+  const reqFp = String(fp || '').trim();
 
   // 桌面版建的会话交给桌面版存储进程载入（主进程载它只回放 0 条）；注册用户的会话在他自己的进程里
   const client = acpFor(ctx, id);
@@ -698,7 +717,7 @@ export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
     });
     const snap = client.getMountedSnapshot?.(id) || null;
     const liveCfg = extractConfigSummary(snap?.configOptions || [], snap?.modes, snap?.models);
-    const liveLimits = await getAgyContextLimits(client, { timeoutMs: 400 }).catch(() => null);
+    const liveLimits = peekAgyContextLimits(client) || await getAgyContextLimits(client, { timeoutMs: 250 }).catch(() => null);
     const resolvedUsage = resolveEffectiveContextUsage(snap?.rawUsage || snap?.usage || history.usage, {
       model: liveCfg.model || meta.config?.model || '',
       thoughtLevel: liveCfg.thoughtLevel || meta.config?.thought_level || '',
@@ -724,8 +743,19 @@ export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
     };
   }
 
-  // 已存 cwd 或 ACP 列表里的真实 cwd 始终优先；外部查询参数与默认工作空间只用于本次 RPC 调用，不覆盖绑定也不落盘
-  const verifiedCwd = await resolveVerifiedSessionCwd(ctx, id);
+  const cachedListRow = peekCachedSessionEntry(client, id);
+  const cachedRowCwd = cachedListRow?.cwd && !isDaemonPseudoCwd(cachedListRow.cwd, client.daemonCwd)
+    ? normalizeAgyPath(cachedListRow.cwd)
+    : '';
+  const metaCleanCwd = meta.cwd && !isDaemonPseudoCwd(meta.cwd, client.daemonCwd)
+    ? normalizeAgyPath(meta.cwd)
+    : '';
+
+  // 已存 cwd 或列表缓存里的真实 cwd 优先（零 RPC）；两处都没有时再走 resolveVerifiedSessionCwd
+  let verifiedCwd = metaCleanCwd || cachedRowCwd;
+  if (!verifiedCwd) {
+    verifiedCwd = await resolveVerifiedSessionCwd(ctx, id);
+  }
   let rpcCwd = verifiedCwd;
   if (!rpcCwd && cwd) {
     try { rpcCwd = authorizeProjectPath(ctx, cwd); } catch {}
@@ -742,20 +772,146 @@ export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
 
   const extraDirs = Array.isArray(meta.additionalDirectories) ? meta.additionalDirectories : [];
   const effectiveWorkDir = verifiedCwd || rpcCwd || '';
-  const { mcpServers, systemPromptAppend: effectiveSystemPrompt, toolingSig } = buildAgySessionTooling({
-    ctx, settings, cwd: effectiveWorkDir, additionalDirectories: extraDirs,
-  });
 
-  const { snapshot, updates, preservedAlive } = await client.loadSessionWithReplay(id, {
-    cwd: verifiedCwd,
-    fallbackCwd: rpcCwd,
-    forceCwd: !!verifiedCwd,
-    mcpServers,
-    additionalDirectories: extraDirs,
-    systemPromptAppend: effectiveSystemPrompt,
-    desiredConfig,
-    toolingSig,
-  });
+  // ── 快速路径 1 & 2：已挂载内存复读（不杀 worker） / 未挂载磁盘快读（不冷起 worker）──
+  // 真实 agy 在 --process-per-session 下每次 session/load 都要现起 worker + 联网 Google 控制面 + 预热 MCP（4–8 秒）；
+  // 这里优先复读内存或直接只读解析磁盘 transcript(_full).jsonl，将打开历史降到毫秒级，
+  // 缺少磁盘记录或记录被截断时无缝回落到下面的 session/load。
+  let snapshot = null;
+  let updates = null;
+  let preservedAlive = false;
+  let fastSource = '';
+  let fastStamp = '';
+  let diskMetaModel = '';
+  let diskMetaThought = '';
+  let diskRawUsage = null;
+
+  const diskInfo = client.dataDir ? getDiskHistoryStamp(client.dataDir, id) : null;
+  const cachedMem = client.getCachedHistory?.(id) || null;
+  const cachedTitleHint = meta.customTitle || meta.title || cachedListRow?.title || cachedMem?.snapshot?.title || '新对话';
+
+  if (cachedMem && cachedMem.mounted && cachedMem.updates.length > 0) {
+    // 已挂载空闲会话：先把可能由后台唤醒落盘的新步骤同步进内存，绝不 session/close 杀掉活跃 worker
+    try { syncDiskTailIntoHistory(ctx?.key, client, id); } catch {}
+    const freshMem = client.getCachedHistory?.(id) || cachedMem;
+    const diskChangedExternally = Boolean(diskInfo && freshMem.diskStamp && freshMem.diskStamp !== diskInfo.stamp);
+
+    if (diskChangedExternally) {
+      const disk = readDiskSessionHistory(client.dataDir, id);
+      // 仅当磁盘确实比内存包含更多更新（例如外部官方客户端新写了对话）时才用磁盘刷新，
+      // 避免把本进程刚收到但尚未完全刷盘（或测试假 agent 仅写内存）的回复覆盖掉。
+      if (disk.ok && disk.updates.length > freshMem.updates.length) {
+        updates = disk.updates;
+        diskMetaModel = disk.model;
+        diskMetaThought = disk.thoughtLevel;
+        diskRawUsage = disk.rawUsage;
+        fastSource = 'mem+disk';
+        fastStamp = disk.stamp;
+        client.seedHistory?.(id, disk.updates, { diskStamp: disk.stamp, force: true });
+      }
+    }
+
+    if (!updates) {
+      if (diskInfo) {
+        client.noteHistoryDiskStamp?.(id, diskInfo.stamp);
+      }
+      updates = freshMem.updates;
+      fastSource = 'mem';
+      fastStamp = `${freshMem.updates.length}:${diskInfo?.stamp || ''}`;
+    }
+
+    snapshot = freshMem.snapshot || client.buildSyntheticSnapshot?.(id, desiredConfig) || null;
+    if (snapshot) snapshot.lastActiveAt = Date.now();
+    preservedAlive = true;
+
+    const memFp = computeAgyDetailFingerprint({
+      source: fastSource,
+      sourceStamp: fastStamp,
+      meta,
+      cwd: effectiveWorkDir,
+      title: cachedTitleHint,
+      desiredConfig,
+    });
+    if (reqFp && reqFp === memFp) {
+      return { sessionId: id, unchanged: true, fp: memFp };
+    }
+  } else if (diskInfo) {
+    // 未挂载会话：先看 ?fp= 指纹短路（full transcript 无需读文件即可直接确认未变）
+    const quickFp = diskInfo.isFull
+      ? computeAgyDetailFingerprint({
+        source: 'disk',
+        sourceStamp: diskInfo.stamp,
+        meta,
+        cwd: effectiveWorkDir,
+        title: cachedTitleHint,
+        desiredConfig,
+      })
+      : '';
+    if (reqFp && quickFp && reqFp === quickFp) {
+      return { sessionId: id, unchanged: true, fp: quickFp };
+    }
+
+    const disk = readDiskSessionHistory(client.dataDir, id);
+    if (disk.ok) {
+      updates = disk.updates;
+      diskMetaModel = disk.model;
+      diskMetaThought = disk.thoughtLevel;
+      diskRawUsage = disk.rawUsage;
+      fastSource = 'disk';
+      fastStamp = disk.stamp;
+
+      const effectiveDesired = {
+        ...desiredConfig,
+        ...(meta.config?.model ? {} : (disk.model ? { model: disk.model } : {})),
+        ...(meta.config?.thought_level ? {} : (disk.thoughtLevel ? { thought_level: disk.thoughtLevel } : {})),
+      };
+      snapshot = client.buildSyntheticSnapshot?.(id, effectiveDesired) || null;
+      // 预热内存历史与会话记录：用户随后若发消息续聊，runPrompt 直接走 session/resume 而不用重跑 session/load
+      client.seedHistory?.(id, disk.updates, { diskStamp: disk.stamp });
+      client.rememberSession?.(id, {
+        cwd: verifiedCwd || '',
+        forceCwd: !!verifiedCwd,
+        additionalDirectories: extraDirs,
+        desiredConfig: effectiveDesired,
+      });
+      preservedAlive = true;
+
+      const diskFp = computeAgyDetailFingerprint({
+        source: fastSource,
+        sourceStamp: fastStamp,
+        meta,
+        cwd: effectiveWorkDir,
+        title: cachedTitleHint,
+        desiredConfig,
+      });
+      if (reqFp && reqFp === diskFp) {
+        return { sessionId: id, unchanged: true, fp: diskFp };
+      }
+    }
+  }
+
+  // ── 回落路径：缺少可用磁盘记录（极老 .pb / 空会话 / 测试假 agent）→ 原生 session/load 全量回放 ──
+  if (!updates) {
+    const { mcpServers, systemPromptAppend: effectiveSystemPrompt, toolingSig } = buildAgySessionTooling({
+      ctx, settings, cwd: effectiveWorkDir, additionalDirectories: extraDirs,
+    });
+    const loaded = await client.loadSessionWithReplay(id, {
+      cwd: verifiedCwd,
+      fallbackCwd: rpcCwd,
+      forceCwd: !!verifiedCwd,
+      mcpServers,
+      additionalDirectories: extraDirs,
+      systemPromptAppend: effectiveSystemPrompt,
+      desiredConfig,
+      toolingSig,
+    });
+    snapshot = loaded.snapshot;
+    updates = loaded.updates;
+    preservedAlive = Boolean(loaded.preservedAlive);
+    fastSource = 'acp';
+    fastStamp = `${updates.length}:${diskInfo?.stamp || ''}`;
+    if (diskInfo) client.noteHistoryDiskStamp?.(id, diskInfo.stamp);
+  }
 
   const history = reconstructHistoryMessages(updates);
   applyInterruptedMeta(history.messages, meta);
@@ -773,7 +929,7 @@ export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
     workDir: effectiveWorkDir, additionalDirectories: extraDirs, uploads: ctx?.uploads,
     artifactDir: sessionBrainDir(client.dataDir, id),
   });
-  const title = meta.customTitle || history.title || snapshot?.title || meta.title || '新对话';
+  const title = meta.customTitle || history.title || snapshot?.title || cachedListRow?.title || meta.title || '新对话';
   if (history.title && !meta.title) {
     noteSessionMeta(ctx?.agyDir, id, {
       ...(verifiedCwd ? { cwd: verifiedCwd } : {}),
@@ -782,16 +938,23 @@ export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
   }
 
   const cfgSummary = extractConfigSummary(snapshot?.configOptions || [], snapshot?.modes, snapshot?.models);
-  const liveLimits = await getAgyContextLimits(client, { timeoutMs: 400 }).catch(() => null);
-  const resolvedUsage = resolveEffectiveContextUsage(history.usage || snapshot?.rawUsage || snapshot?.usage, {
-    model: cfgSummary.model || meta.config?.model || '',
-    thoughtLevel: cfgSummary.thoughtLevel || meta.config?.thought_level || '',
+  const resolvedModel = cfgSummary.model || meta.config?.model || diskMetaModel || desiredConfig.model || null;
+  const resolvedThought = cfgSummary.thoughtLevel || meta.config?.thought_level || diskMetaThought || desiredConfig.thought_level || null;
+  const resolvedMode = cfgSummary.mode || meta.config?.mode || desiredConfig.mode || null;
+
+  // 快读路径绝不阻塞等 400ms 探端口：已缓存则零等待读取，未缓存则用兜底上限表并后台异步预热
+  const liveLimits = fastSource === 'acp'
+    ? (peekAgyContextLimits(client) || await getAgyContextLimits(client, { timeoutMs: 400 }).catch(() => null))
+    : (peekAgyContextLimits(client) || (warmAgyContextLimits(client), null));
+  const rawUsage = history.usage || snapshot?.rawUsage || snapshot?.usage || diskRawUsage;
+  const resolvedUsage = resolveEffectiveContextUsage(rawUsage, {
+    model: resolvedModel || '',
+    thoughtLevel: resolvedThought || '',
     liveLimits,
   }) || snapshot?.usage || history.usage || null;
 
-  // 仅当真正走了 session/load 全量回放时才对齐监视器基线；走 hasAliveBackground 短路时
-  // syncDiskTail 已经把 syncedStep 对齐到 updates 实际含有的最后一步，不能再覆盖成最新磁盘步号，
-  // 否则 applyDesiredConfig 期间刚落盘的后台唤醒步骤会被吞掉。
+  // 仅当真正走了 session/load 全量回放时才对齐监视器基线；走内存 / 磁盘快读或 hasAliveBackground 短路时
+  // 不覆盖已有监视器进度，免得吞掉后台唤醒新步。
   if (!preservedAlive) {
     markSessionTranscriptSynced(ctx?.key, client, id);
   }
@@ -799,8 +962,18 @@ export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
     armSubagentMonitor(ctx, client, id, { pollNow: true });
   }
 
+  const detailFp = computeAgyDetailFingerprint({
+    source: fastSource,
+    sourceStamp: fastStamp,
+    meta,
+    cwd: effectiveWorkDir,
+    title: cachedTitleHint,
+    desiredConfig,
+  });
+
   return {
     sessionId: id,
+    fp: detailFp,
     cwd: verifiedCwd || rpcCwd || '',
     projectId: meta.projectId || null,
     title,
@@ -812,6 +985,8 @@ export async function loadAgySessionDetail(ctx, sessionId, { cwd = '' } = {}) {
     modes: snapshot?.modes || null,
     models: snapshot?.models || null,
     tier: snapshot?.tier || null,
-    ...cfgSummary,
+    model: resolvedModel,
+    thoughtLevel: resolvedThought,
+    mode: resolvedMode,
   };
 }

@@ -974,7 +974,7 @@ export function convertToProject(srcSid, text) {
 // 「切走/新聊天/发送」都推进这个代数，作废还在天上飞的 loadSession 网络刷新——
 // 慢返回不再覆盖用户已经切到的新内容。
 let loadGen = 0;
-export function bumpLoadGen() { loadGen++; }
+export function bumpLoadGen() { loadGen++; chat.opening = ''; }   // 作废在途加载 = 那一次「正在打开」也不算数了
 const sameSnapshot = (a, b) => { try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; } };
 
 // opts.before：只加载该服务端时间戳之前的消息——恢复"直播中的会话"时用，
@@ -1002,7 +1002,11 @@ export async function loadSession(id, opts) {
       shown = true;
       if (opts && opts.sync) requestSync('open-cached');
     }
+    // 本机没有这份缓存：网络回来之前没东西可换。先告诉界面「正在打开」（ClaudeStage 让旧内容淡掉、稍后出加载标记），
+    // 不然点了以后一两秒什么都不变、像没点上，然后整屏突然跳过去
+    chat.opening = shown ? '' : id;
   }
+  try {
   let msgs = null;
   let projId = null;
   try {
@@ -1043,6 +1047,10 @@ export async function loadSession(id, opts) {
   syncComposerDraftKey();
   rememberSession(id);
   ui.view = 'chat';
+  } finally {
+    // 不论换上了、失败了还是被别的切换作废了，这一次的「正在打开」都到此为止（别的会话的不动）
+    if (chat.opening === id) chat.opening = '';
+  }
 }
 
 // ---- 输入建议（官方 prompt suggestion）-------------------------------------------

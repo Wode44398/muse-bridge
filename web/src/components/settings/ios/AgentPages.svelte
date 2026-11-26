@@ -17,9 +17,11 @@
   import { accLabel, activateAccount, agentById, ags, apiKeyNote, hhmm, loadUsage, moveAccount, planPill, poolResetAt, poolResetIn, resetsLeft, routeLogSub, routeLogTitle, routeStrategies, routerStrategy, runningOn, savePolicy, setRouter, smartRouting, usageTone, whyText } from '../../../lib/agentSettings.svelte.js';
   import { cs } from '../../../lib/claudeSettings.svelte.js';
   import { hubSummaryText } from '../../../lib/modelHub.svelte.js';
-  import { loadPage } from '../../../modules/pages.js';
+  import { loadPage, resolvedPage } from '../../../modules/pages.js';
+  import { bodies, loadHubHome } from '../../../lib/settings/bodies.svelte.js';
   import { me, pluginOn, prefs, savePrefs } from '../../../lib/state.svelte.js';
   import { t, tc, tr } from '../../../lib/i18n.js';
+  import { swap } from '../../../lib/arrive.js';
 
   let { pid } = $props();
   const S = useSettings();
@@ -81,7 +83,12 @@
                 {#if ags.resetsOk && resetsLeft(ags.resets[a.id]) > 0}<span class="pill">{t('重置卡 {n}', { n: resetsLeft(ags.resets[a.id]) })}</span>{/if}
               </span>
               <span class="mini">
-                {#if !u}<span class="mini-na">{ags.usageBusy ? t('读取用量…') : (a.hasToken ? '…' + (a.tokenTail || '') : t('用本机登录态（~/.claude）'))}</span>
+                {#if !u && ags.usageBusy}
+                  <!-- 用量还在路上：先按到齐后的样子占好三格（同样的行高），回来只是数字填进去，整组不会被撑高一截 -->
+                  {#each [t('5 小时'), t('每周'), 'Fable'] as name (name)}
+                    <span class="mini-m pend" aria-hidden="true"><span class="mini-h">{name}<b>—</b></span><span class="mini-bar"><i style:width="0%"></i></span><span class="mini-r">&nbsp;</span></span>
+                  {/each}
+                {:else if !u}<span class="mini-na">{a.hasToken ? '…' + (a.tokenTail || '') : t('用本机登录态（~/.claude）')}</span>
                 {:else if u.error && !u.five_hour && !u.seven_day}<span class="mini-na err">{tr(u.error)}</span>
                 {:else}
                   {#each [['five_hour', t('5 小时')], ['seven_day', t('每周')], ['fable', 'Fable']] as [k, name] (k)}
@@ -417,6 +424,8 @@
   {:else if !dimReady()}
     {@render gfoot(t('读取中…'))}
   {:else}
+    <!-- 有上次的快照时进页就是这一支、不播；只有第一次用（先是「读取中…」）整页到了才原地淡入。下面没有别的内容可推，用不着 grow -->
+    <div class="dm-body" in:swap>
     <!-- 子 agent 调用策略（dimensio 那份）：同 Claude 页「对话」组里那一行——行按钮铺满整行、点了推入 'dm-dispatch'；开关压在上面 -->
     {@render ghead(t('子 agent 调度'))}
     <div class="ig">
@@ -533,6 +542,7 @@
     {/if}
 
     <p class="gfoot dm-ver">{versionLine()}</p>
+    </div>
   {/if}
 {/snippet}
 
@@ -596,17 +606,41 @@
   {@render agSwitch(id)}
   {#if id === 'dimensio'}{@render pDimensio()}
   {:else if id === 'agy' && agentById('agy')}{@render pAgy('ag-agy')}
+  {:else if id === 'codex'}{@render pCodex('ag-codex')}
   {:else if !agentById(id)}{@render gfoot(t('只有管理员能改这里'))}{/if}
 {/snippet}
 
-{#snippet pAgy(pageId)}
+<!-- Codex：'ag-codex' 与 'cx:*' 子页，正文归 codex 扩展（懒加载）。成员（agentById 为空）也进得来：正文只给他看自己的默认档与已归档的对话 -->
+<!-- 扩展的设置正文是懒加载的：代码已经取到（设置页挂上时空闲预取过，见 lib/settings/warm）就同帧直接挂，
+     页面推进来第一帧就是完整的；还没取到才经 {#await} 等 -->
+{#snippet codexBody(m, pageId)}
+  {@const a = agentById('codex')}
+  {@const CodexBody = m.default}
+  <CodexBody pid={pageId} enabled={!a || Boolean(a.switch && a.runnable)} push={S.codex.cxPush} pop={() => nav.pop()} openExt={(type) => nav.openExtType(type)} onModal={(v) => { S.codex.cxModal = Boolean(v); }} />
+{/snippet}
+{#snippet pCodex(pageId)}
+  {#if resolvedPage.codexIosSettings}{@render codexBody(resolvedPage.codexIosSettings, pageId)}
+  {:else}
+    {#await loadPage.codexIosSettings() then m}{@render codexBody(m, pageId)}
+    {:catch}
+      {@render gfoot(t('Codex 设置没加载出来：这台服务器可能没装 Codex 扩展。'))}
+    {/await}
+  {/if}
+{/snippet}
+
+{#snippet agyBody(m, pageId)}
   {@const a = agentById('agy')}
-  {#await loadPage.agyIosSettings() then m}
-    {@const AgyBody = m.default}
-    <AgyBody pid={pageId} enabled={Boolean(a && a.switch && a.runnable)} push={agy.agyPush} pop={() => nav.pop()} onModal={(v) => { agy.agyModal = Boolean(v); }} />
-  {:catch}
-    {@render gfoot(t('Antigravity 设置没加载出来：这台服务器可能没装 Antigravity 扩展。'))}
-  {/await}
+  {@const AgyBody = m.default}
+  <AgyBody pid={pageId} enabled={Boolean(a && a.switch && a.runnable)} push={agy.agyPush} pop={() => nav.pop()} onModal={(v) => { agy.agyModal = Boolean(v); }} />
+{/snippet}
+{#snippet pAgy(pageId)}
+  {#if resolvedPage.agyIosSettings}{@render agyBody(resolvedPage.agyIosSettings, pageId)}
+  {:else}
+    {#await loadPage.agyIosSettings() then m}{@render agyBody(m, pageId)}
+    {:catch}
+      {@render gfoot(t('Antigravity 设置没加载出来：这台服务器可能没装 Antigravity 扩展。'))}
+    {/await}
+  {/if}
 {/snippet}
 
 <!-- ─────────────── Media Studio 页（2026-11-04 接替 Gemini 页）───────────────
@@ -629,12 +663,17 @@
       {@render agErr()}
     {/if}
   {/if}
-  {#await loadPage.studioSettings() then m}
-    {@const StudioBody = m.default}
-    <StudioBody shell="ios" dark={S.dark} page={pid} push={st.stPush} agentIds={ag.studioIds.length ? ag.studioIds : null} onModal={(v) => { if (pid === 'studio') st.stModal = v; }} />
-  {:catch}
-    {@render gfoot(t('Media Studio 的设置没加载出来：这台服务器可能没装 Media Studio 扩展。'))}
-  {/await}
+  {#if resolvedPage.studioSettings}{@render studioBody(resolvedPage.studioSettings, pid)}
+  {:else}
+    {#await loadPage.studioSettings() then m}{@render studioBody(m, pid)}
+    {:catch}
+      {@render gfoot(t('Media Studio 的设置没加载出来：这台服务器可能没装 Media Studio 扩展。'))}
+    {/await}
+  {/if}
+{/snippet}
+{#snippet studioBody(m, pid)}
+  {@const StudioBody = m.default}
+  <StudioBody shell="ios" dark={S.dark} page={pid} push={st.stPush} agentIds={ag.studioIds.length ? ag.studioIds : null} onModal={(v) => { if (pid === 'studio') st.stModal = v; }} />
 {/snippet}
 
 <!-- 模型中心：头图（枢纽图标 + 名字 + 一行状态）归外壳，正文是 modelhub/HubHome 的 ios 版（懒加载，没打开设置的人不下这块代码）。
@@ -646,11 +685,14 @@
     <div class="hero-name">{t('模型中心')}</div>
     {#if sum}<div class="hero-sub">{sum}</div>{/if}
   </div>
-  {#await import('../../modelhub/HubHome.svelte') then m}
-    <m.default shell="ios" />
-  {:catch}
-    {@render gfoot(t('模型中心没加载出来：关掉设置再打开试试。'))}
-  {/await}
+  {#if bodies.hubHome}
+    {@const HubHome = bodies.hubHome}
+    <HubHome shell="ios" />
+  {:else}
+    {#await loadHubHome()}{:catch}
+      {@render gfoot(t('模型中心没加载出来：关掉设置再打开试试。'))}
+    {/await}
+  {/if}
 {/snippet}
 
 {#snippet pPolicy()}
@@ -694,6 +736,7 @@
 {:else if pid === 'policy'}{@render pPolicy()}
 {:else if pid === 'studio' || pid.startsWith('st:')}{@render pStudio(pid)}
 {:else if pid.startsWith('agy:')}{@render pAgy(pid)}
+{:else if pid.startsWith('cx:')}{@render pCodex(pid)}
 {:else if pid === 'ag-claude'}{@render pClaude()}
 {:else if DISPATCH_PAGES.includes(pid)}{@render pDispatch()}
 {:else if pid.startsWith('ag-')}{@render pAgent(pid.slice(3))}

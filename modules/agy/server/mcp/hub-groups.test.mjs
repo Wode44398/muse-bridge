@@ -109,16 +109,32 @@ test('清单预算：六组都挂上后中枢总量仍压在 8000 以内，大�
   hub._clearHubCacheForTest();
   const tools = await hub.listHubTools(ctx, {});
   const names = tools.map((t) => t.name);
-  for (const want of ['start_session', 'send_message', 'list_sessions', 'read_session', 'dismiss_task', 'phone_control', 'pr_status', 'pr_bind', 'pr_unbind', 'pr_sync_base', 'pr_set_monitor', 'pr_set_auto_merge', 'project_memory_read', 'project_memory_write', 'project_memory_delete']) {
+  // 拉取请求六样、项目记忆三样各合并成一个按 action 分派的工具（catalog.mjs），原名不再单独列出
+  for (const want of ['start_session', 'send_message', 'list_sessions', 'read_session', 'dismiss_task', 'phone_control', 'pr', 'project_memory']) {
     assert.ok(names.includes(want), `应列出 ${want}，实际：${names.join(' ')}`);
   }
+  for (const gone of ['pr_status', 'pr_bind', 'pr_set_auto_merge', 'project_memory_read', 'project_memory_delete']) assert.equal(names.includes(gone), false, gone);
+  const pr = tools.find((t) => t.name === 'pr');
+  assert.deepEqual(pr.inputSchema.properties.action.enum, ['status', 'bind', 'unbind', 'sync_base', 'set_monitor', 'set_auto_merge']);
+  // 成员的参数一个都不能少（agy 把 properties 当封闭表）
+  for (const k of ['url', 'base', 'abort', 'auto_fix', 'enabled', 'merge_method']) assert.ok(pr.inputSchema.properties[k], `pr 缺参数 ${k}`);
+  assert.deepEqual(pr.inputSchema.required, ['action']);
+  assert.deepEqual(tools.find((t) => t.name === 'project_memory').inputSchema.properties.action.enum, ['read', 'write', 'delete']);
   for (const n of names) assert.match(n, /^[a-z0-9_]+$/, n);
   const total = tools.reduce((a, t) => a + cost(t), 0);
   assert.ok(total < 8000, `中枢工具总量 ${total} 太大`);
-  const fresh = new Set(['start_session', 'send_message', 'list_sessions', 'read_session', 'dismiss_task', 'phone_control', 'pr_status', 'pr_bind', 'pr_unbind', 'pr_sync_base', 'pr_set_monitor', 'pr_set_auto_merge', 'project_memory_read', 'project_memory_write', 'project_memory_delete']);
+  const fresh = new Set(['start_session', 'send_message', 'list_sessions', 'read_session', 'dismiss_task', 'phone_control', 'pr', 'project_memory']);
   const added = tools.filter((t) => fresh.has(t.name)).reduce((a, t) => a + cost(t), 0);
   for (const t of tools) if (fresh.has(t.name)) assert.ok(cost(t) <= 600, `${t.name} 精简后还有 ${cost(t)}`);
-  assert.ok(added < 2500, `新增六组共 ${added}`);
+  assert.ok(added < 2000, `新增六组共 ${added}`);
+  // 合并工具的完整说明：按 action 分节给原工具的说明与参数
+  const prDocs = textOf(await hub.callHubTool(ctx, null, await hub.resolveHubTool(ctx, {}, 'tool_docs'), { name: 'pr' }));
+  assert.match(prDocs, /## action: "set_auto_merge"/);
+  assert.match(prDocs, /merge_method/);
+  // action 不认识：直接回错，不落到别的工具上
+  const bad = await hub.callHubTool(ctx, fakeGen('s-bad'), await hub.resolveHubTool(ctx, {}, 'project_memory'), { action: 'nuke', name: 'x.md' });
+  assert.equal(bad.isError, true);
+  assert.match(textOf(bad), /read \/ write \/ delete/);
   const phone = tools.find((t) => t.name === 'phone_control');
   assert.match(phone.description, /tool_docs/);
   assert.ok(phone.inputSchema.properties.action.enum.includes('send_sms'));
@@ -129,10 +145,30 @@ test('清单预算：六组都挂上后中枢总量仍压在 8000 以内，大�
   assert.ok(!/AskUserQuestion|mcp__/.test(textOf(docs)));
   // 关掉开关的组不列
   const off = (await hub.listHubTools(ctx, { bridgeTools: { sessions: false, phoneControl: false, pr: false, projectMemory: false } })).map((t) => t.name);
-  for (const n of ['start_session', 'phone_control', 'pr_status', 'project_memory_read']) assert.equal(off.includes(n), false, n);
+  for (const n of ['start_session', 'phone_control', 'pr', 'project_memory']) assert.equal(off.includes(n), false, n);
+  assert.equal(await hub.resolveHubTool(ctx, { bridgeTools: { pr: false } }, 'pr'), null);
   assert.match(hub.hubToolUnavailableReason(ctx, { bridgeTools: { phoneControl: false } }, 'phone_control'), /Bridge 工具 里打开/);
-  assert.match(hub.hubToolUnavailableReason(ctx, { bridgeTools: { pr: false } }, 'pr_status'), /Bridge 工具 里打开/);
+  assert.match(hub.hubToolUnavailableReason(ctx, { bridgeTools: { pr: false } }, 'pr'), /Bridge 工具 里打开/);
+  assert.match(hub.hubToolUnavailableReason(ctx, { bridgeTools: { projectMemory: false } }, 'project_memory'), /Bridge 工具 里打开/);
   assert.match(hub.hubToolUnavailableReason(ctx, { bridgeTools: { sessions: false } }, 'start_session'), /Bridge 工具 里打开/);
+});
+
+test('整份清单：本地工具与中枢工具一起精简、合并、夹进份额；手机文件合成 phone_files，tool_docs 也查得到本地工具', async () => {
+  hub._clearHubCacheForTest();
+  const { AGY_BRIDGE_SHARE, agyDeclUnits } = await import('./catalog.mjs');
+  const r = await hub.listAgyBridgeCatalog(ctx, {}, { categories: ['media', 'ui', 'phone', 'hub'] });
+  const localNames = r.local.map((t) => t.name);
+  assert.ok(localNames.includes('phone_files'), localNames.join(' '));
+  assert.equal(localNames.some((n) => /^phone_(list|read|write|scan|delete)$/.test(n)), false);
+  assert.deepEqual(r.withheld, []);
+  assert.ok(r.total <= AGY_BRIDGE_SHARE && r.total === [...r.local, ...r.hub].reduce((a, t) => a + agyDeclUnits(t), 0));
+  // 本地大工具也是精简版（以前只精简中枢工具，媒体工具原样进清单）
+  assert.match(r.local.find((t) => t.name === 'media_image').description, /tool_docs/);
+  const docs = textOf(await hub.callHubTool(ctx, null, await hub.resolveHubTool(ctx, {}, 'tool_docs'), { name: 'phone_files' }));
+  assert.match(docs, /## action: "delete"/);
+  assert.match(textOf(await hub.callHubTool(ctx, null, await hub.resolveHubTool(ctx, {}, 'tool_docs'), { name: 'media_image' })), /## 参数/);
+  // 只开中枢：本地一样都不列
+  assert.deepEqual((await hub.listAgyBridgeCatalog(ctx, {}, { categories: ['hub'] })).local, []);
 });
 
 test('审批口径：只看 / 只问的免卡；开会话、发消息、动手机、改 PR、远程连接器、插件写工具照常问；只认 name 字段', () => {
@@ -141,6 +177,12 @@ test('审批口径：只看 / 只问的免卡；开会话、发消息、动手�
   for (const n of ['start_session', 'send_message', 'pr_bind', 'pr_unbind', 'pr_sync_base', 'pr_set_monitor', 'pr_set_auto_merge', 'ext_github_create_issue', 'plugin_x_write']) assert.equal(allow(n), false, n);
   for (const a of ['devices', 'screen', 'recall', 'wait', 'confirm']) assert.equal(allow('phone_control', { action: a }), true, a);
   for (const a of ['tap', 'input', 'send_sms', 'call', 'open_app', 'clipboard_set', '']) assert.equal(allow('phone_control', { action: a }), false, a);
+  // 合并工具按 action 换回原工具判：口径与合并前一样，action 不认识就要审批
+  assert.equal(allow('pr', { action: 'status' }), true);
+  for (const a of ['bind', 'sync_base', 'set_auto_merge', 'nuke', '']) assert.equal(allow('pr', { action: a }), false, a);
+  for (const a of ['read', 'write', 'delete']) assert.equal(allow('project_memory', { action: a }), true, a);
+  for (const a of ['list', 'read', 'scan']) assert.equal(allow('phone_files', { action: a }), true, a);
+  for (const a of ['write', 'delete', '']) assert.equal(allow('phone_files', { action: a }), false, a);
   // 标题里带工具名不算
   assert.equal(bridgeToolAutoAllow({ name: '', title: 'Run mcp_bridge_list_sessions', args: {} }), false);
   assert.equal(bridgeToolAutoAllow({ name: 'mcp_bridge_1a2b3c4d_pr_status', args: {} }), false);
@@ -192,11 +234,16 @@ test('确认卡：照 agy 的提问卡格式发进这一轮、经 /api/agy/quest
     { type: 'permission', requestId: 'r2', toolCall: { name: 'mcp_bridge_pr_set_auto_merge', args: { enabled: true } } },
     { type: 'permission-resolved', requestId: 'r2', outcome: 'selected', optionId: 'reject_once' },
     { type: 'permission-resolved', requestId: 'r3', outcome: 'selected', optionId: 'allow_once', auto: true },
+    // 合并后的 pr 工具：审批卡上是 mcp_bridge_pr + action，按 action 认回原工具
+    { type: 'permission', requestId: 'r4', toolCall: { name: 'mcp_bridge_pr', args: { action: 'set_monitor', auto_fix: true } } },
+    { type: 'permission-resolved', requestId: 'r4', outcome: 'selected', optionId: 'allow_once' },
   ] });
   assert.equal(takeManualApproval(g2, 'phone_control', { action: 'call' }), false);
   assert.equal(takeManualApproval(g2, 'phone_control', { action: 'send_sms' }), true);
   assert.equal(takeManualApproval(g2, 'phone_control', { action: 'send_sms' }), false, '同一张审批只认一次');
   assert.equal(takeManualApproval(g2, 'pr_set_auto_merge', { enabled: true }), false);
+  assert.equal(takeManualApproval(g2, 'pr_set_auto_merge', { auto_fix: true }), false, '别的 action 不算');
+  assert.equal(takeManualApproval(g2, 'pr_set_monitor', { auto_fix: true }), true);
 });
 
 test('投递口：会话空闲时无头开一轮（标明是 bridge 转来的），在跑时排进它的队或回 busy', async () => {
@@ -287,9 +334,12 @@ test('项目记忆：按 agy 项目或规整后的目录给稳定 id，读写走
   if (process.platform === 'win32') assert.equal(a, b);
   assert.match(a, /^agy-cwd-[0-9a-f]{16}$/);
   const gen = fakeGen('sess-mem', { cwd: path.join(vaultDir, 'mem-proj') });
-  const w = await hub.callHubTool(ctx, gen, await hub.resolveHubTool(ctx, {}, 'project_memory_write'), { name: 'MEMORY.md', content: '- decisions.md — 定下的事' });
+  // agy 看到的是合并工具 project_memory，按 action 落到原工具
+  const target = await hub.resolveHubTool(ctx, {}, 'project_memory');
+  assert.ok(target?.family);
+  const w = await hub.callHubTool(ctx, gen, target, { action: 'write', name: 'MEMORY.md', content: '- decisions.md — 定下的事' });
   assert.match(textOf(w), /已写入/);
-  const rd = await hub.callHubTool(ctx, gen, await hub.resolveHubTool(ctx, {}, 'project_memory_read'), {});
+  const rd = await hub.callHubTool(ctx, gen, target, { action: 'read' });
   assert.match(textOf(rd), /定下的事/);
 });
 

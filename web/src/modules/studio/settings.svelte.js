@@ -16,8 +16,16 @@ import { t, tr, isEn } from '../../lib/i18n.js';
 import { providerLogo } from '../../lib/providerLogos.js';
 import { STUDIO_SETTINGS, STUDIO_SETTING_BY_KEY, STUDIO_SETTING_GROUPS, studioSettingDefaults, studioSettingVisible, isPersonal } from './settingsRegistry.js';
 import { KIND } from './icons.js';
+import { recall, remember, forget } from '../../lib/lastKnown.js';
 
 export { STUDIO_SETTINGS, STUDIO_SETTING_BY_KEY, STUDIO_SETTING_GROUPS };
+
+// 上次看到的服务列表 / 设置 / 目录（lib/lastKnown）：模块一求值就先灌进去，冷开推进设置页的第一帧就是上次的模型名与分组，
+// 网络回来原地换。没有它，默认模型那四行会「没有可用模型 → 已停用 → 模型名」被改写两次（设置先到、目录后到）。
+// 键表必须声明在下面的 $state 之前（模块求值时就要用）。
+const LK_P = 'studio.providers', LK_S = 'studio.settings', LK_C = 'studio.catalog';
+// 只有「这个入口真没了」才作废快照；断网、超时、5xx 留着上次的
+const gone = (e) => !!e && [401, 403, 404].includes(e.status);
 
 // —— 请求（dev fixture 分流）——
 const fixtureOn = () => { try { return localStorage.getItem('bridge-studio-fixture') === '1' || new URLSearchParams(location.search).has('studioFixture'); } catch { return false; } };
@@ -99,12 +107,18 @@ function adoptProviders(r) {
   sp.ok = true;
   sp.loaded = true;
 }
+// 快照只是「先画」用的：loaded 仍表示「这次网络拿到过」
+{ const s = recall(LK_P); if (s && typeof s === 'object') { adoptProviders(s); sp.loaded = false; } }
 
 export function loadProviders(force = false) {
   if (pLoading && !force) return pLoading;
   pLoading = call('GET', '/api/studio/providers')
-    .then((r) => { adoptProviders(r); sp.err = ''; })
-    .catch((e) => { sp.loaded = true; if (e && (e.status === 403 || e.status === 401)) sp.ok = false; else sp.err = msg(e); })
+    .then((r) => { adoptProviders(r); sp.err = ''; if (r && typeof r === 'object') remember(LK_P, r); })
+    .catch((e) => {
+      sp.loaded = true;
+      if (gone(e)) { forget(LK_P); sp.providers = []; sp.shared = []; sp.vertexImport = null; }
+      if (e && (e.status === 403 || e.status === 401)) sp.ok = false; else sp.err = msg(e);
+    })
     .finally(() => { pLoading = null; });
   return pLoading;
 }
@@ -246,9 +260,17 @@ function adoptSettings(r) {
   ss.canEditHost = !!r?.canEditHost;
   ss.loaded = true;
 }
+{ const s = recall(LK_S); if (s && typeof s === 'object') { adoptSettings(s); ss.loaded = false; } }
+// loaded = 这次网络有了结论（成了或败了）：默认模型那几行据此决定「还不知道」与「真没有」，失败也算有结论，免得永远停在占位
 export async function loadSettings() {
-  try { adoptSettings(await call('GET', '/api/studio/settings')); ss.err = ''; }
-  catch (e) { ss.err = msg(e); }
+  try {
+    const r = await call('GET', '/api/studio/settings');
+    adoptSettings(r); ss.err = '';
+    if (r && typeof r === 'object') remember(LK_S, r);
+  } catch (e) {
+    if (gone(e)) forget(LK_S);
+    ss.err = msg(e); ss.loaded = true;
+  }
 }
 /** 这一项改哪一层：管理员改主机（也是成员的默认）；成员只能改个人项。 */
 export const scopeOf = (key) => (ss.canEditHost ? 'host' : isPersonal(key) ? 'mine' : null);
@@ -271,7 +293,12 @@ export async function setSetting(key, value) {
   if (layer) layer.values = { ...layer.values, [key]: value === null ? STUDIO_SETTING_BY_KEY[key]?.default : value };
   if (value !== null) ss.effective = { ...ss.effective, [key]: value };
   ss.busy = key; ss.err = '';
-  try { adoptSettings(await post('/api/studio/settings', { scope, values: { [key]: value } })); return true; }
+  try {
+    const r = await post('/api/studio/settings', { scope, values: { [key]: value } });
+    adoptSettings(r);
+    if (r && typeof r === 'object') remember(LK_S, r);
+    return true;
+  }
   catch (e) { if (layer && prevLayer) layer.values = prevLayer; ss.effective = prevEff; ss.err = e.message || t('保存失败'); return false; }
   finally { ss.busy = ''; }
 }
@@ -303,13 +330,29 @@ export async function setDefault(kind, pick) {
 }
 
 // —— 模型目录（默认模型选择器用；成员拿到的是自己的 + 共享的）——
-export const cat = $state({ loaded: false, kinds: {}, err: '' });
+// 目录的快照只留设置页显示要的（服务、模型的 id / 显示名、各种类的自动值）：整份带参数表的有一百多 KB。
+// 快照灌进来时 loaded 仍是 false，要参数表的地方（服务编辑器）照旧会去拉整份。
+function slimCatalog(kinds) {
+  const out = {};
+  for (const [k, v] of Object.entries(kinds || {})) {
+    out[k] = {
+      defaults: v?.defaults || null,
+      groups: (v?.groups || []).map((g) => ({
+        provider: g.provider,
+        models: (g.models || []).map((m) => ({ key: m.key, id: m.id, label: m.label, kind: m.kind })),
+        shelf: (g.shelf || []).map((m) => ({ id: m.id, label: m.label })),
+      })),
+    };
+  }
+  return out;
+}
+export const cat = $state({ loaded: false, kinds: recall(LK_C) || {}, err: '' });
 let cLoading = null;
 export function loadCatalog(force = false) {
   if (cLoading && !force) return cLoading;
   cLoading = call('GET', '/api/studio/catalog')
-    .then((r) => { cat.kinds = r?.kinds || {}; cat.loaded = true; cat.err = ''; })
-    .catch((e) => { cat.loaded = true; cat.err = msg(e); })
+    .then((r) => { cat.kinds = r?.kinds || {}; cat.loaded = true; cat.err = ''; remember(LK_C, slimCatalog(cat.kinds)); })
+    .catch((e) => { if (gone(e)) { forget(LK_C); cat.kinds = {}; } cat.loaded = true; cat.err = msg(e); })
     .finally(() => { cLoading = null; });
   return cLoading;
 }

@@ -155,6 +155,8 @@ onQuestionSet((sid, entry) => {
   postNotice(entry.ownerKey, {
     kind: KIND_OF[sub] || 'question', sub, sessionId: sid,
     body: String(q.question || q.header || ''),
+    // 别的分页（Codex）登记的卡带着自己是谁：前端据此署名、判断人是不是正看着、点开去哪一页
+    agent: typeof entry.agent === 'string' ? entry.agent : '',
   });
 });
 

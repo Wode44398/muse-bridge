@@ -86,3 +86,11 @@ export function createAgy(S) {
   function agyPush(pid, title) { agyTitles[pid] = title; S.nav.push(pid); }
   return { get agyModal() { return agyModal; }, set agyModal(v) { agyModal = v; }, get agyTitles() { return agyTitles; }, agyPush };
 }
+
+export function createCodex(S) {
+  // 设置 › Codex（'ag-codex' 页 + 'cx:*' 子页；正文经懒加载入口挂载，子页标题由正文推入时给）
+  let cxModal = $state(false);
+  let cxTitles = $state({});
+  function cxPush(pid, title) { cxTitles[pid] = title; S.nav.push(pid); }
+  return { get cxModal() { return cxModal; }, set cxModal(v) { cxModal = v; }, get cxTitles() { return cxTitles; }, cxPush };
+}

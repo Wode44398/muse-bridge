@@ -77,26 +77,45 @@ async function settle(pg, cfg) {
   // 触摸仿真会在最后一个指针位置画一个灰色圆点：截图前把指针挪出视口
   try { await pg.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: cfg.w + 400, y: cfg.h + 400 }); } catch {}
   await pg.eval(`(async () => {
-    const imgs = [...document.images].filter((i) => !i.complete);
+    // 视口外的懒加载图（墙、素材架下面的格子）永远不会自己加载完，别等它们
+    const inView = (i) => { const r = i.getBoundingClientRect(); return r.width > 0 && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth; };
+    const imgs = [...document.images].filter((i) => !i.complete && (i.loading !== 'lazy' || inView(i)));
     await Promise.race([Promise.all(imgs.map((i) => new Promise((r) => { i.onload = i.onerror = r; }))), new Promise((r) => setTimeout(r, 1500))]);
     try { await document.fonts.ready; } catch {}
     // NOANIM 只清得掉 CSS 动画；Svelte 过渡走 Web Animations（Sheet 入场的弹簧），机器忙时量到半路——等有限时长的播完
     const runs = document.getAnimations().filter((a) => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming?.().endTime));
     await Promise.race([Promise.all(runs.map((a) => a.finished.catch(() => {}))), new Promise((r) => setTimeout(r, 1500))]);
+    // 机器忙时合成器会停一阵，入场动画（浮层的弹出）卡在第 0 帧走不动，截出来就是没有浮层：等不完的直接跳到终点
+    for (const a of runs) if (a.playState === 'running') { try { a.finish(); } catch {} }
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   })()`);
 }
 
-async function capture(pg) {
-  const r = await pg.send('Page.captureScreenshot', { format: 'jpeg', quality: 72, captureBeyondViewport: false }, 45000);
-  return Buffer.from(r.data, 'base64');
+// 一个 Edge 连跑几十个状态之后（墙上一屏真实大图、软件光栅化），captureScreenshot 常常干等一帧不来（2026-11-26 实测：几乎每张首拍都要等
+// 8～30 秒，单独重跑同一状态又是好的；挂一帧 translateZ(0) 逼它重新合成之后马上就拍得到）。所以每次拍之前先逼一次合成，再拍；
+// 还超时就再逼一次重拍
+const KICK = `(async () => { const de = document.documentElement; de.style.transform = 'translateZ(0)'; await new Promise((r) => setTimeout(r, 120)); de.style.transform = ''; await new Promise((r) => setTimeout(r, 200)); return 1; })()`;
+// before：逼完合成、拍之前要做的事（healthyShot 在这儿量 DOM 探针，探针和像素隔得越近越不会对不上）
+async function capture(pg, before = null) {
+  for (let i = 0; ; i++) {
+    try { await pg.eval(KICK, { timeout: 10000 }); } catch {}
+    if (before) await before();
+    try {
+      const r = await pg.send('Page.captureScreenshot', { format: 'jpeg', quality: 72, captureBeyondViewport: false }, [8000, 20000, 45000][i]);
+      return Buffer.from(r.data, 'base64');
+    } catch (e) {
+      if (i >= 2 || !/超时|timeout/i.test(String(e.message || e))) throw e;
+    }
+  }
 }
 async function shot(pg, file) { writeFileSync(file, await capture(pg)); }
 
 /** 截图并核对健全性（shotcheck.mjs）：截出来的和 DOM 对不上就强制重新合成再拍，最多再拍两次；
  *  返回 { buf, check, retries, history, probes }——history 记下每次没过的原因，重拍好了也留痕。 */
 async function healthyShot(pg) {
-  const probes = await pg.eval(`__qaShotProbes()`);
+  // 探针每次拍之前现量：浮层在首拍前后还可能被自己的 ResizeObserver 挪一下（机器忙时尤其），拿旧探针去对新像素，三次都「对不上」
+  let probes = null;
+  const probe = async () => { probes = await pg.eval(`__qaShotProbes()`); };
   const history = [], failed = [];
   let buf = null, check = null;
   for (let i = 0; i < 3; i++) {
@@ -104,7 +123,7 @@ async function healthyShot(pg) {
       // 强制整页重新合成：根元素挂一帧 translateZ(0) 再撤掉，等两帧
       await pg.eval(`(async () => { const de = document.documentElement; de.style.transform = 'translateZ(0)'; await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); de.style.transform = ''; await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); await new Promise((r) => setTimeout(r, 300)); return 1; })()`);
     }
-    buf = await capture(pg);
+    buf = await capture(pg, probe);
     check = await checkShot(buf, probes);
     if (!check || check.ok) return { buf, check, retries: i, history, probes, failed };
     history.push(check.problems.slice(0, 4));
@@ -123,9 +142,12 @@ async function boot(pg, cfg) {
   await pg.send('Page.navigate', { url: u.href });
   await pg.eval(`(async () => { for (let i = 0; i < 200; i++) { if (document.readyState === 'complete' && !document.documentElement.hasAttribute('data-boot') && document.querySelector('#app *, body > div *')) return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()`, { timeout: 30000 });
   await sleep(800);
-  await pg.eval(`(async () => { await __qa.init(); __qa.st.ui.screen = 'studio'; await __qa.until(() => document.querySelector('.studio-root .sd-page.on'), 15000, 'Studio 外壳'); await __qa.until(() => __qa.m.studio.catalog, 15000, '模型目录'); return true; })()`, { timeout: 40000 });
+  await pg.eval(`(async () => { await __qa.init(); return true; })()`, { timeout: 60000 });
   await sleep(600);
 }
+
+// 一个状态跑了 9 秒以上：把各段用时打出来（布置 / 等停稳 / 检测 / 截图），好找卡在哪
+const slow = (rec) => (rec.ms > 9000 && rec.timing ? '（慢：' + Object.entries(rec.timing).map(([k, v]) => k + ' ' + (v / 1000).toFixed(1) + 's').join('，') + '）' : '');
 
 async function runConfig(cfg, out) {
   const edge = await launchEdge();
@@ -146,11 +168,16 @@ async function runConfig(cfg, out) {
       try {
         if (sc.metrics) { await emulate(pg, cfg, { h: sc.metrics.height ?? cfg.h }); await pg.eval(`document.documentElement.style.setProperty('--sab', '${sc.metrics.sab ?? cfg.sab}px')`); await sleep(500); }
         await pg.eval(`(async () => { ${sc.run}\n return true; })()`, { timeout: 30000 });
+        const tRun = Date.now();
         await settle(pg, cfg);
+        const tSettle = Date.now();
         rec.issues = await pg.eval(`__qaDetect({ touch: ${!!cfg.touch} })`);
+        rec.timing = { run: tRun - t0, settle: tSettle - tRun, detect: Date.now() - tSettle };
         if (SHOTS) {
           const base = path.join(out, sc.id);
+          const tShot = Date.now();
           const hs = await healthyShot(pg);
+          rec.timing.shot = Date.now() - tShot;
           writeFileSync(base + '.jpg', hs.buf);
           hs.failed.forEach((b, k) => writeFileSync(base + '.shotfail-' + (k + 1) + '.jpg', b));
           rec.dom = hs.probes?.dom;
@@ -174,7 +201,7 @@ async function runConfig(cfg, out) {
       results.push(rec);
       const n = rec.issues.length;
       const retry = rec.shot?.retries ? `（截图首拍坏，重拍 ${rec.shot.retries} 次${rec.shot.ok ? '后正常' : '仍坏'}）` : '';
-      process.stdout.write(`  ${cfg.id} ${sc.id.padEnd(22)} ${rec.error ? '出错：' + rec.error.slice(0, 90) : n ? n + ' 个问题' : '0'}${retry}\n`);
+      process.stdout.write(`  ${cfg.id} ${sc.id.padEnd(22)} ${rec.error ? '出错：' + rec.error.slice(0, 90) : n ? n + ' 个问题' : '0'}${retry}${slow(rec)}\n`);
     }
   } finally {
     await edge.close();

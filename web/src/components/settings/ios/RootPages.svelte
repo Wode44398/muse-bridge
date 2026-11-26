@@ -18,6 +18,7 @@
   import { panelTitle, pluginPanels } from '../../../lib/pluginPanels.svelte.js';
   import { t, tc, tr } from '../../../lib/i18n.js';
   import { updateInfo } from '../../../lib/updateStore.svelte.js';
+  import { grow, swap } from '../../../lib/arrive.js';
 
   let { pid } = $props();
   const S = useSettings();
@@ -100,22 +101,24 @@
   <!-- Agent：每个 agent 一行、各自一页（开关与认证 + 它自己的设置） -->
   {@render ghead(tc('settings', 'Agent'))}
   <div class="ig">
+    <!-- 根页的行与分组都挂 grow：设置打开时已经知道的跟着页面一起出现（局部过渡不播），之后才到的（冷开没有快照时的回包、
+         开关拨了多出 / 少掉的一行）平滑长出来、把下面推开，而不是一帧跳下去。行尾短状态换了就原地淡入新的 -->
     {#each ag.agentRows as a (a.id)}
-      <button class="r" class:on={nav.cur === (a.id === 'studio' ? 'studio' : 'ag-' + a.id)} type="button" onclick={() => nav.go(a.id === 'studio' ? 'studio' : 'ag-' + a.id)}>
+      <button class="r" class:on={nav.cur === (a.id === 'studio' ? 'studio' : 'ag-' + a.id)} type="button" onclick={() => nav.go(a.id === 'studio' ? 'studio' : 'ag-' + a.id)} in:grow out:grow>
         {@render agMark(a.id)}
-        <span class="r-main" class:dim={!a.local && !a.enabled}><span class="r-tx">{a.label}</span><span class="r-d" class:warn={!a.local && a.enabled && !a.authed && a.id !== 'studio'}>{ag.agTail(a)}</span>{@render chev()}</span>
+        <span class="r-main" class:dim={!a.local && !a.enabled}><span class="r-tx">{a.label}</span>{#key ag.agTail(a)}<span class="r-d" class:warn={!a.local && a.enabled && !a.authed && a.id !== 'studio'} in:swap>{ag.agTail(a)}</span>{/key}{@render chev()}</span>
       </button>
     {/each}
     <!-- 模型中心：模型从哪来、分给哪些 agent，一处管——排在各 agent 之后、「Agent 接入」之前（同桌面设置的侧栏）。
          管理员看总览，能自定义 API 的成员看自己那份；两份数据都没有就不出这一行 -->
     {#if S.hub.on}
-      <button class="r" class:on={nav.cur === 'model-hub'} type="button" onclick={() => nav.go('model-hub')}>
+      <button class="r" class:on={nav.cur === 'model-hub'} type="button" onclick={() => nav.go('model-hub')} transition:grow>
         {@render ico('modelhub')}
         <span class="r-main"><span class="r-tx">{t('模型中心')}</span>{@render chev()}</span>
       </button>
     {/if}
     {#if dev.hasDevices && pluginOn('agent-api')}
-      <button class="r" class:on={nav.cur === 'agentapi'} type="button" onclick={() => nav.go('agentapi')}>
+      <button class="r" class:on={nav.cur === 'agentapi'} type="button" onclick={() => nav.go('agentapi')} transition:grow>
         {@render ico('agentapi')}
         <span class="r-main"><span class="r-tx">{t('Agent 接入')}</span>{@render chev()}</span>
       </button>
@@ -123,38 +126,42 @@
   </div>
 
   {#if pluginPanels.list.length}
+    <div class="grp" transition:grow>
     {@render ghead(t('插件'))}
     <div class="ig">
       {#each pluginPanels.list as pp (pp.id)}
-        <button class="r" class:on={nav.cur === 'plg-' + pp.id} type="button" onclick={() => nav.openPlg(pp)}>
+        <button class="r" class:on={nav.cur === 'plg-' + pp.id} type="button" onclick={() => nav.openPlg(pp)} in:grow out:grow>
           {@render ico('extensions')}
           <span class="r-main"><span class="r-tx">{panelTitle(pp)}</span>{@render chev()}</span>
         </button>
       {/each}
     </div>
+    </div>
   {/if}
 
   {#if S.ext.ok || (ags.policyOk && ags.multiUser) || S.srvAdmin.ok}
+    <div class="grp" transition:grow>
     {@render ghead(S.ext.member ? t('个性化') : t('服务器'))}
     <div class="ig">
       {#if S.ext.ok}
-        <button class="r" class:on={nav.cur === 'extensions'} type="button" onclick={() => nav.go('extensions')}>
+        <button class="r" class:on={nav.cur === 'extensions'} type="button" onclick={() => nav.go('extensions')} transition:grow>
           {@render ico('extensions')}
           <span class="r-main"><span class="r-tx">{t('扩展')}</span>{#if me.pluginUpdates}<span class="r-d accent">{t('{n} 个插件有更新', { n: me.pluginUpdates })}</span>{/if}{@render chev()}</span>
         </button>
       {/if}
       {#if ags.policyOk && ags.multiUser}
-        <button class="r" class:on={nav.cur === 'policy'} type="button" onclick={() => nav.go('policy')}>
+        <button class="r" class:on={nav.cur === 'policy'} type="button" onclick={() => nav.go('policy')} transition:grow>
           {@render ico('policy')}
           <span class="r-main"><span class="r-tx">{t('额度与注册')}</span><span class="r-d">{ags.regOpen ? t('开放注册') : t('注册已关')}</span>{@render chev()}</span>
         </button>
       {/if}
       {#if S.srvAdmin.ok}
-        <button class="r" type="button" onclick={() => { ui.serverAdminOpen = true; }}>
+        <button class="r" type="button" onclick={() => { ui.serverAdminOpen = true; }} transition:grow>
           {@render ico('server')}
           <span class="r-main"><span class="r-tx">{t('服务端控制台')}</span><span class="live-dot" aria-hidden="true"></span>{@render chev()}</span>
         </button>
       {/if}
+    </div>
     </div>
   {/if}
 
@@ -197,6 +204,7 @@
   </div>
 
   {#if dev.phoneRow || dev.devRow}
+    <div class="grp" transition:grow>
     <!-- 小标题只给「手机操控」那种这台机器自己的能力；只剩账号级的「设备」一行时不挂标题 -->
     {#if dev.phoneRow}{@render ghead(t('这台设备'))}{/if}
     <div class="ig">
@@ -209,9 +217,10 @@
       {#if dev.devRow}
         <button class="r" class:on={nav.cur === 'devices'} type="button" onclick={dev.openDevices}>
           {@render ico('localpc')}
-          <span class="r-main"><span class="r-tx">{t('设备')}</span><span class="r-d">{dev.dvOnline ? t('{n} 台在线', { n: dev.dvOnline }) : ''}</span>{@render chev()}</span>
+          <span class="r-main"><span class="r-tx">{t('设备')}</span>{#key dev.dvOnline}<span class="r-d" in:swap>{dev.dvOnline ? t('{n} 台在线', { n: dev.dvOnline }) : ''}</span>{/key}{@render chev()}</span>
         </button>
       {/if}
+    </div>
     </div>
   {/if}
 

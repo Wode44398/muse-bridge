@@ -31,6 +31,8 @@ writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
 const js = compileModule(readFileSync(join(here, 'modelHub.svelte.js'), 'utf8'), { filename: 'modelHub.svelte.js', generate: 'client' }).js.code;
 writeFileSync(join(dir, 'lib', 'modelHub.svelte.js'), fixImports(js));
 // 桩：api 的应答 / 报错由测试现配（globalThis.__hubApi）；身份现读 globalThis.__me
+// lib/lastKnown（上次的快照）：测试里不读也不写，每次都从空状态起
+writeFileSync(join(dir, 'lib', 'lastKnown.js'), 'export const recall = () => undefined; export const remember = () => {}; export const forget = () => {};');
 writeFileSync(join(dir, 'lib', 'api.js'), `export const calls = [];
 export const api = {
   async get(u) { calls.push(['GET', u]); return globalThis.__hubApi.get(u); },

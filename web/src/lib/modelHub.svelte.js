@@ -11,7 +11,9 @@ import { me } from './state.svelte.js';
 import { cpSummaryText } from './claudeProviders.svelte.js';
 import { openSettingsFromChat } from './settingsNav.svelte.js';
 import { t, tr } from './i18n.js';
+import { recall, remember } from './lastKnown.js';
 
+const HUB_KEYS = ['ok', 'v2', 'studioErr', 'vertex', 'services', 'claude', 'dimensio', 'studio', 'plugins', 'claudeGemini', 'codexHub', 'prefs', 'builtins'];
 export const hub = $state({
   ok: false,        // 拿到过总览（= 当前身份是管理员、服务端有这个功能）：设置入口与管理员视图看它
   v2: false,        // 服务端是 v2（有识别 / 目录 / 按模型分去向）。ok 而非 v2 = 新前端连着老服务端：只能看、启停，见 hubLegacy()
@@ -28,7 +30,15 @@ export const hub = $state({
   codexHub: false, // 服务端的 codex 能用模型中心的文本模型（总览带 codexHub: true）；false = 不出 Codex 去向
   prefs: null,      // 模型中心的开关 { agentMediaConfig }；null = 老服务端没有（界面不出这一组）
   builtins: null,   // Studio 的内置媒体服务（Vertex / 本机）：[{ id, name, dialect, enabled, shared, models:[{ id, label, kind, enabled }] }]；null = 没开 Studio / 老服务端
+  // 上次拉到的总览（lib/lastKnown）：冷开设置时根页就有「模型中心」这一行，进来第一帧就是整张列表
+  ...hubSnap(recall('hub')),
 });
+function hubSnap(o) {
+  if (!o || typeof o !== 'object' || !o.ok) return {};
+  const r = {};
+  for (const k of HUB_KEYS) if (k in o) r[k] = o[k];
+  return r;
+}
 
 /**
  * 当前打开的浮层（HubOverlays 按它渲染；null = 没开）：
@@ -122,6 +132,7 @@ function adopt(r) {
   hub.v2 = r.v >= 2 || 'studio' in r;
   hub.studioErr = typeof r.studioErr === 'string' ? r.studioErr : '';
   hub.ok = true;
+  remember('hub', hubSnap(hub));
 }
 
 let pending = null;
@@ -140,7 +151,7 @@ export function loadHub(force = false) {
   pending = api.get('/api/model-hub')
     .then((r) => { adopt(r || {}); hub.err = ''; })
     // 401 / 403 / 404 = 没有这个入口了（换了身份、换了服务器）：上一次留下的报错也一并清掉，别让界面停在一条过期的错误上
-    .catch((e) => { if (e && [401, 403, 404].includes(e.status)) { hub.ok = false; hub.err = ''; } else hub.err = human(e); })
+    .catch((e) => { if (e && [401, 403, 404].includes(e.status)) { hub.ok = false; hub.err = ''; remember('hub', null); } else hub.err = human(e); })
     .finally(() => { hub.loading = false; pending = null; });
   return pending;
 }

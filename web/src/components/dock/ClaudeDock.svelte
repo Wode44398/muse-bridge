@@ -46,7 +46,7 @@
     const ch = new BroadcastChannel(DOCK_CHANNEL);
     ch.onmessage = (e) => {
       const d = e.data;
-      if (d?.t === 'back' && d.view && tools.some((x) => x.key === d.view)) { claudeHost.open(d.view); try { window.focus(); } catch {} }
+      if (d?.t === 'back' && d.view && (d.agent || 'claude') === 'claude' && tools.some((x) => x.key === d.view)) { claudeHost.open(d.view); try { window.focus(); } catch {} }
     };
     return () => ch.close();
   });

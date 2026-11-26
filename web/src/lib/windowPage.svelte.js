@@ -51,7 +51,7 @@ export function pageTitleFor(key, fallback = '') {
   const k = normalizePageKey(key);
   switch (k) {
     case 'claude': return 'Claude';
-    case 'chatgpt': return 'ChatGPT';
+    case 'chatgpt': return 'Codex';
     case 'agy': return 'Antigravity';
     case 'harness': return 'dimensio';
     case 'studio': return 'Media Studio';

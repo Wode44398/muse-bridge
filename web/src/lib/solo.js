@@ -11,14 +11,25 @@
 // 卡片窗口没有会话（新对话还没落 id）时 solo 填 NO_SESSION：桌面壳开窗只认合法的 solo 参数。
 export const NO_SESSION = 'nosession';
 const CARD_KEYS = ['tasks', 'review', 'term', 'browser', 'files', 'memory'];
+// 别的 agent 分页的卡片窗口（&agent=）：只放共用卡（专属卡读的是那一页的会话状态，卡片窗口里没有）
+export const AGENT_CARD_KEYS = {
+  codex: ['review', 'term', 'browser', 'files'],
+  agy: ['files', 'term', 'browser'],
+  dimensio: ['files', 'memory', 'term', 'browser'],
+};
 function parse() {
   try {
     if (!/\/solo\.html$/.test(location.pathname)) return null;
     const q = new URLSearchParams(location.search);
     const id = q.get('solo') || '';
     if (!/^[0-9a-zA-Z-]{8,80}$/.test(id)) return null;
-    const card = CARD_KEYS.includes(q.get('card')) ? q.get('card') : '';
-    return { id: id === NO_SESSION ? '' : id, pane: !card && q.get('pane') === '1', card, ws: card ? (q.get('ws') || '') : '' };
+    const agent = AGENT_CARD_KEYS[q.get('agent')] ? q.get('agent') : 'claude';
+    const keys = agent === 'claude' ? CARD_KEYS : AGENT_CARD_KEYS[agent];
+    const card = keys.includes(q.get('card')) ? q.get('card') : '';
+    const sid = card ? (q.get('sid') || '').slice(0, 120) : '';
+    const theme = card && /^(light|dark)$/.test(q.get('th') || '') ? q.get('th') : '';
+    return { id: id === NO_SESSION ? '' : id, pane: !card && q.get('pane') === '1', card, ws: card ? (q.get('ws') || '') : '',
+      agent: card ? agent : 'claude', sid, theme };
   } catch { return null; }
 }
 const SOLO = parse();
@@ -28,13 +39,38 @@ export const SOLO_ID = SOLO ? SOLO.id : '';
 export const IS_PANE = !!(SOLO && SOLO.pane);
 export const SOLO_CARD = SOLO ? SOLO.card : '';
 export const SOLO_WS = SOLO ? SOLO.ws : '';
+// 卡片窗口来自哪一页（claude / codex / agy / dimensio）、那一页的会话（浏览器按会话分份）、拖出时的明暗
+export const SOLO_AGENT = SOLO ? SOLO.agent : 'claude';
+export const SOLO_SID = SOLO ? SOLO.sid : '';
+export const SOLO_THEME = SOLO ? SOLO.theme : '';
 
-// 只放工作台一张卡的窗口地址（见上「卡片窗口」）。
-export function cardUrl(view, { id = '', ws = '' } = {}) {
+// 只放工作台一张卡的窗口地址（见上「卡片窗口」）。agent 缺省 = Claude 分页。
+export function cardUrl(view, { id = '', ws = '', agent = '', sid = '', theme = '' } = {}) {
   const u = new URL(soloUrl(id || NO_SESSION));
   u.searchParams.set('card', view);
   if (ws) u.searchParams.set('ws', ws);
+  if (agent && agent !== 'claude') u.searchParams.set('agent', agent);
+  if (sid) u.searchParams.set('sid', sid);
+  if (theme) u.searchParams.set('th', theme);
   return u.toString();
+}
+
+// 非 Claude 分页的「拖出 app」：popOut 给 Workbench、监听卡片窗口的「放回工作台」。
+// 只有共用卡能拖出去；同一张卡、同一家、同一个工作空间再拖一次 = 聚焦已开的那扇。
+export function agentPopOut(agent, getState, theme = () => '') {
+  const keys = AGENT_CARD_KEYS[agent] || [];
+  return {
+    ok: (v) => keys.includes(v),
+    url: (v) => { const st = getState(); return cardUrl(v, { ws: st.ws, agent, sid: st.sessionId || '', theme: theme() }); },
+    key: (v) => `card:${agent}:${v}:${getState().ws}`,
+  };
+}
+// 主窗口一侧：收「放回工作台」（{ t:'back', agent, view, ws }）→ 把这张卡摆回来。返回解除函数。
+export function listenCardBack(agent, onBack) {
+  if (IS_SOLO || typeof BroadcastChannel === 'undefined') return () => {};
+  const ch = new BroadcastChannel(DOCK_CHANNEL);
+  ch.onmessage = (e) => { const d = e.data; if (d?.t === 'back' && d.view && (d.agent || 'claude') === agent) onBack(d.view, d.ws || ''); };
+  return () => ch.close();
 }
 
 // 卡片窗口 ⇄ 主窗口（同源各窗口之间）：卡片窗口点「放回工作台」→ { t:'back', view, ws }，

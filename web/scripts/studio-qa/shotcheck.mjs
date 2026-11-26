@@ -20,7 +20,7 @@ window.__qaShotProbes = function () {
   const visible = (el) => { for (let e = el; e && e.nodeType === 1; e = e.parentElement) { const s = getComputedStyle(e); if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) < 0.999 || e.hasAttribute('inert')) return false; if (s.filter !== 'none' || s.mixBlendMode !== 'normal') return false; } return true; };
   const R = (r) => ({ x: r.left, y: r.top, w: r.width, h: r.height });
   const solids = [];
-  const CAND = '.studio-root .cp-send, .studio-root .cp, .studio-root .pl-panel, .studio-root .pl-model, .studio-root .sd-band, .studio-root .cv-row, .studio-root .fc-audio, .studio-root .ch-bubble, .studio-root .sh-panel, .sst .ig, .sst .ivc, .sh-body, .ly-pop, .studio-root .pv, button, [role=button]';
+  const CAND = '.studio-root .cp-send, .studio-root .cp, .studio-root .pl-panel, .studio-root .pl-model, .studio-root .sd-band, .studio-root .cf-tray, .studio-root .sw-arow, .studio-root .sw-err, .studio-root .sh-panel, .sst .ig, .sst .ivc, .sh-body, .ly-pop, .studio-root .pv, button, [role=button]';
   for (const el of document.querySelectorAll(CAND)) {
     if (solids.length >= 14) break;
     const r = el.getBoundingClientRect();
@@ -62,7 +62,7 @@ window.__qaShotProbes = function () {
     if (rc.top < 40 || rc.bottom > innerHeight - 40) continue;
     texts.push({ t: t.slice(0, 12), rect: R(rc) });
   }
-  const topEl = document.querySelector('.studio-root .sd-top');
+  const topEl = document.querySelector('.studio-root .sd-cbar');
   let tr = topEl && topEl.getBoundingClientRect();
   // 顶栏得真露在最上层（sheet 的遮罩、抽屉盖着时它那一条不能拿来比平铺）
   if (tr) { const h = document.elementFromPoint(tr.left + tr.width / 2, tr.bottom - 8); if (!h || !topEl.contains(h)) tr = null; }
@@ -73,7 +73,7 @@ window.__qaShotProbes = function () {
     dpr, vw: innerWidth, vh: innerHeight,
     top: tr && tr.height > 20 ? R(tr) : null,
     solids, texts,
-    dom: { page: page && page.getAttribute('aria-label'), composer: rr(q('.cp')), field: rr(q('.cp-field')), canvas: rr(q('.cf-scroll')), emptyTitle: rr(q('.em h3')), chips: rr(q('.cf-chips')) },
+    dom: { page: page && page.getAttribute('aria-label'), composer: rr(q('.cp')), field: rr(q('.cp-field')), canvas: rr(q('.cf-canvas')), dock: rr(q('.cf-dock')), tray: rr(q('.cf-tray')), focus: rr(q('.sf-media')), wallH: q('.sw-wall') ? q('.sw-wall').offsetHeight : null, tiles: page ? page.querySelectorAll('.sw-tile, .sw-arow').length : 0, layers: document.querySelectorAll('.studio-root .pv, .studio-root .sh').length },
   };
 };
 `;

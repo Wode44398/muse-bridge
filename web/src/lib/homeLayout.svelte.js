@@ -10,7 +10,7 @@ import { arrangeHome, moveKey, setHidden, normalizeLayout, moreBadge, HOME_CAP }
 
 const BASE = import.meta.env.BASE_URL;
 
-export const BUILTIN_HOME = [{ key: 'claude', label: 'Claude' }, { key: 'chatgpt', label: 'ChatGPT' },
+export const BUILTIN_HOME = [{ key: 'claude', label: 'Claude' }, { key: 'chatgpt', label: 'Codex' },
   { key: 'agy', label: 'Antigravity' }, { key: 'harness', label: 'dimensio' }, { key: 'studio', label: 'Media Studio' }];
 
 /**
@@ -20,7 +20,7 @@ export const BUILTIN_HOME = [{ key: 'claude', label: 'Claude' }, { key: 'chatgpt
 export function builtinHomeIcon(key, { light, taskDone = false } = {}) {
   if (key === 'claude') return taskDone ? mascotFlag : mascotStand;
   if (key === 'agy') return `${BASE}assets/icons/antigravity.svg`;   // 只有一枚，深浅主页共用
-  const name = key === 'harness' ? 'dimensio' : key;
+  const name = key === 'harness' ? 'dimensio' : key === 'chatgpt' ? 'codex' : key;
   return `${BASE}assets/icons/${name}-${light ? 'dark' : 'light'}.svg`;
 }
 
@@ -33,7 +33,7 @@ export function builtinHomeIcon(key, { light, taskDone = false } = {}) {
 // 数是用 sharp 把每张图栅格化量出来的（墨迹边界与重心），换了图标素材要重量，别凭眼睛改。
 const ICON_FIT = {
   claude:  { k: .563, y: -.067 },
-  chatgpt: { k: .555 },
+  chatgpt: { k: .56 },     // Codex 线稿云朵：墨迹 85×85、覆盖 17%，比实心的标略放一点
   agy:     { k: .495, y: .008 },
   harness: { k: .55, y: .016 },
   studio:  { k: .55, y: .016 },

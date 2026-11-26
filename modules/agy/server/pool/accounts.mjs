@@ -45,8 +45,9 @@ export function effectivePlan(acct) {
 const PLAN_RANK = { ultra: 3, pro: 2, free: 1, '': 0 };
 
 function cleanAccount(raw) {
-  const token = String(raw?.refreshToken || '').trim();
-  const source = raw?.source === 'oauth' || token ? 'oauth' : 'local';
+  const isSlot = raw?.source === 'slot';
+  const token = isSlot ? '' : String(raw?.refreshToken || '').trim();
+  const source = isSlot ? 'slot' : (raw?.source === 'oauth' || token ? 'oauth' : 'local');
   return {
     id: String(raw?.id || newId()),
     label: String(raw?.label || '').trim() || '默认账号',
@@ -105,7 +106,7 @@ function safeView(a) {
     label: a.label,
     active: a.id === activeId,
     source: a.source,
-    hasToken: !!a.refreshToken,
+    hasToken: !!a.refreshToken || a.source === 'slot',
     tokenTail: a.refreshToken ? a.refreshToken.slice(-6) : '',
     email: a.email,
     plan: a.plan,
@@ -146,7 +147,7 @@ export function localAccountId() {
 }
 
 export function hasNonLocalAccounts() {
-  return accounts.some((a) => !!a.refreshToken);
+  return accounts.some((a) => !!a.refreshToken || a.source === 'slot');
 }
 
 // 供宿主拉取模型目录（fetchAvailableModels）时选档位最高的号，避免低档号把高档模型从列表里隐藏掉。
@@ -174,6 +175,7 @@ export function setActive(id) {
 
 export function addAccount({
   label = '',
+  source = 'oauth',
   refreshToken = '',
   email = '',
   project = '',
@@ -182,14 +184,16 @@ export function addAccount({
   plan = '',
   autoActivateIfOnlyEmptyLocal = false,
 } = {}) {
-  const tok = String(refreshToken || '').trim();
-  if (!tok) return { error: 'Refresh Token 不能为空' };
+  const isSlot = source === 'slot';
+  const tok = isSlot ? '' : String(refreshToken || '').trim();
+  if (!isSlot && !tok) return { error: 'Refresh Token 不能为空' };
 
   const cleanEmail = String(email || '').trim();
-  // 同邮箱的 OAuth 号已存在时原地更新令牌，避免重复登录造出两个同邮箱条目。
+  // 同邮箱的池内号已存在时原地更新凭据，避免重复登录造出两个同邮箱条目。
   if (cleanEmail) {
-    const dup = accounts.find((a) => a.source === 'oauth' && a.email && a.email.toLowerCase() === cleanEmail.toLowerCase());
+    const dup = accounts.find((a) => a.source !== 'local' && a.email && a.email.toLowerCase() === cleanEmail.toLowerCase());
     if (dup) {
+      dup.source = isSlot ? 'slot' : 'oauth';
       dup.refreshToken = tok;
       if (label && String(label).trim()) dup.label = String(label).trim();
       if (project) dup.project = String(project).trim();
@@ -205,7 +209,7 @@ export function addAccount({
   const entry = cleanAccount({
     id: newId(),
     label: String(label || '').trim() || defaultName,
-    source: 'oauth',
+    source: isSlot ? 'slot' : 'oauth',
     email: cleanEmail,
     project: String(project || '').trim(),
     tierId: String(tierId || '').trim(),
@@ -228,11 +232,14 @@ export function addAccount({
   return { ok: true, id: entry.id, activated, account: safeView(entry) };
 }
 
-export function updateAccount(id, { label, refreshToken, email, project, tierId, tierName, plan } = {}) {
+export function updateAccount(id, { label, source, refreshToken, email, project, tierId, tierName, plan } = {}) {
   const a = accounts.find((x) => x.id === id);
   if (!a) return { error: '无此账号' };
   if (typeof label === 'string' && label.trim()) a.label = label.trim().slice(0, 60);
-  if (typeof refreshToken === 'string' && refreshToken.trim()) {
+  if (source === 'slot') {
+    a.source = 'slot';
+    a.refreshToken = '';
+  } else if (typeof refreshToken === 'string' && refreshToken.trim()) {
     a.refreshToken = refreshToken.trim();
     a.source = 'oauth';
   }

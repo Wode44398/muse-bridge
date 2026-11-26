@@ -1,12 +1,14 @@
 <script>
-  // 参数渲染器（v4，方案 §11「参数一步到位」；骨架沿用 §9.2 的 dimensio 属性行）：只按 ParamSpec 渲染，任意来源、任意多个参数都排得下。
+  // 参数渲染器（方案 §11「参数一步到位」+ §12.4「一种选中样子」；骨架沿用 §9.2 的 dimensio 属性行）：只按 ParamSpec 渲染，任意来源、任意多个参数都排得下。
   //
   // §11 改的是「怎么改一个值」：以前多数枚举是「选择钮 → 再弹一层菜单」，尺寸要在菜单里的 8 个像素串里挑、或自己算 16 的倍数。
   // 现在选项尽量直接摆在面板上，点一下就是它；只有项很多 / 很长的才进菜单。控件怎么挑见 modules/studio/render.js 的 controlOf：
   //   短枚举 ≤4 → 分段（标签右边）· ≤10 项 → 小块排（标签在上、选项在下）· 比例 → 小形状格 · 再多 → 选择钮 + 菜单（>12 带搜索）
   //   数值 → 细滑条 + 可直接改的数字框 + 单位（小范围整数 → 分段；张数 → − 3 +）· bool → 开关 · 种子 → mono 输入 + 骰子
   //   文本 → 单行 / 多行（卡上给了候选词就在下面摆成小块，点了填进去）· json → 最末「原始参数」
-  //   尺寸 → 自动 / 原图 小块 + 比例形状 × 1K / 2K / 4K（换算成合规宽高）+ 一直在的 宽 × 高（想要别的数直接改，不合规当场标红）
+  //   尺寸 → 顶上一个按真实比例画的取景框（四角 + 发丝框，mono「宽 × 高」）+ 比例格 + 1K / 2K / 4K 一排 + 一直在的 宽 × 高
+  // 所有「几选一」（分段、小块、比例格、档位、张数）都是 ui/Segmented：浅墨底上一块墨，换选项时墨块沿弹簧滑过去；
+  // 以前的比例格黑粗框、白胶囊这几种样子都去掉了。
   // 改过的行标签后面有一枚「恢复默认」，面板末尾一枚恢复全部。「更多」只在这一组超过 6 项时收起，展开过本机记住。
   // 参数说明 desc 不上正文（维护者：不写解释句），桌面悬停标签出 title、触屏长按标签出一个小气泡。
   // 同一个组件放参数坞（dock：上面多一张模型卡）、参数浮层 / Sheet（flat），以及值芯片点开的单项浮层（only）。
@@ -15,12 +17,13 @@
   import { layout } from '../../lib/layout.svelte.js';
   import { studio, setParam, resetParam, resetParams, setAdvOpen, saveDrafts, valuesOf, labelForId, originalDims } from '../../modules/studio/media.svelte.js';
   import { optionsOf, jsonError, resolveValues } from '../../modules/studio/params.js';
-  import { controlOf, paramGroups, aspectSplit, isRatio, formatOf, needsSearch, isChanged, PILLS_MAX } from '../../modules/studio/render.js';
+  import { controlOf, paramGroups, isRatio, formatOf, needsSearch, isChanged, PILLS_MAX } from '../../modules/studio/render.js';
   import { paramLabel, optText, sourceText, sizeIssueText } from '../../modules/studio/words.js';
   import { isCustomSize, parseSize, sizeIssues, fitSize, badSides, sizeText, sizeGrid, gridMatch, pickRatio, pickTier } from '../../modules/studio/size.js';
   import { paramSource } from '../../modules/studio/picker.js';
   import { providerLogo } from '../../lib/providerLogos.js';
   import { icon, aspectBox } from '../../modules/studio/icons.js';
+  import { rise } from '../../modules/studio/motion.js';
   import Segmented from './ui/Segmented.svelte';
   import Switch from './ui/Switch.svelte';
   import Popover from './ui/Popover.svelte';
@@ -41,7 +44,6 @@
   let root = $state();
   let menu = $state(null);       // { spec, anchor }：选择钮点开的选项菜单（只剩项多 / 项长的参数用）
   let tip = $state(null);        // { anchor, text }：触屏长按标签出的说明
-  let moreAsp = $state({});      // 比例格「更多比例」展开了的参数
   let tight = $state({});        // 分段放不下（实测字被切）的参数：换成小块排（按「模型 | 参数」记，换了模型重新量）
   let jsonOpen = $state({});     // 原始 JSON 参数：空着时收成一行「填写」，点了才出文本框（面板上不常驻一个 { } 框）
 
@@ -129,6 +131,37 @@
     return o ? optLabel(o) : String(v ?? '');
   };
 
+  // —— 几选一的选项（给 Segmented）——
+  const segOpts = (opts) => opts.map((o) => ({ value: o.value, label: optLabel(o), hint: o.hint ? tr(String(o.hint)) : '', rejected: !!o.rejected, title: o.rejected ? t('这个服务上次拒收了它') : null }));
+  // 比例格：每格上面一个按比例缩放的小框；「自动 / 默认 / 原图」是虚线方框（原图知道多大就画它的形状）
+  const AUTO_GLYPH = '<span class="pl-auto"></span>';
+  const cellOf = (o, glyphRatio) => ({ value: o.value, label: isRatio(o.value) ? String(o.value) : optLabel(o), glyph: (glyphRatio && aspectBox(glyphRatio, 16)) || AUTO_GLYPH, rejected: !!o.rejected, title: o.hint ? optLabel(o) + ' ' + tr(String(o.hint)) : null });
+  const gridCols = (n) => (n <= 6 ? n : n <= 10 ? 5 : 6);
+
+  // —— 取景框：按真实比例画（四角同生成中的取景框），里面 mono 写尺寸；比例 / 尺寸一变，框沿弹簧变形过去 ——
+  const CORNER = '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1 9V3.2A2.2 2.2 0 0 1 3.2 1H9"/></svg>';
+  const VF_W = 132, VF_H = 70;
+  function vfBox(ratio) {
+    if (!(ratio > 0)) return { w: 58, h: 58, auto: true };
+    const k = Math.min(VF_W / ratio, VF_H);
+    return { w: Math.max(14, Math.round(k * ratio)), h: Math.max(14, Math.round(k)), auto: false };
+  }
+  const ratioOf = (s) => (s && s.width > 0 && s.height > 0 ? s.width / s.height : 0);
+  const ratioNum = (r) => { const m = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(String(r || '')); return m ? Number(m[1]) / Number(m[2]) : 0; };
+  // 尺寸参数现在画成什么：{ ratio, text }（自动写「自动」；原图知道多大就写实际会发出的像素）
+  function sizeView(spec, v) {
+    const s = parseSize(v);
+    if (s) return { ratio: ratioOf(s), text: `${s.width} × ${s.height}` };
+    if (v === 'original') { const o = origOut(spec); return o ? { ratio: ratioOf(o), text: `${t('原图')} ${o.width} × ${o.height}` } : { ratio: 0, text: t('原图') }; }
+    const o = optsOf(spec).find((x) => x.value === v);
+    return { ratio: 0, text: o ? optLabel(o) : t('自动') };
+  }
+  function aspectView(spec, v) {
+    if (isRatio(v)) return { ratio: ratioNum(v), text: String(v) };
+    const o = optsOf(spec).find((x) => x.value === v);
+    return { ratio: 0, text: o ? optLabel(o) : t('自动') };
+  }
+
   // 触屏长按标签 450ms 出说明（桌面走 title 悬停）
   function hold(node, text) {
     let tm = 0, x0 = 0, y0 = 0;
@@ -167,14 +200,19 @@
   </span>
 {/snippet}
 
-{#snippet pills(spec, opts, v, onpick)}
-  <div class="pl-pills" role="radiogroup" aria-label={labelOf(spec)}>
-    {#each opts as o (String(o.value))}
-      <!-- rejected：这个服务上次明确拒收过这个取值（方案 §11.4）——照样能点（服务可能升级了），只是标出来 -->
-      <button class="pl-pill" class:on={v === o.value} class:rej={o.rejected} role="radio" aria-checked={v === o.value} title={o.rejected ? t('这个服务上次拒收了它') : null} onclick={() => onpick(o.value)}>
-        <span class:mono={/^\d[\d×x.:]*[A-Za-z]{0,2}$/.test(optLabel(o))}>{optLabel(o)}</span>{#if o.hint}<small>{tr(String(o.hint))}</small>{/if}
-      </button>
-    {/each}
+{#snippet pills(spec, opts, v, onpick, clearable = false)}
+  <!-- rejected：这个服务上次明确拒收过这个取值（方案 §11.4）——照样能点（服务可能升级了），只是删除线标出来 -->
+  <Segmented layout="wrap" size="sm" label={labelOf(spec)} options={segOpts(opts)} value={v} onchange={onpick} {clearable} />
+{/snippet}
+
+{#snippet viewfinder(view)}
+  {@const b = vfBox(view.ratio)}
+  <div class="pl-vf" aria-hidden="true">
+    <div class="pl-vfb" class:auto={b.auto} style="width:{b.w}px;height:{b.h}px">
+      <span class="pl-vfe"></span>
+      {#each ['tl', 'tr', 'bl', 'br'] as c (c)}<span class="pl-vfc {c}">{@html CORNER}</span>{/each}
+      {#key view.text}<b class="mono" in:rise={{ y: 4 }}>{view.text}</b>{/key}
+    </div>
   </div>
 {/snippet}
 
@@ -228,6 +266,7 @@
       {@const custom = isCustomSize(v)}
       {@const issues = custom ? sizeIssues(spec, v) : []}
       {@const bad = badSides(issues)}
+      {#if spec.custom}{@render viewfinder(sizeView(spec, v))}{/if}
       {#if sizeSel}
         <span class="pl-c">{@render selbtn(spec, sizeSelLabel(spec, v), /\d/.test(sizeSelLabel(spec, v)))}</span>
       {:else if quick.length && !grid}
@@ -235,23 +274,12 @@
       {/if}
       {#if grid}
         {@const m = gridMatch(spec, v, grid)}
-        <div class="pl-asp" role="radiogroup" aria-label={labelOf(spec)}>
-          <!-- 自动 / 原图 / 默认是格子里的头几格（不单独占一行）：自动是虚线框，原图是它自己的形状 -->
-          {#each quick as o (String(o.value))}
-            <button class="pl-ac" class:on={v === o.value} role="radio" aria-checked={v === o.value} title={o.hint ? optLabel(o) + ' ' + o.hint : optLabel(o)} onclick={() => setParam(page, spec.key, o.value)}>
-              {#if o.value === 'original' && orig}<span class="pl-shape">{@html aspectBox(orig.width + ':' + orig.height, 16)}</span>
-              {:else}<span class="pl-shape auto" aria-hidden="true"></span>{/if}
-              <span>{optLabel(o)}</span>
-            </button>
-          {/each}
-          {#each grid.ratios as r (r)}
-            <button class="pl-ac" class:on={m.ratio === r} role="radio" aria-checked={m.ratio === r} onclick={() => setParam(page, spec.key, pickRatio(spec, v, r, grid))}>
-              <span class="pl-shape">{@html aspectBox(r, 16)}</span><span class="mono">{r}</span>
-            </button>
-          {/each}
-        </div>
+        {@const cells = [...quick.map((o) => cellOf(o, o.value === 'original' && orig ? orig.width + ':' + orig.height : '')), ...grid.ratios.map((r) => cellOf({ value: r }, r))]}
+        <!-- 自动 / 原图 / 默认是格子里的头几格（不单独占一行）；自动时档位一排淡下去，点了就按方图换算 -->
+        <Segmented layout="grid" cols={gridCols(cells.length)} mono label={labelOf(spec)} options={cells}
+          value={quick.some((o) => o.value === v) ? v : m.ratio} onchange={(x) => setParam(page, spec.key, isRatio(x) ? pickRatio(spec, v, x, grid) : x)} />
         {#if grid.tiers.length > 1}
-          <Segmented size="sm" full mono label={t('清晰度')} options={grid.tiers.map((x) => ({ value: x.id, label: x.id }))} value={m.tier} onchange={(id) => setParam(page, spec.key, pickTier(spec, v, id, grid))} />
+          <Segmented size="sm" full mono dim={!m.tier} label={t('清晰度')} options={grid.tiers.map((x) => ({ value: x.id, label: x.id }))} value={m.tier} onchange={(id) => setParam(page, spec.key, pickTier(spec, v, id, grid))} />
         {/if}
       {/if}
       {#if spec.custom}
@@ -286,28 +314,16 @@
     {:else if kind === 'text' && hints}
       <input class="pl-in" type="text" value={v || ''} placeholder={t('未设置')} aria-label={labelOf(spec)} oninput={(e) => setParam(page, spec.key, e.currentTarget.value)} />
       <!-- 候选词（配音风格这类）：点了填进去，再点一下清掉；自己打别的也行 -->
-      {@render pills(spec, hints, v, (x) => setParam(page, spec.key, v === x ? '' : x))}
+      {@render pills(spec, hints, v, (x) => setParam(page, spec.key, x ?? ''), true)}
     {:else if kind === 'text'}
       <span class="pl-c"><input class="pl-in" type="text" value={v || ''} placeholder={t('未设置')} aria-label={labelOf(spec)} oninput={(e) => setParam(page, spec.key, e.currentTarget.value)} /></span>
     {:else if kind === 'slider'}
       <input class="pl-range" class:unset={unset(v)} type="range" min={spec.min} max={spec.max} step={spec.step || 1} value={unset(v) ? spec.min : v} style="--pct:{pct(spec, v)}%"
         aria-label={labelOf(spec)} aria-valuetext={numText(spec, v) + (unitOf(spec) ? ' ' + unitOf(spec) : '')} oninput={(e) => setParam(page, spec.key, Number(e.currentTarget.value))} />
     {:else if kind === 'aspect'}
-      {@const sp = aspectSplit(optsOf(spec), v)}
-      {@const open = sp.open || moreAsp[spec.key]}
-      <div class="pl-asp" role="radiogroup" aria-label={labelOf(spec)}>
-        {#each [...sp.head, ...(open ? sp.more : [])] as o (String(o.value))}
-          <button class="pl-ac" class:on={v === o.value} role="radio" aria-checked={v === o.value} title={optLabel(o)} onclick={() => setParam(page, spec.key, o.value)}>
-            {#if isRatio(o.value)}<span class="pl-shape">{@html aspectBox(o.value, 16)}</span><span class="mono">{o.value}</span>
-            {:else}<span class="pl-shape auto" aria-hidden="true"></span><span>{optLabel(o)}</span>{/if}
-          </button>
-        {/each}
-        {#if sp.more.length && !sp.open}
-          <button class="pl-ac more" aria-expanded={!!moreAsp[spec.key]} onclick={() => (moreAsp[spec.key] = !moreAsp[spec.key])}>
-            <span class="pl-shape">{@html icon(moreAsp[spec.key] ? 'up' : 'more')}</span><span>{moreAsp[spec.key] ? t('收起') : t('更多比例')}</span>
-          </button>
-        {/if}
-      </div>
+      {@const cells = optsOf(spec).map((o) => cellOf(o, isRatio(o.value) ? o.value : ''))}
+      {@render viewfinder(aspectView(spec, v))}
+      <Segmented layout="grid" cols={gridCols(cells.length)} mono label={labelOf(spec)} options={cells} value={v} onchange={set(spec)} />
     {:else if kind === 'textarea'}
       <textarea class="pl-in pl-ta" rows="2" value={v || ''} placeholder={t('未设置')} aria-label={labelOf(spec)} oninput={(e) => setParam(page, spec.key, e.currentTarget.value)}></textarea>
     {:else if kind === 'json' && jsonShut}

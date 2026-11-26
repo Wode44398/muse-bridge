@@ -6,7 +6,8 @@
 import '../plugins/tool-card.mjs';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdirSync, rmSync, statSync } from 'node:fs';
+import { createReadStream, mkdirSync, rmSync, statSync } from 'node:fs';
+import { pipeline } from 'node:stream';
 import { writeFile } from 'node:fs/promises';
 import 'node:readline';
 import 'node:crypto';
@@ -54,7 +55,8 @@ import '../runtime/principal.mjs';
 // 工具行/任务卡规则与直播端（agents/claude.mjs）共用一份——直播与重开必须一致。
 import '../runtime/tool-summary.mjs';
 import '../mcp/visualize.mjs';
-import { toClientAtt } from '../runtime/client-atts.mjs';
+import { toClientAtt, attachedPathOf, ATT_REF_PREFIX } from '../runtime/client-atts.mjs';
+import { imageThumb, THUMB_EXT, THUMB_VIDEO_EXT, THUMB_TIERS } from './file-preview.mjs';
 import { forgetHistory, readSessionHistory } from './sessions/history-cache.mjs';
 import { readSessionMessages, sessionMarkdown } from './sessions/history-parse.mjs';
 import { displayTitle, locateSession } from './sessions/lookup.mjs';
@@ -702,10 +704,14 @@ export function registerSessionRoutes(router, { authOk, identify }) {
       const roots = deliverRoots(ctx, projRoot, VAULT);
       // 正文链接点开时前端把链接原文当 path 传来，可能是相对路径：与 collectDeliverables
       // 同一套解析（cwd → 各交付根回退），别再靠 realpathSync 拿进程 cwd 碰运气。
-      let file = resolveDeliverPath(requested, projRoot, roots);
+      // bridge-att:<文件名>：用户消息里零拷贝引用的本机文件（历史气泡只拿到文件名，见 client-atts.mjs toClientAtt）——
+      // 在这条会话自己的附件清单里找回原路径，之后与普通产物同一套守卫。
+      const attRef = requested.startsWith(ATT_REF_PREFIX);
+      let file = attRef ? await attachedPathOf(p.file, requested.slice(ATT_REF_PREFIX.length)) : resolveDeliverPath(requested, projRoot, roots);
+      if (attRef && file) { try { if (!statSync(file).isFile()) file = null; } catch { file = null; } }
       // 解析不到：模型可能在那一轮 cd 进了子目录、按新目录写的相对链接——拿这个会话 transcript
       // 里出现过的工作目录（最近的优先）再试一遍。只在兜底时扫，卡片点开（绝对路径）不走这里。
-      if (!file && !path.isAbsolute(requested)) file = resolveDeliverPath(requested, [...await transcriptCwds(p.file), projRoot], roots);
+      if (!file && !attRef && !path.isAbsolute(requested)) file = resolveDeliverPath(requested, [...await transcriptCwds(p.file), projRoot], roots);
       if (!file) throw Object.assign(new Error('not found'), { status: 404 });
       if (!deliverAnywhere(ctx) && !roots.some((root) => isInside(file, root))) throw Object.assign(new Error('forbidden'), { status: 403 });
       // locate=1：正文链接对不上附件卡时，前端先问「这在工作空间里哪」——能定位就在右侧工作区的
@@ -720,6 +726,20 @@ export function registerSessionRoutes(router, { authOk, identify }) {
       if (statSync(file).isDirectory()) {
         await streamFolderZip(req, res, file, { name: url.searchParams.get('name') || '' });
         return;
+      }
+      // thumb=1|preview：图片 / 视频的缩略档（视频 ffmpeg 抽一帧，与 /api/upload/raw、/api/file 同一份 thumb-cache）——
+      // 聊天气泡里附的视频据此显示封面。缩略图做不出来就照常回原文件。
+      const tier = THUMB_TIERS[url.searchParams.get('thumb')];
+      const ext = path.extname(file).slice(1).toLowerCase();
+      if (tier && (THUMB_EXT.has(ext) || THUMB_VIDEO_EXT.has(ext))) {
+        try {
+          const thumb = await imageThumb(file, statSync(file), THUMB_VIDEO_EXT.has(ext), tier);
+          if (thumb) {
+            res.writeHead(200, { 'Content-Type': 'image/webp', 'Cache-Control': 'private, max-age=86400' });
+            pipeline(createReadStream(thumb), res, () => {});
+            return;
+          }
+        } catch {}
       }
       if (url.searchParams.get('site') === '1' && isHtmlFile(file)) return respondHtmlSite(res, file, roots.filter((root) => isInside(file, root)));
       streamArtifactFile(req, res, file, url.searchParams.get('name') || path.basename(file), url.searchParams.get('dl') === '1');

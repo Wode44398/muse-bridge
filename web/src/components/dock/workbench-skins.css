@@ -25,20 +25,22 @@ html[data-theme="light"] .skin-claude { --wb-card: #ffffff; --wb-line: rgba(0, 0
 
 /* —— Codex：ChatGPT 的中性灰与绿 —— */
 .skin-codex {
-  --bg: #171717; --text: #ececec; --muted: #a8a8a8; --serif: #ececec; --hover: #2f2f2f; --hover-strong: #383838;
-  --card: #2f2f2f; --divider: #383838; --coral: #10a37f; --ok: #10a37f; --card-shadow: none;
-  --wb-bg: #171717; --wb-card: #212121; --wb-line: rgba(255, 255, 255, .08);
-  --wb-accent: #10a37f; --wb-on: #10a37f; --wb-live: #10a37f; --wb-title: #ececec; --wb-title-w: 600;
+  /* 与 Codex 分页同一套令牌（官方桌面版实测）：黑白灰打底，选中 / 在跑只用前景色，不拿彩色做装饰 */
+  --bg: #151515; --text: #dfdfdf; --muted: rgb(255 255 255 / .5); --serif: #dfdfdf; --hover: rgb(255 255 255 / .07); --hover-strong: rgb(255 255 255 / .1);
+  --card: #212121; --divider: rgb(255 255 255 / .08); --coral: #dfdfdf; --ok: #00a240; --card-shadow: none;
+  --wb-bg: #151515; --wb-card: #212121; --wb-line: rgb(255 255 255 / .08);
+  --wb-accent: #dfdfdf; --wb-on: #dfdfdf; --wb-live: #dfdfdf; --wb-title: #dfdfdf; --wb-title-w: 500;
   --wb-head-ic: inline-flex; --wb-mobile-z: 74;
-  color: var(--text); font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--text); font-family: "OpenAI Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
 }
 .light .skin-codex {
-  --bg: #f7f7f8; --text: #0d0d0d; --muted: #6b6b6b; --serif: #0d0d0d; --hover: #ececec; --hover-strong: #e3e3e3;
-  --card: #ffffff; --divider: #e5e5e5;
-  --wb-bg: #f7f7f8; --wb-card: #ffffff; --wb-line: rgba(0, 0, 0, .09); --wb-title: #0d0d0d;
+  --bg: #f6f6f7; --text: #1a1c1f; --muted: rgb(26 28 31 / .5); --serif: #1a1c1f; --hover: rgb(26 28 31 / .045); --hover-strong: rgb(26 28 31 / .07);
+  --card: #ffffff; --divider: rgb(26 28 31 / .08); --coral: #1a1c1f;
+  --wb-bg: #f6f6f7; --wb-card: #ffffff; --wb-line: rgb(26 28 31 / .08); --wb-title: #1a1c1f;
+  --wb-accent: #1a1c1f; --wb-on: #1a1c1f; --wb-live: #1a1c1f;
 }
 /* 手机整页没有卡片：面板直接铺在页面上，页面底用卡片那一档 */
-.skin-codex.wb-page { --bg: #212121; --wb-bg: #212121; }
+.skin-codex.wb-page { --bg: #181818; --wb-bg: #181818; }
 .light .skin-codex.wb-page { --bg: #ffffff; --wb-bg: #ffffff; }
 
 /* —— dimensio：外壳嵌在它的页面里（.hxroot），页面底、文字色就是它自己那套；这里把共用面板认的令牌映射过去 ——

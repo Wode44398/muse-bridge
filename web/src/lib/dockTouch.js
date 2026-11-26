@@ -13,6 +13,15 @@
 //     不接管的地方：浏览器直播画布 / 终端 / 编辑器 / 输入框 / 卡片里开着的预览（各自有手势）、
 //     文件页「按住拿起」之后（dragdrop 在场）、以及按住超过长按门槛才开始动的（那是长按）。
 //
+// 2026-11-25 方向锁 + 阻尼（维护者录屏：横滑 chip 条时整个抽屉跟着上下晃；故意往下拉只走一小段就弹回）：
+//  · 把手区不再按下就接管，先等手指走出 SLOP 再看方向——偏竖直才拖抽屉，偏水平整场放手给 chip 条横滑。
+//    chip 条是横向滚动容器，CSS 上给 touch-action:pan-x：竖向手势浏览器不认领，
+//    就不会半路 pointercancel 把拖动掐断（那就是「拉一小段就拉不动」）。
+//  · 内容区里落在横向滚动容器（代码 diff、表格、横滑条…）上的，竖直度要求更严（dy ≥ 2|dx|），
+//    且只要那个容器已经被横着滚过就不接管。
+//  · 下拉带一点阻尼：抽屉位移 = damp(手指位移)，起步约 0.9 倍、越往下越沉；
+//    判关仍按【手指】位移与手速算，阻尼只影响观感、不让关起来更费劲。
+//
 // 跟手：每帧最多写一次 transform（rAF 合并），拖动期间零 transition + will-change；
 // 遮罩随拖动进度变淡。松手按「位移 36% 或 速度>0.55px/ms」判关，按手速算滑出时长，
 // 【滑完再卸载】（以前 0.3s 的过渡 0.16s 就被拆掉，看着像「啪」一下没了）。
@@ -30,6 +39,9 @@ export function dragSheet(node, opts) {
   let pid = -1;             // 把手：pointerId
   let tid = null;           // 内容区：touch identifier
   let cur = 0, size = 0;
+  let raw = 0;              // 手指实际下拉距离（判关用；cur 是阻尼后的抽屉位移）
+  let hpend = null;         // 把手区待判定方向的按压 { id, x, y, t }
+  let swallowClick = false; // 刚拖过抽屉：吞掉随后那一下 click（别顺手切了 chip）
   let samples = [];         // [t, y]，算松手速度（最近 ~90ms）
   let raf = 0;
   // 内容区待判定的触摸
@@ -66,6 +78,8 @@ export function dragSheet(node, opts) {
     base = y;
     rubber = allowRubber;
     cur = 0;
+    raw = 0;
+    swallowClick = true;
     size = node.offsetHeight;
     samples = [[t, y]];
     node.style.animation = 'none';
@@ -74,9 +88,13 @@ export function dragSheet(node, opts) {
     const s = scrim();
     if (s) { s.style.animation = 'none'; s.style.transition = 'none'; }
   }
+  // 下拉阻尼：起步斜率 0.9，拉到一屏高时约 0.55 倍，一直跟手、只是越来越沉
+  function damp(d) { return (d * 0.9) / (1 + d / (1.8 * (size || 600))); }
   function move(y, t) {
     let d = y - base;
+    raw = Math.max(0, d);
     if (d < 0) d = rubber ? -Math.pow(-d, 0.72) : 0;
+    else d = damp(d);
     sample(t, y);
     setOffset(d);
   }
@@ -87,7 +105,7 @@ export function dragSheet(node, opts) {
     const v = velocity();
     const s = scrim();
     node.style.willChange = '';
-    const close = cur > size * 0.36 || (v > 0.55 && cur > 24);
+    const close = raw > size * 0.3 || (v > 0.55 && raw > 24);
     if (close) {
       // 按手速滑完剩下的距离：甩得快就快、慢慢放就稳稳地走完，140–300ms 之间
       const left = Math.max(0, size - cur);
@@ -104,24 +122,40 @@ export function dragSheet(node, opts) {
     }
   }
 
-  // —— ① 把手：Pointer Events ——
+  // —— ① 把手：Pointer Events（先锁方向）——
   function onDown(e) {
     if (e.pointerType === 'mouse' || mode) return;
     const h = opts.handle?.();
     if (!h || !h.contains(e.target)) return;
-    pid = e.pointerId;
-    begin(e.clientY, e.timeStamp, true);
-    node.setPointerCapture?.(pid);
+    swallowClick = false;
+    hpend = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp };
   }
   function onMove(e) {
+    if (hpend && e.pointerId === hpend.id) {
+      const dx = e.clientX - hpend.x, dy = e.clientY - hpend.y;
+      if (Math.abs(dx) < SLOP && Math.abs(dy) < SLOP) return;
+      const { y: y0, t: t0 } = hpend;
+      hpend = null;
+      if (Math.abs(dy) < Math.abs(dx)) return;          // 偏水平：这一场归 chip 条横滑
+      pid = e.pointerId;
+      begin(y0, t0, true);                               // 位移从按下处算，接管这一下就追上手指
+      node.setPointerCapture?.(pid);
+    }
     if (mode !== 'drag' || e.pointerId !== pid) return;
     move(e.clientY, e.timeStamp);
     if (Math.abs(cur) > 6) e.preventDefault?.();
   }
   function onUp(e) {
+    if (hpend && e.pointerId === hpend.id) hpend = null;
     if (e.pointerId !== pid) return;
     pid = -1;
     end();
+  }
+  function onClickCapture(e) {
+    if (!swallowClick) return;
+    swallowClick = false;
+    e.stopPropagation();
+    e.preventDefault();
   }
 
   // —— ② 内容区：Touch Events ——
@@ -135,14 +169,26 @@ export function dragSheet(node, opts) {
     }
     return true;
   }
+  // 触点往上第一个真能横滑的容器（没有就 null）
+  function hScroller(target) {
+    for (let el = target; el && el !== node; el = el.parentElement) {
+      if (el.scrollWidth > el.clientWidth + 1) {
+        const ox = getComputedStyle(el).overflowX;
+        if (ox === 'auto' || ox === 'scroll' || ox === 'overlay') return el;
+      }
+    }
+    return null;
+  }
   function onTouchStart(e) {
+    if (e.touches.length === 1) swallowClick = false;
     if (mode || e.touches.length !== 1) { pend = null; return; }
     const tgt = e.target;
     const h = opts.handle?.();
     if (h && h.contains(tgt)) return;                   // 把手区走 ①
     if (!(tgt instanceof Element) || tgt.closest(NO_DRAG)) return;
     const p = e.touches[0];
-    pend = { id: p.identifier, x: p.clientX, y: p.clientY, t: e.timeStamp, atTop: atTop(tgt), tgt };
+    const hs = hScroller(tgt);
+    pend = { id: p.identifier, x: p.clientX, y: p.clientY, t: e.timeStamp, atTop: atTop(tgt), tgt, hs, hs0: hs ? hs.scrollLeft : 0 };
   }
   function onTouchMove(e) {
     if (mode === 'drag' && tid != null) {
@@ -158,7 +204,8 @@ export function dragSheet(node, opts) {
     if (!p) return;
     const dx = p.clientX - pend.x, dy = p.clientY - pend.y;
     if (Math.abs(dx) < SLOP && Math.abs(dy) < SLOP) return;   // 还在抖动范围内，先不表态
-    const ok = pend.atTop && dy > 0 && dy >= Math.abs(dx) * 1.2
+    const ok = pend.atTop && dy > 0 && dy >= Math.abs(dx) * (pend.hs ? 2 : 1.2)
+      && !(pend.hs && pend.hs.scrollLeft !== pend.hs0)          // 横滑区已经被横着带动过了，不抢
       && e.cancelable && !e.defaultPrevented && !isDragging()
       && e.timeStamp - pend.t < HOLD_MS                         // 按住够久才动 = 长按（拿起文件），不抢
       && atTop(pend.tgt);                                       // 按下后内容可能被惯性滚动带离顶端，再看一眼
@@ -179,6 +226,7 @@ export function dragSheet(node, opts) {
   }
 
   node.addEventListener('animationend', onAnimEnd);
+  node.addEventListener('click', onClickCapture, true);
   node.addEventListener('pointerdown', onDown);
   node.addEventListener('pointermove', onMove);
   node.addEventListener('pointerup', onUp);
@@ -192,6 +240,7 @@ export function dragSheet(node, opts) {
     destroy() {
       if (raf) cancelAnimationFrame(raf);
       node.removeEventListener('animationend', onAnimEnd);
+      node.removeEventListener('click', onClickCapture, true);
       node.removeEventListener('pointerdown', onDown);
       node.removeEventListener('pointermove', onMove);
       node.removeEventListener('pointerup', onUp);

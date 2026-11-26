@@ -1,12 +1,9 @@
 <script>
-  // Media Studio 外壳（v3「纸墨工作台」，方案 §9.2）：dimensio 三栏 + 44px 栏头带——
-  //   左 作品栏（深半档的纸，272 可拖可收；栏头 ‹ · 错拍标 + 宋体字标 · 收起）｜
-  //   中 画布（栏头带：四个创作页的分段（spring-snap 滑块）、任务钮、参数坞开关、设置）｜
-  //   右 参数坞（宽屏才有、可开关；各创作页把自己的参数面板挂进来，见 CreateFrame 的 toDock）。
-  // 手机：作品栏是左缘抽屉，栏头一行 + 分段贴顶一行。
-  //
-  // 行为照旧（§5 / P3 验过的）：作品栏只挂在外壳上，切创作页不重挂；四个创作页 keep-alive；左缘右滑在手机归抽屉、
-  // 平板 / 桌面是预测式返回；系统返回逐层关（浮层 → 抽屉 → 回主页）；studioInbox；任务完成作品飞进作品栏。
+  // Media Studio 外壳（v4「作品台」，方案 §12.1）：
+  //   左 素材架（宽屏侧列：收 64 / 展开 300；手机是左缘抽屉，同一棵子树）｜
+  //   中 顶栏一行（返回 · 宽屏时会动的「错拍」标 + 字标 · 四个种类 · 设置）+ 四个创作页（keep-alive）｜
+  //   右 参数坞（宽屏且当前模型有参数才有；各创作页把参数面板挂进 .sd-dock-body，见 CreateFrame 的 toDock）。
+  // 行为照旧：左缘右滑在手机归抽屉、平板 / 桌面是预测式返回；系统返回逐层关（浮层 → 焦点 → 挑选态 → 抽屉 → 回主页）；studioInbox。
   import { untrack } from 'svelte';
   import { ui, prefs, studioInbox } from '../../lib/state.svelte.js';
   import { isPageWindow } from '../../lib/windowPage.svelte.js';
@@ -15,24 +12,22 @@
   import { swipeDismiss, reduced } from '../../lib/motion.js';
   import { registerCloser } from '../../lib/nav.js';
   import { openSettings } from '../../lib/settingsNav.svelte.js';
-  import { drag, dropZone } from '../../lib/dragdrop.svelte.js';
+  import { drag } from '../../lib/dragdrop.svelte.js';
   import { t } from '../../lib/i18n.js';
-  import { studio, startStudio, onJobDone, isActive, saveSide, mediaSrc, takeInbox, newImageThread } from '../../modules/studio/media.svelte.js';
+  import { studio, startStudio, onJobDone, isActive, saveSide, takeInbox, currentModel, closeFocus, endPick, ensureWall } from '../../modules/studio/media.svelte.js';
   import { usingFixture } from '../../modules/studio/api.js';
-  import { PAGES, visual, pageOf } from '../../modules/studio/kinds.js';
+  import { PAGES, pageOf } from '../../modules/studio/kinds.js';
   import { closeTopLayer, layerCount } from '../../modules/studio/layers.js';
-  import { icon, MARK } from '../../modules/studio/icons.js';
-  import { motionStyle, springEasing, SPRING } from '../../modules/studio/motion.js';
+  import { icon } from '../../modules/studio/icons.js';
+  import { motionStyle } from '../../modules/studio/motion.js';
+  // 浮起来的层（菜单 / 浮层 / Sheet / 弹窗）用 bridge 的苹果材质（ios27 Liquid Glass 烘焙切图），见 studio.css「浮层」
   import alertLight from '../../visuals/ios27/alert-light.png';
   import alertDark from '../../visuals/ios27/alert-dark.png';
   import sheetLight from '../../visuals/ios27/sheet-light.png';
   import sheetDark from '../../visuals/ios27/sheet-dark.png';
-  // 浮起来的层（菜单 / 浮层 / 手机 Sheet / 弹窗）用 bridge 的苹果材质（ios27 Liquid Glass 烘焙切图，与设置页、文件面板的菜单同一张）——
-  // 维护者 11-06：「菜单之类的可以用苹果材质，没必要改扁平材质」。底下的纸（作品栏、画布、参数坞、输入框）仍是纸墨。
-  import { slotDropFor } from '../../modules/studio/drag.js';
-  import StudioSidebar from './StudioSidebar.svelte';
-  import TaskTray from './TaskTray.svelte';
-  import Segmented from './ui/Segmented.svelte';
+  import Shelf from './Shelf.svelte';
+  import StudioTabs from './StudioTabs.svelte';
+  import Mark from './ui/Mark.svelte';
   import ImagePage from './pages/ImagePage.svelte';
   import VideoPage from './pages/VideoPage.svelte';
   import VoicePage from './pages/VoicePage.svelte';
@@ -44,37 +39,55 @@
 
   const LABEL = { image: t('图像'), video: t('视频'), voice: t('配音'), music: t('音乐') };
   const PAGE_COMP = { image: ImagePage, video: VideoPage, voice: VoicePage, music: MusicPage };
-  const MOTION = motionStyle();
+  // motionStyle() 结尾不带分号：后面紧跟的变量会被吞（玻璃切图贴不上），这里补上
+  const MOTION = motionStyle() + ';';
 
   const dark = $derived(ui.theme === 'dark');
-  const glassVars = $derived(`;--sd-glass-pop:url("${dark ? alertDark : alertLight}");`
+  const glassVars = $derived(`--sd-glass-pop:url("${dark ? alertDark : alertLight}");`
     + `--sd-glass-sheet:url("${dark ? sheetDark : sheetLight}");`);
   const compact = $derived(layout.compact);
   const expanded = $derived(layout.expanded);
-  // 作品栏此刻是不是一根侧列（占宽度）：桌面常驻开着 / 平板推入了；手机是抽屉
-  const railCol = $derived(!compact && (expanded ? studio.side.pinned : studio.drawer));
-  const railVisible = $derived(railCol || (compact && studio.drawer));
-  const activeJobs = $derived(studio.jobs.filter(isActive));
-  const activeBy = $derived(Object.fromEntries(PAGES.map((p) => [p, activeJobs.some((j) => pageOf(j.kind) === p)])));
-  const tabs = $derived(PAGES.map((p) => ({ value: p, label: LABEL[p], dot: activeBy[p] ? 'live' : '' })));
+  const pageWin = isPageWindow();
 
-  // 参数坞：中栏 + 坞的总宽够 980 才有（作品栏开着时窗口再宽也可能不够），用户可以关
-  let workW = $state(typeof innerWidth === 'number' ? innerWidth : 390);
-  const dockAvail = $derived(!compact && workW >= 980);
-  const dockOn = $derived(dockAvail && studio.side.dock);
-  function toggleDock() { studio.side.dock = !studio.side.dock; saveSide(); }
-  // 栏头的分段平时绝对居中；左右两组按钮多了（如图像页的「新的一张」）、中栏又窄时会压上去——
-  // 放不下居中就改排在两组之间（tight），宁可不居中也不重叠
-  // 内边距也要算：桌面壳下右内边距里含系统窗控的让位（app.css），比左边宽得多
-  let cbarEl = $state();
-  let cbarW = $state(0), cbarLW = $state(0), cbarRW = $state(0), tabsW = $state(0);
-  const cbarPad = $derived.by(() => {
-    void cbarW;
-    if (!cbarEl) return [8, 8];
-    const cs = getComputedStyle(cbarEl);
-    return [parseFloat(cs.paddingLeft) || 0, parseFloat(cs.paddingRight) || 0];
+  // —— 素材架：桌面展开记在本机（side.pinned）；平板 / 手机的开合是临时的（drawer，占返回层）；挑选态总是打开 ——
+  const shelfOpen = $derived((expanded ? studio.side.pinned : studio.drawer) || !!studio.pick);
+  function toggleShelf() {
+    if (studio.pick) { endPick(); return; }
+    if (expanded) { studio.side.pinned = !studio.side.pinned; saveSide(); }
+    else studio.drawer = !studio.drawer;
+  }
+  function closeShelf() {
+    studio.drawer = false;
+    if (studio.pick) endPick();
+  }
+  // 换档（转屏、折叠屏开合）时临时开合作废，免得平板上推开的侧列变成手机上自己弹出来的抽屉
+  $effect(() => { compact; expanded; untrack(() => { studio.drawer = false; }); });
+
+  // —— 任务：顶栏标在跑；完成时合一拍；分段上的墨描到哪一页 ——
+  const activeJobs = $derived(studio.jobs.filter(isActive));
+  const busyBy = $derived(Object.fromEntries(PAGES.map((p) => [p, activeJobs.some((j) => pageOf(j.kind) === p)])));
+  let beat = $state(0);
+  let doneBy = $state({ image: 0, video: 0, voice: 0, music: 0 });
+  $effect(() => onJobDone((job) => {
+    beat++;
+    const p = pageOf(job.kind);
+    if (p) doneBy[p]++;
+  }));
+
+  // —— 参数坞：宽屏 + 记住的开关 + 当前页的模型有参数 ——
+  const curModel = $derived(currentModel(studio.page));
+  const hasParams = $derived(!!(curModel?.params?.length || curModel?.inputs?.negative));
+  const dockOn = $derived(expanded && studio.side.dock && hasParams);
+  function closeDock() { studio.side.dock = false; saveSide(); }
+
+  // —— 顶栏：分段居中在左右两组之间，放不下（room 不够）时没选中的只留字形 ——
+  let barW = $state(0), lW = $state(0), rW = $state(0), barEl = $state();
+  const tabsRoom = $derived.by(() => {
+    if (!barEl || !barW) return 0;
+    const cs = getComputedStyle(barEl);
+    const inner = barW - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+    return Math.max(0, inner - 2 * Math.max(lW, rW) - 16);
   });
-  const tabsTight = $derived(!!tabsW && cbarW / 2 - tabsW / 2 < Math.max(cbarPad[0] + cbarLW, cbarPad[1] + cbarRW) + 8);
 
   // —— 创作页 keep-alive：首次进入才挂载，之后休眠保留（草稿、滚动、播放器都在）——
   let mounted = $state({ [studio.page]: true });
@@ -97,64 +110,21 @@
       if (!anim) return;
       // 先摘掉再挂上：keep-alive 页的入场动画靠重新挂类重播（同一帧摘挂浏览器不会重启动画）
       requestAnimationFrame(() => { entering = p; });
-      leaveT = setTimeout(() => { leaving = ''; }, 130);
-      enterT = setTimeout(() => { if (entering === p) entering = ''; }, 460);
+      leaveT = setTimeout(() => { leaving = ''; }, 150);
+      enterT = setTimeout(() => { if (entering === p) entering = ''; }, 520);
     });
   });
   function go(p) { if (p !== studio.page) studio.page = p; }
+  // 墙没拉过才拉（进 Studio 时其余三页由数据层空闲时预拉）
+  $effect(() => { const p = studio.page; untrack(() => ensureWall(p)); });
 
-  function tabKey(e) {
-    const i = PAGES.indexOf(studio.page);
-    const n = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? 3 : 0;
-    if (!n) return;
-    e.preventDefault();
-    const p = PAGES[(i + n) % 4];
-    go(p);
-    requestAnimationFrame(() => document.querySelector(`.studio-root .sd-cbar [data-v="${p}"], .studio-root .sd-tabs-row [data-v="${p}"]`)?.focus());
-  }
-  // 桌面 Ctrl/⌘ + 1…4 切页；Esc 关最上面那层浮层（焦点不在浮层里时也认）
+  // 桌面 Ctrl/⌘ + 1…4 切页；Esc：浮层 → 挑选态（焦点的 Esc 归作品墙自己）
   function onKey(e) {
     if (ui.screen !== 'studio') return;
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && /^[1-4]$/.test(e.key)) { e.preventDefault(); go(PAGES[Number(e.key) - 1]); }
-    else if (e.key === 'Escape' && layerCount() && !e.defaultPrevented) { e.preventDefault(); closeTopLayer(); }
-  }
-  // 分段的每一项也是落点：拖着素材悬停 600ms 切到那一页（spring folder 同款），直接松在上面＝切页并按默认角色挂上
-  function tabDrop(node, p) {
-    const opts = (pp) => ({
-      key: 'studio-seg:' + pp, effect: 'send',
-      label: () => t('切到{page}', { page: LABEL[pp] }),
-      accept: (pl) => !!slotDropFor(pp, pl, null),
-      spring: () => go(pp),
-      drop: (pl) => { go(pp); return slotDropFor(pp, pl, null)?.(); },
-    });
-    const z = dropZone(node, opts(p));
-    return { update: (n) => z.update(opts(n)), destroy: z.destroy };
-  }
-
-  // —— 作品栏：桌面常驻 / 平板推入 / 手机抽屉 ——
-  function toggleRail() {
-    if (expanded) { studio.side.pinned = !studio.side.pinned; saveSide(); }
-    else studio.drawer = !studio.drawer;
-  }
-  $effect(() => { if (expanded) untrack(() => { studio.drawer = false; }); });
-  // 拖右缘调宽（240–400），键盘 ←/→ 也能调；双击复位 272
-  let resizing = $state(false);
-  function resizeDown(e) {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    resizing = true;
-    const x0 = e.clientX, w0 = studio.side.width;
-    const mv = (ev) => { studio.side.width = Math.min(400, Math.max(240, Math.round(w0 + ev.clientX - x0))); };
-    const up = () => { resizing = false; saveSide(); removeEventListener('pointermove', mv); removeEventListener('pointerup', up); };
-    addEventListener('pointermove', mv);
-    addEventListener('pointerup', up);
-  }
-  function resizeKey(e) {
-    const d = e.key === 'ArrowLeft' ? -16 : e.key === 'ArrowRight' ? 16 : 0;
-    if (!d) return;
-    e.preventDefault();
-    studio.side.width = Math.min(400, Math.max(240, studio.side.width + d));
-    saveSide();
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && /^[1-4]$/.test(e.key)) { e.preventDefault(); go(PAGES[Number(e.key) - 1]); return; }
+    if (e.key !== 'Escape' || e.defaultPrevented) return;
+    if (layerCount()) { e.preventDefault(); closeTopLayer(); }
+    else if (!studio.focus && studio.pick) { e.preventDefault(); endPick(); }
   }
 
   // 手机：左缘右滑跟手拉出抽屉；抽屉上左滑收起
@@ -163,27 +133,26 @@
   const drawerW = () => Math.min(innerWidth * 0.86, 340);
   const edgeOpen = (node) => swipeDismiss(node, {
     axis: 'x', dir: 1, edge: 24, threshold: 0.35, size: drawerW,
-    guard: () => compact && !studio.drawer && !ui.morphing && !drag.on,
+    guard: () => compact && !shelfOpen && !ui.morphing && !drag.on,
     onStart: () => { drawerDragging = true; },
     onMove: (x) => { drawerX = x; },
     onSettle: (goOpen) => { drawerDragging = false; drawerX = 0; if (goOpen) studio.drawer = true; },
   });
   const drawerClose = (node) => swipeDismiss(node, {
     axis: 'x', dir: -1, threshold: 0.3, size: drawerW,
-    guard: () => compact && studio.drawer && !drag.on,
+    guard: () => compact && shelfOpen && !drag.on,
     onStart: () => { drawerDragging = true; },
     onMove: (x) => { drawerX = -x; },
-    onSettle: (goClose) => { drawerDragging = false; drawerX = 0; if (goClose) studio.drawer = false; },
+    onSettle: (goClose) => { drawerDragging = false; drawerX = 0; if (goClose) closeShelf(); },
   });
   // 拎着东西真的挪动了，手机抽屉才让开（东西是从抽屉里拎出来要放进创作页的）；原地按住松手是要菜单，抽屉留着
-  $effect(() => { if (drag.on && drag.moved && compact && studio.drawer) untrack(() => { studio.drawer = false; }); });
+  $effect(() => { if (drag.on && drag.moved && compact && shelfOpen) untrack(closeShelf); });
 
   // —— 平板 / 桌面：左缘右滑＝预测式返回（同 Claude 页）——
   let peekX = $state(0), peeking = $state(false);
   let slideEl = $state();
   const peek = $derived(backPeek(peekX));
   function resetSlide() { peekX = 0; peeking = false; ui.studioSliding = false; }
-  const pageWin = isPageWindow();
   const edgeBack = (node) => swipeDismiss(node, {
     axis: 'x', dir: 1, edge: 40, threshold: 0.32,
     guard: () => !pageWin && !compact && !ui.morphing && !drag.on,
@@ -198,14 +167,11 @@
   });
   function back() { if (!pageWin && ui.screen === 'studio') closePage('studio', { onSwitch: resetSlide }); }
 
-  // —— 任务托盘 ——
-  let trayOpen = $state(false);
-  let capsuleEl = $state();
-  function toggleTray() { trayOpen = !trayOpen; if (trayOpen) studio.unseen = 0; }
-
-  // 系统返回：浮层（含托盘、菜单）→ 抽屉 → 回主页
+  // 系统返回：浮层 → 焦点 → 挑选态 → 抽屉 / 平板侧列 → 回主页
   $effect(() => registerCloser('studio', () => {
     if (closeTopLayer()) return;
+    if (studio.focus) { closeFocus(); return; }
+    if (studio.pick) { endPick(); return; }
     if (studio.drawer && !expanded) { studio.drawer = false; return; }
     back();
   }));
@@ -213,114 +179,43 @@
   // —— 核心入口发来的素材（工作空间「发到 Media Studio」、agent 的 ui.cmd）——
   $effect(() => { if (studioInbox.items.length) untrack(() => takeInbox(studioInbox)); });
 
-  // —— 任务完成：作品从画布飞进作品栏（作品栏没开就让栏钮冒一粒墨点）——
-  let pip = $state(0);
-  $effect(() => onJobDone((job) => {
-    const a = job.result?.[0];
-    if (!a) return;
-    requestAnimationFrame(() => requestAnimationFrame(() => flyIn(a)));
-  }));
-  function flyIn(a) {
-    const target = railVisible && studio.side.tab === 'works' ? document.querySelector(`.studio-root [data-work="${CSS.escape(a.id)}"] .wr-thumb`) : null;
-    studio.flash = a.id;
-    setTimeout(() => { if (studio.flash === a.id) studio.flash = ''; }, 1200);
-    if (!target) { pip++; return; }
-    const src = document.querySelector(`.studio-root .sd-page.on [data-asset="${CSS.escape(a.id)}"]`);
-    if (!src || prefs.noEnterAnim || reduced() || !visual(a.kind)) return;
-    const r0 = src.getBoundingClientRect(), r1 = target.getBoundingClientRect();
-    if (!r0.width || !r1.width) return;
-    const ghost = document.createElement('img');
-    ghost.src = mediaSrc(a, 'thumb');
-    ghost.className = 'sd-fly';
-    Object.assign(ghost.style, { left: r1.left + 'px', top: r1.top + 'px', width: r1.width + 'px', height: r1.height + 'px' });
-    document.body.appendChild(ghost);
-    const sx = r0.width / r1.width, sy = r0.height / r1.height;
-    const anim = ghost.animate([
-      { transform: `translate(${r0.left - r1.left}px, ${r0.top - r1.top}px) scale(${sx}, ${sy})`, opacity: 0.92, borderRadius: '12px' },
-      { transform: 'none', opacity: 1, borderRadius: '8px' },
-    ], { duration: SPRING.ms + 80, easing: springEasing(SPRING), fill: 'forwards' });
-    anim.onfinish = anim.oncancel = () => ghost.remove();
-  }
-
   const fixture = $derived(import.meta.env.DEV && usingFixture() && !!studio.catalog);
 </script>
 
 <svelte:window onkeydown={onKey} />
 
-{#snippet brand()}
-  <span class="sd-brand"><span class="sd-mark" aria-hidden="true">{@html MARK}</span><span class="sd-word">Media Studio</span>
-    {#if fixture}<span class="sd-fx" title={t('后端还没有 Media Studio 接口，正在用本地样例数据')}>{t('样例数据')}</span>{/if}</span>
-{/snippet}
-
 <div class="studio-slide" class:peeking bind:this={slideEl} style:transform={peek.transform} style:clip-path={peek.clip} use:edgeBack>
-<div class="studio-root" class:dark class:compact class:medium={layout.medium} class:expanded class:rail-col={railCol} class:dock-on={dockOn} class:sd-noanim={prefs.noEnterAnim}
-  class:resizing style="--sd-rail-w:{studio.side.width}px;--sd-dir:{dir};{MOTION}{glassVars}" use:edgeOpen>
+<div class="studio-root" class:dark class:compact class:medium={layout.medium} class:expanded class:shelf-open={shelfOpen} class:dock-on={dockOn}
+  class:picking={!!studio.pick} class:sd-noanim={prefs.noEnterAnim} style="--sd-dir:{dir};{MOTION}{glassVars}" use:edgeOpen>
 
   <div class="sd-body">
-    <!-- 作品栏：同一棵子树在三档之间只换外形（侧列 / 抽屉），从不随创作页重挂 -->
     {#if compact}
-      <button class="sd-scrim" class:open={studio.drawer || drawerDragging} aria-label={t('关闭')} tabindex="-1"
-        style:opacity={drawerDragging ? (studio.drawer ? 1 + drawerX / drawerW() : drawerX / drawerW()) : null}
-        onclick={() => (studio.drawer = false)}></button>
+      <button class="sd-scrim" class:open={shelfOpen || drawerDragging} aria-label={t('关闭')} tabindex="-1"
+        style:opacity={drawerDragging ? (shelfOpen ? 1 + drawerX / drawerW() : drawerX / drawerW()) : null}
+        onclick={closeShelf}></button>
     {/if}
-    <aside class="sd-rail" class:open={railVisible} class:dragging={drawerDragging} use:drawerClose
-      style:transform={compact && drawerDragging ? `translateX(${(studio.drawer ? 0 : -drawerW()) + drawerX}px)` : null}
-      aria-hidden={!railVisible} inert={!railVisible} aria-label={t('作品')}>
-      <div class="sd-rail-in">
-        <header class="sd-band sd-rail-hd">
-          {#if !compact && !pageWin}<button class="sd-ib" aria-label={t('返回')} onclick={back}>{@html icon('back')}</button>{/if}
-          {@render brand()}
-          <button class="sd-ib" aria-label={compact ? t('关闭') : t('收起作品栏')} onclick={toggleRail}>{@html icon(compact ? 'close' : 'side')}</button>
-        </header>
-        <StudioSidebar visible={railVisible} />
-      </div>
-      {#if expanded}
-        <div class="sd-resize" role="separator" aria-orientation="vertical" aria-label={t('调整作品栏宽度')} aria-valuenow={studio.side.width}
-          aria-valuemin="240" aria-valuemax="400" tabindex="0" onpointerdown={resizeDown} onkeydown={resizeKey}
-          ondblclick={() => { studio.side.width = 272; saveSide(); }}></div>
-      {/if}
+    <!-- 素材架：同一棵子树在三档之间只换外形（侧列 / 抽屉），从不随创作页重挂 -->
+    <aside class="sd-shelf" class:open={shelfOpen} class:dragging={drawerDragging} use:drawerClose
+      style:transform={compact && drawerDragging ? `translateX(${(shelfOpen ? 0 : -drawerW()) + drawerX}px)` : null}
+      aria-hidden={compact && !shelfOpen} inert={compact && !shelfOpen} aria-label={t('素材架')}>
+      <Shelf open={shelfOpen} drawer={compact} ontoggle={toggleShelf} onclose={closeShelf} />
     </aside>
 
-    <div class="sd-work" bind:clientWidth={workW}>
+    <div class="sd-work">
       <section class="sd-center">
-        <header class="sd-band sd-cbar" class:tight={tabsTight} bind:clientWidth={cbarW} bind:this={cbarEl}>
-          <div class="sd-cbar-l" bind:clientWidth={cbarLW}>
-            {#if !railVisible || compact}
-              {#if !pageWin}<button class="sd-ib" aria-label={t('返回')} onclick={back}>{@html icon('back')}</button>{/if}
-              <button class="sd-ib sd-rail-btn" aria-label={t('打开作品栏')} aria-expanded={railVisible} onclick={toggleRail}>
-                {@html icon(compact ? 'menu' : 'side')}
-                {#key pip}{#if pip && !railVisible}<span class="sd-dot" style="background:var(--sd-accent)"></span>{/if}{/key}
-              </button>
+        <header class="sd-band sd-cbar" bind:this={barEl} bind:clientWidth={barW}>
+          <div class="sd-cbar-l"><div class="sd-cbar-in" bind:clientWidth={lW}>
+            {#if !pageWin}<button class="sd-ib" aria-label={t('返回')} onclick={back}>{@html icon('back')}</button>{/if}
+            {#if expanded}
+              <span class="sd-brand"><Mark state={activeJobs.length ? 'work' : 'idle'} {beat} size={26} small={false} /><b>Media Studio</b>
+                {#if fixture}<span class="sd-fx" title={t('后端还没有 Media Studio 接口，正在用本地样例数据')}>{t('样例数据')}</span>{/if}</span>
             {/if}
-            {#if compact}{@render brand()}{/if}
-          </div>
-          {#if !compact}
-            <div class="sd-tabs" bind:clientWidth={tabsW}>
-              <Segmented options={tabs} value={studio.page} onchange={go} label={t('创作页')} item={tabDrop}
-                overKey={drag.on ? drag.overKey : ''} keyOf={(p) => 'studio-seg:' + p} onkeydown={tabKey} />
-            </div>
-          {/if}
-          <div class="sd-cbar-r" bind:clientWidth={cbarRW}>
-            {#if studio.page === 'image' && studio.views.image.turns.length}
-              <button class="sd-ib" aria-label={t('新的一张')} title={t('新的一张')} onclick={newImageThread}>{@html icon('compose')}</button>
-            {/if}
-            <button class="sd-ib sd-cap" class:live={activeJobs.length > 0} class:seen={!activeJobs.length && studio.unseen > 0} bind:this={capsuleEl}
-              aria-label={activeJobs.length ? t('{n} 个任务进行中', { n: activeJobs.length }) : t('任务')} aria-expanded={trayOpen} onclick={toggleTray}>
-              <!-- 在跑的朱已经在分段（哪一页）和作品栏（哪一件）上，任务钮只写个数（同一件任务三处红，复核 11-06 第二轮） -->
-              {@html icon('tray')}{#if activeJobs.length}<b>{activeJobs.length}</b>{/if}
-            </button>
-            {#if dockAvail}
-              <button class="sd-ib" class:on={dockOn} aria-label={dockOn ? t('收起参数') : t('展开参数')} aria-pressed={dockOn} onclick={toggleDock}>{@html icon('sliders')}</button>
-            {/if}
+          </div></div>
+          <StudioTabs value={studio.page} onchange={go} labels={LABEL} busy={busyBy} done={doneBy} room={tabsRoom} />
+          <div class="sd-cbar-r"><div class="sd-cbar-in" bind:clientWidth={rW}>
             <button class="sd-ib" aria-label={t('Media Studio 设置')} onclick={() => openSettings('studio')}>{@html icon('gear')}</button>
-          </div>
+          </div></div>
         </header>
-        {#if compact}
-          <div class="sd-segrow sd-tabs-row">
-            <Segmented options={tabs} value={studio.page} onchange={go} full label={t('创作页')} item={tabDrop}
-              overKey={drag.on ? drag.overKey : ''} keyOf={(p) => 'studio-seg:' + p} onkeydown={tabKey} />
-          </div>
-        {/if}
 
         <main class="sd-stage">
           {#each PAGES as p (p)}
@@ -328,7 +223,7 @@
               {@const Comp = PAGE_COMP[p]}
               <section class="sd-page" class:on={studio.page === p} class:leaving={leaving === p} class:st-in={entering === p}
                 class:dormant={studio.page !== p && leaving !== p} inert={studio.page !== p} aria-label={LABEL[p]}>
-                <Comp active={studio.page === p && ui.screen === 'studio'} sideOpen={railVisible} wide={dockOn} />
+                <Comp active={studio.page === p && ui.screen === 'studio'} sideOpen={shelfOpen && !compact} wide={dockOn} />
               </section>
             {/if}
           {/each}
@@ -338,19 +233,18 @@
         </main>
       </section>
 
-      <!-- 参数坞：常驻节点（各创作页把自己的参数面板挂进 .sd-dock-body，只显示当前页那一份），宽屏且开着才显示 -->
+      <!-- 参数坞：常驻节点（各创作页把自己的参数面板挂进 .sd-dock-body，只显示当前页那一份；挂面板时它必须已经在）；
+           开合是推开（宽度过渡，里层贴右不重排）；不到宽屏不显示 -->
       <aside class="sd-dock" class:on={dockOn} aria-label={t('参数')} aria-hidden={!dockOn} inert={!dockOn}>
-        <header class="sd-band sd-dock-hd">
-          <span class="sd-dock-t">{t('参数')}</span>
-          <button class="sd-ib" aria-label={t('收起参数')} onclick={toggleDock}>{@html icon('close')}</button>
-        </header>
-        <div class="sd-dock-body"></div>
-      </aside>
+          <div class="sd-dock-in">
+            <header class="sd-band sd-dock-hd">
+              <span class="sd-dock-t">{t('参数')}</span>
+              <button class="sd-ib" aria-label={t('收起参数')} onclick={closeDock}>{@html icon('close')}</button>
+            </header>
+            <div class="sd-dock-body"></div>
+          </div>
+        </aside>
     </div>
   </div>
-
-  {#if trayOpen}
-    <TaskTray anchor={capsuleEl} onclose={() => (trayOpen = false)} />
-  {/if}
 </div>
 </div>

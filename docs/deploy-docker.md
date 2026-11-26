@@ -58,7 +58,7 @@ docker compose exec bridge node src/cli.mjs pair --origin=http://192.168.1.10:87
 - 服务器连不上 npm 源：`.env` 里设 `WITH_CLAUDE_CLI=1` 后 `docker compose up -d --build`，构建时就把它留在镜像里（自己构建、自己用）。
 - 关掉自动下载：`config.json` 里 `"claudeCliDownload": false`，再用 `"claudeCliPath"` 指向你放进卷里的二进制。
 
-ChatGPT · Codex 分页用的 Codex 运行组件（OpenAI 的独立 codex-app-server 发行包，开源，压缩包约 150MB）也不用自己装：第一次用到时服务端从官方源下载到数据卷 `/data/.bin/codex`（先 releases.openai.com，不通或太慢换 GitHub Releases），按固定版本的 sha256 校验，只下一次。加 ChatGPT 账号走设备码登录，先在 ChatGPT 网页「设置 › 安全」里打开设备码登录。
+Codex 分页用的 Codex 运行组件（OpenAI 的独立 codex-app-server 发行包，开源，压缩包约 150MB）也不用自己装：第一次用到时服务端从官方源下载到数据卷 `/data/.bin/codex`（先 releases.openai.com，不通或太慢换 GitHub Releases），按固定版本的 sha256 校验，只下一次。加 ChatGPT 账号走设备码登录，先在 ChatGPT 网页「设置 › 安全」里打开设备码登录。
 
 - 服务器连不上这两个源：`.env` 里设 `BRIDGE_CODEX_CLI_SOURCES` 指向镜像站，或设 `WITH_CODEX_CLI=1` 后 `docker compose up -d --build`，构建时就下进镜像（构建机要能连外网）。
 - 服务器完全不能连外网：从 releases.openai.com 或 GitHub Releases（`rust-v0.171.0`）下 `codex-app-server-package-x86_64-unknown-linux-musl.tar.gz`（ARM 机器换成 `aarch64-unknown-linux-musl`），原样放进数据卷 `/data/.bin/codex/`。第一次用到时按同一份固定的 sha256 校验、解开，装好后压缩包自动删掉；设了 `BRIDGE_CODEX_CLI_DOWNLOAD=0` 也认它。

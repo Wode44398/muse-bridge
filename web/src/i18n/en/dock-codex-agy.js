@@ -252,4 +252,9 @@ export default {
   '上传失败': 'Upload failed',
   '无法打开对话': 'Couldn’t open chat',
   '文件夹是空的': 'This folder is empty',
+  // —— Codex 页侧栏底部账户、审批卡作答、撞线换号提示 ——
+  '访客': 'Guest',
+  'Codex · 智能分派': 'Codex · Smart dispatch',
+  '没送出去，再试一次': 'Didn’t go through. Try again.',
+  '额度用完，已换到 {name} 接着跑': 'Usage limit reached. Continuing on {name}.',
 };

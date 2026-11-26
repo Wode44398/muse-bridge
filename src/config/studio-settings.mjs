@@ -51,7 +51,7 @@ export const STUDIO_SETTINGS = Object.freeze([
   { key: 'dimensioMedia', group: 'agents', type: 'bool', default: false, scope: 'host', agent: 'dimensio',
     label: 'dimensio', desc: '经 bridge 的操作接口生成；图片和语音按权限档审批，视频和音乐每次先问你' },
   { key: 'codexMedia', group: 'agents', type: 'bool', default: false, scope: 'host', agent: 'codex',
-    label: 'ChatGPT · Codex', desc: '经 bridge 的操作接口生成；视频和音乐每次先问你' },
+    label: 'Codex', desc: '经 bridge 的操作接口生成；视频和音乐每次先问你' },
   { key: 'agyMedia', group: 'agents', type: 'bool', default: true, scope: 'host', agent: 'agy',
     label: 'Antigravity', desc: '对话里通过 Bridge 工具生成图片、视频、语音、音乐' },
   { key: 'apiMedia', group: 'agents', type: 'bool', default: true, scope: 'host',

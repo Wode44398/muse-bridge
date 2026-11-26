@@ -10,6 +10,10 @@
   import { drag, dropZone, isDragging } from '../../../lib/dragdrop.svelte.js';
   import { fmtSize, kindOf } from '../../../lib/files/common.js';
   import { FOLDER_GLYPH, PC_GLYPH, fileIcon, fmtTime, rootIcon } from './panelLook.js';
+  // 最近 / 文件夹 / 文件 / 空态各包一层 in:swap：页面推进来时已有列表（内存缓存或上次的快照）就跟着页面一起出、不播；
+  // 页面挂好以后列表才到（全新安装、没进过的子目录）才淡入接住，不是一帧之内整屏蹦出来。
+  // 包一层而不是挂在分组里的元素上：过渡是局部的，网格在内层 {#if 显示方式} 里，外层块晚到时它不会播
+  import { swap } from '../../../lib/arrive.js';
 
   const { P } = $props();
 </script>
@@ -115,6 +119,7 @@
     {/if}
 
     {#if P.recents.length}
+    <div class="arr" in:swap>
       <div class="sechead"><h2>{t('最近')}</h2></div>
       <div class="recents">
         {#each P.recents as it (it.name)}
@@ -140,9 +145,11 @@
           </button>
         {/each}
       </div>
+    </div>
     {/if}
 
     {#if P.showFolders.length}
+    <div class="arr" in:swap>
       <div class="sechead" class:has-act={P.hidSwitch}><h2>{tc('files', '文件夹')}</h2>{#if P.hidSwitch}{@render hidToggle()}{/if}</div>
       {#if P.viewMode !== 'list'}
       <div class="cgrid" class:big={P.viewMode === 'large'}>
@@ -179,9 +186,11 @@
         {/each}
       </div>
       {/if}
+    </div>
     {/if}
 
     {#if P.showFiles.length}
+    <div class="arr" in:swap>
       <div class="sechead" class:has-act={P.hidSwitch && !P.showFolders.length}><h2>{tc('files', '文件')}</h2>{#if P.hidSwitch && !P.showFolders.length}{@render hidToggle()}{/if}</div>
       {#if P.viewMode !== 'list'}
       <div class="cgrid" class:big={P.viewMode === 'large'}>
@@ -231,11 +240,12 @@
         {/each}
       </div>
       {/if}
+    </div>
     {/if}
 
     {#if P.isEmpty}
       <!-- 打不开（没权限/不存在/断网）与「真的是空的」分开说：整机浏览时前者很常见 -->
-      <div class="empty"><div class="big">{P.query ? '🔍' : P.loadErr ? (/权限|permission/i.test(P.loadErr) ? '🔒' : '⚠️') : '📂'}</div>{P.query ? t('未找到相关文件') : P.loadErr || t('这个文件夹是空的')}</div>
+      <div class="empty" in:swap><div class="big">{P.query ? '🔍' : P.loadErr ? (/权限|permission/i.test(P.loadErr) ? '🔒' : '⚠️') : '📂'}</div>{P.query ? t('未找到相关文件') : P.loadErr || t('这个文件夹是空的')}</div>
     {/if}
     {/if}
 

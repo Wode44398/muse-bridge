@@ -4,7 +4,6 @@
   //   图标用 Antigravity 那套符号字；没绑工作空间文件夹时的空态带「选择文件夹」入口。
   // 手机上是整屏页（返回 + 自适应标签）。
   import { ui } from '../../lib/state.svelte.js';
-  import { layout } from '../../lib/layout.svelte.js';
   import { agyHost, agyTools } from '../../lib/dock.svelte.js';
   import { toolAllowed } from '../../lib/dock/tools.js';
   import { agy } from '../../lib/agy/store.svelte.js';
@@ -13,6 +12,7 @@
   import { agyPrefs } from '../../lib/agy/settings.svelte.js';
   import { buildActivityTimeline } from '../../lib/agy/workspace-logic.js';
   import { t } from '../../lib/i18n.js';
+  import { agentPopOut, listenCardBack } from '../../lib/solo.js';
   import Workbench from '../dock/Workbench.svelte';
   import AgySessionReview from './AgySessionReview.svelte';
   import AgyAgentsPanel from './AgyAgentsPanel.svelte';
@@ -42,6 +42,10 @@
     activity: { live: activityCounts.running > 0, hot: activityCounts.running > 0, badge: activityCounts.total },
   });
   const tools = $derived(agyTools().filter((x) => toolAllowed(x, agyHost)).map((x) => ({ ...x, ...(DYN[x.key] || {}) })));
+
+  // 共用卡（文件 / 终端 / 浏览器）能拖出 app 成独立窗口（同 Claude 分页）；那扇窗点「放回工作台」就摆回这里
+  const popOut = agentPopOut('agy', () => agyDock, () => agyTheme);
+  $effect(() => listenCardBack('agy', (v) => { if (tools.some((x) => x.key === v)) { agyHost.open(v); try { window.focus(); } catch {} } }));
 
   const canPickFolderNow = $derived(!agy.sessionId && agy.messages.length === 0);
   function openFolderPicker() {
@@ -101,9 +105,9 @@
 {/snippet}
 
 <div class="agy-wb" bind:this={root}>
-  <Workbench host={agyHost} {tools} {wide} multi={layout.expanded} skin="agy" mobile="page" filesFloat="always"
+  <Workbench host={agyHost} {tools} {wide} multi skin="agy" mobile="page" filesFloat="always"
     theme={agyTheme} label={t('侧边工作区')}
-    {icon} {panel} {empty} keysOn={ui.screen === 'agy'} />
+    {icon} {panel} {empty} {popOut} keysOn={ui.screen === 'agy'} />
 </div>
 
 <style>

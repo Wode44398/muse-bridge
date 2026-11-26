@@ -30,19 +30,23 @@
 //        检测 Vertex：对话模型拉目录 + 在对话区零成本探活（countTokens），媒体模型让 Studio 立即巡检它的 Vertex 内置服务；都不动勾选
 //   POST /api/model-hub/prefs  { agentMediaConfig?: bool } → { ok, prefs }   模型中心的开关（总览里的 prefs 是生效值）
 //        agentMediaConfig：允许 AI 读写媒体模型的调用配置并预演 / 试跑（agent 操作 studio.model_*），默认关
+//   POST /api/model-hub/balance  {id, force?}    → { ok, balance: [{ lineId, label, enabled, ok, items?, error?, at }] }   各把 Key 的余额 / 限额
+//        只有服务视图 balance = true 的服务商能查（形状见 runtime/model-hub/balance.mjs）；60 秒内走缓存，force 跳过
 //   保留：POST /vertex、/line/reset、/models（从一条线路拉模型 id 列表）、/test。
 // 出错一律 { error: 人话 } + 状态码（400 输入不对、404 没有这个、413 太大、502 / 504 上游连不上 / 超时）。任何响应都不带 Key。
 import { readBody } from '../runtime/body.mjs';
 import {
   createHubService, createHubFromDetect, assignHubModels, setHubModelCache, setHubModelLabel, updateHubV2, deleteHubV2, updateVertex, resetHubLine, lineContext,
   detectHub, catalogView, catalogAddAndProbe, probeHubModel, catalogRemoveModel, setHubModelAdvanced, markMigrated, detectVertex, vertexView,
-  setHubPrefs,
+  setHubPrefs, getHubService,
 } from '../runtime/model-hub/registry.mjs';
 import { adoptClaudeProvider, adoptTextService, adoptStudioProvider, migrateLegacyConfigs } from '../runtime/model-hub/legacy-migrate.mjs';
 import { getModule } from '../modules/registry.mjs';
 import { studioList, studioBuiltins, setStudioBuiltin, syncStudioBuiltin } from '../runtime/model-hub/studio-link.mjs';
 import { hubOverview, exportDimensioProvider } from '../runtime/model-hub/overview.mjs';
 import { fetchLineModels, testLine } from '../runtime/model-hub/probe.mjs';
+import { readServiceBalance } from '../runtime/model-hub/balance.mjs';
+import { registerChatgptRoutes } from './model-hub-chatgpt.mjs';
 
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
 const fail = (msg, status = 400) => Object.assign(new Error(msg), { status });
@@ -94,6 +98,7 @@ export function registerModelHubRoutes(router, { identify }) {
   });
 
   post('/api/model-hub/detect', (b) => detectHub(b));
+  registerChatgptRoutes(post);   // ChatGPT 订阅的登录与建服务（model-hub-chatgpt.mjs）
   post('/api/model-hub/catalog/add', (b) => catalogAddAndProbe(id(b), b.model));
   post('/api/model-hub/model/probe', (b) => probeHubModel(id(b), String(b.model || ''), String(b.lineId || '')));
   post('/api/model-hub/create', (b) => {
@@ -137,6 +142,13 @@ export function registerModelHubRoutes(router, { identify }) {
     const model = String(b.model || '').trim();
     if (!model) throw fail('要选一个型号来测');
     return { result: await testLine(service, line, key, model) };
+  });
+  post('/api/model-hub/balance', (b) => {
+    const svc = getHubService(id(b));
+    if (!svc) throw fail('没有这个服务', 404);
+    if (!svc.balance) throw fail('这家服务商没有能用 API Key 查余额的接口');
+    const entries = svc.lines.filter((l) => l.hasKey).map((l) => lineContext({ id: svc.id, lineId: l.id }));
+    return readServiceBalance(entries, { force: b.force === true });
   });
   post('/api/model-hub/adopt', (b) => {
     if (b.from === 'studio') {

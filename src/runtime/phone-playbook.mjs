@@ -186,17 +186,14 @@ export function playbookSummary() {
   const apps = (load().apps) || {};
   const recs = Object.values(apps);
   if (!recs.length) return '';
-  const lines = [];
+  // 11-26 系统提示精简：只列 app 名与会的任务名，不再带 traits——traits 与步骤在 open_app / phone_recall 时完整带回，
+  // 真在 app 里干活的多是 phone-operator 子 agent，主对话只需知道「这些有经验」。
+  const items = [];
   for (const rec of recs) {
     const name = (rec.names && rec.names[0]) || '?';
-    const traits = (rec.traits || []).filter(Boolean).join('；');
     const taskNames = Object.values(rec.tasks || {}).map((t) => t.task).filter(Boolean);
-    let line = '· ' + name;
-    if (traits) line += '：' + traits;
-    if (taskNames.length) line += '　已会：' + taskNames.join('、');
-    lines.push(line);
+    items.push(taskNames.length ? `${name}（${taskNames.join('、')}）` : name);
   }
-  return '\n\n【手机操控经验库里记过的 app】\n'
-    + lines.join('\n')
-    + '\n打开这些 app 时会自动带回详细做法（参考，以当前画面为准）；委派 phone-operator 时不用转述。';
+  return '\n【手机经验库】记过的 app：' + items.join('；')
+    + '。打开它们时会自动带回特性与做法（以当前画面为准），委派 phone-operator 时不用转述。';
 }

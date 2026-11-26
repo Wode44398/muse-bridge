@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { catKind, pageOf, splitKey, joinKey, fileKind, uploadRel } from './kinds.js';
 import { resolveValues, payloadParams, visibleSpec, optionsOf, roleState, jsonError, basicSpecs, advancedSpecs, promptLangs, textFitsLangs } from './params.js';
 import { layoutLineage, chainOf } from './lineage.js';
+import { PAGE_ASSET_KIND, mergeAssets, appendAssets, resetWallItems, pickWallJobs, matchModel, parseSide } from './walls.js';
 
 test('种类三套叫法互转', () => {
   assert.equal(catKind('voice'), 'speech');
@@ -154,4 +155,64 @@ test('没默认值的数值是「未设置」、不发；种子随机不发；�
   assert.deepEqual(payloadParams(specs, resolveValues(specs, d, 'm'), d), { speed: 1.5, steps: 28, seed: 42, seedLocal: -1, upsample: false, audio: false });
   // 不给 draft（老调用）：开关照旧都发
   assert.equal(payloadParams(specs, v).upsample, false);
+});
+
+// —— 作品墙（walls.js）——
+test('作品按时间插进墙：去重、尊重删过的、比末项还旧且没翻到底的不插', () => {
+  const items = [{ id: 'c', createdAt: 300 }, { id: 'a', createdAt: 100 }];
+  const gone = new Set(['x']);
+  const n = mergeAssets(items, [{ id: 'd', createdAt: 400 }, { id: 'b', createdAt: 200 }, { id: 'c', createdAt: 300 }, { id: 'x', createdAt: 500 }, { id: 'old', createdAt: 50 }], { gone });
+  assert.equal(n, 2);
+  assert.deepEqual(items.map((x) => x.id), ['d', 'c', 'b', 'a']);
+  mergeAssets(items, [{ id: 'old', createdAt: 50 }], { gone, done: true });
+  assert.equal(items.at(-1).id, 'old', '翻到底了，旧的接在最后');
+  const empty = [];
+  mergeAssets(empty, [{ id: 'n', createdAt: 1 }]);
+  assert.deepEqual(empty.map((x) => x.id), ['n'], '墙还没拉过：直接放');
+  const only = [];
+  mergeAssets(only, [{ id: 'i', kind: 'image', createdAt: 9 }, { id: 'v', kind: 'video', createdAt: 9 }], { accept: (a) => a.kind === 'image' });
+  assert.deepEqual(only.map((x) => x.id), ['i']);
+  const tail = [{ id: 'a' }];
+  appendAssets(tail, [{ id: 'a' }, { id: 'b' }, { id: 'x' }], gone);
+  assert.deepEqual(tail.map((x) => x.id), ['a', 'b']);
+});
+
+test('墙从头重拉：服务端这一页为准，拉取途中刚完成的更新的留在最前', () => {
+  const cur = [{ id: 'new', createdAt: 900 }, { id: 'old', createdAt: 100 }, { id: 'gone', createdAt: 950 }];
+  const fresh = [{ id: 'b', createdAt: 500 }, { id: 'a', createdAt: 400 }];
+  assert.deepEqual(resetWallItems(cur, fresh, new Set(['gone'])).map((x) => x.id), ['new', 'b', 'a']);
+  assert.deepEqual(resetWallItems([], [], null), []);
+  assert.deepEqual(resetWallItems([{ id: 'k', createdAt: 1 }], [], null).map((x) => x.id), ['k'], '服务端一件都没有：本地刚出的留着');
+});
+
+test('墙上的任务：在跑的不分来源，失败的只要亲眼看着失败且没收起的，新的在前', () => {
+  const jobs = [
+    { id: '1', kind: 'image', state: 'running', createdAt: 100, source: 'claude' },
+    { id: '2', kind: 'image', state: 'error', createdAt: 300, _failSeen: true },
+    { id: '3', kind: 'image', state: 'error', createdAt: 400 },
+    { id: '4', kind: 'image', state: 'error', createdAt: 500, _failSeen: true, _dismissed: true },
+    { id: '5', kind: 'speech', state: 'queued', createdAt: 600 },
+    { id: '6', kind: 'image', state: 'done', createdAt: 700 },
+    { id: '7', kind: 'image', state: 'canceled', createdAt: 800, _failSeen: true },
+  ];
+  assert.deepEqual(pickWallJobs(jobs, 'image').map((j) => j.id), ['2', '1']);
+  assert.deepEqual(pickWallJobs(jobs, 'voice').map((j) => j.id), ['5']);
+  assert.deepEqual(pickWallJobs(jobs, 'music'), []);
+  assert.equal(PAGE_ASSET_KIND.voice, 'audio');
+});
+
+test('按作品找回模型：服务/模型 → 裸 id → 去厂商前缀；都不中回 null', () => {
+  const models = [{ key: 'or/openai/gpt-image-2.6', id: 'openai/gpt-image-2.6' }, { key: 'vx/imagen-4', id: 'imagen-4' }];
+  assert.equal(matchModel(models, { provider: 'vx', model: 'imagen-4' }).key, 'vx/imagen-4');
+  assert.equal(matchModel(models, { provider: 'vertex', model: 'imagen-4' }).key, 'vx/imagen-4', '旧作品的 provider 是方言名');
+  assert.equal(matchModel(models, { provider: 'x', model: 'gpt-image-2.6' }).key, 'or/openai/gpt-image-2.6');
+  assert.equal(matchModel(models, { model: 'veo-3' }), null);
+});
+
+test('侧列设置：新键照读；只有旧键时搬宽度分段参数坞，旧的 pinned 不搬（默认收起）', () => {
+  assert.deepEqual(parseSide(null, null), { width: 272, pinned: false, tab: 'works', dock: true });
+  assert.deepEqual(parseSide(null, JSON.stringify({ width: 330, pinned: true, tab: 'files', dock: false })), { width: 330, pinned: false, tab: 'files', dock: false });
+  assert.equal(parseSide(JSON.stringify({ pinned: true }), JSON.stringify({ pinned: true })).pinned, true);
+  assert.equal(parseSide('{bad', null).pinned, false);
+  assert.equal(parseSide(JSON.stringify({ width: 9999 }), null).width, 400);
 });

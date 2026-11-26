@@ -80,7 +80,16 @@ export const clipLine = clip;
 
 // bridge 工具 → 一行人话：图标 + 动词 + 对象。detail 给审批卡那一行（替掉「Run mcp_bridge_x」）。
 // group：折叠汇总里归到哪一句（step-summary.js）。不给的话浏览器会被数成「网络检索」、查手册被数成「读取文件」。
-function bridgeToolMeta(id, a = {}) {
+// 合并成一个按 action 分派的几族（服务端 modules/agy/server/mcp/catalog.mjs 的 AGY_TOOL_FAMILIES，改那边要一起改）：
+// 文案照原工具来（pr + action:"status" → pr_status）
+const FAMILY_PREFIX = Object.freeze({ pr: 'pr_', project_memory: 'project_memory_', phone_files: 'phone_' });
+export function bridgeMemberId(id, a = {}) {
+  const prefix = FAMILY_PREFIX[id];
+  const act = String(a?.action || '').trim().toLowerCase();
+  return prefix && /^[a-z_]+$/.test(act) ? prefix + act : id;
+}
+function bridgeToolMeta(id0, a = {}) {
+  const id = bridgeMemberId(id0, a);
   const meta = bridgeToolMetaOf(id, a);
   if (!meta) return null;
   const act = String(a.action || '').toLowerCase();
@@ -284,7 +293,7 @@ export function classifyToolKind(tool = {}, { sessionCwd = '' } = {}) {
       summary: target ? String(target) : (/^Run mcp_/i.test(String(tool.title || '')) ? '' : String(tool.title || name)),
     };
   }
-  if (/(?:^|[_:/])phone_(list|read|write|scan|delete)$/.test(name)) {
+  if (/(?:^|[_:/])phone_(list|read|write|scan|delete|files)$/.test(name)) {
     return {
       category: 'other',
       icon: 'extension',

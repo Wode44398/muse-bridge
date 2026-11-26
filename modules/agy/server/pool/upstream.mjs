@@ -192,7 +192,7 @@ function sseUsageTap(contentType, onDone) {
 async function resolveAccountCredentials(accountId, hostAuthHeader, { forceRefresh = false } = {}) {
   const acct = getAccountInternal(accountId);
   if (!acct) return { authHeader: hostAuthHeader || '', project: '', isLocal: true, error: '' };
-  if (!acct.refreshToken) {
+  if (acct.source === 'local' && !acct.refreshToken) {
     return {
       authHeader: hostAuthHeader || '',
       project: acct.project || '',

@@ -53,6 +53,7 @@
 
   let oauthFlowId = $state('');
   let oauthUrl = $state('');
+  let oauthMode = $state('oauth');
   let oauthStatus = $state('');
   let oauthInput = $state('');
   let pollTimer = null;
@@ -66,6 +67,7 @@
     if (cancelServer && oauthFlowId && oauthStatus === 'pending') cancelAgyOAuth(oauthFlowId);
     oauthFlowId = '';
     oauthUrl = '';
+    oauthMode = agyPool.authMode || 'oauth';
     oauthStatus = '';
     oauthInput = '';
     copiedUrl = false;
@@ -105,24 +107,27 @@
     if (!res.ok) { formErr = res.error || t('无法发起 Google 授权'); return; }
     oauthFlowId = res.flowId;
     oauthUrl = res.url;
+    oauthMode = res.mode || agyPool.authMode || 'oauth';
     oauthStatus = 'pending';
     try { window.open(res.url, '_blank', 'noopener'); } catch {}
 
     stopPoll();
-    pollTimer = setInterval(async () => {
-      if (!oauthFlowId) { stopPoll(); return; }
-      const st = await pollAgyOAuth(oauthFlowId);
-      if (st?.status === 'done') {
-        stopPoll();
-        oauthStatus = 'done';
-        refreshAgyRuntimeStatus({ ensure: false, probe: false });
-        pop?.();
-      } else if (st?.status === 'error' || st?.status === 'expired') {
-        stopPoll();
-        oauthStatus = st.status;
-        formErr = tr(st.error) || t('授权未完成，请重试');
-      }
-    }, 1500);
+    if (oauthMode !== 'cli') {
+      pollTimer = setInterval(async () => {
+        if (!oauthFlowId) { stopPoll(); return; }
+        const st = await pollAgyOAuth(oauthFlowId);
+        if (st?.status === 'done') {
+          stopPoll();
+          oauthStatus = 'done';
+          refreshAgyRuntimeStatus({ ensure: false, probe: false });
+          pop?.();
+        } else if (st?.status === 'error' || st?.status === 'expired') {
+          stopPoll();
+          oauthStatus = st.status;
+          formErr = tr(st.error) || t('授权未完成，请重试');
+        }
+      }, 1500);
+    }
   }
 
   async function copyOAuthUrl() {
@@ -343,7 +348,7 @@
     </div>
   </div>
 
-  {#if isAdd || account?.source === 'oauth'}
+  {#if isAdd || account?.source !== 'local'}
     <h2 class="ghead">{t('Google 账号授权')}</h2>
     <div class="ig">
       {#if oauthStatus !== 'pending'}
@@ -359,8 +364,12 @@
           <span class="r-main">
             <span class="spin"></span>
             <span class="r-tx">
-              {t('等待浏览器完成 Google 授权…')}
-              <span class="r-sub">{t('在手机上授权后，页面会跳转到 localhost，请复制地址栏里的完整链接贴到下方完成入池。')}</span>
+              {oauthMode === 'cli' ? t('等待粘贴 Google 授权码…') : t('等待浏览器完成 Google 授权…')}
+              <span class="r-sub">
+                {oauthMode === 'cli'
+                  ? t('请在浏览器中完成授权（添加其他号可在页面切号或用无痕窗口打开），复制页面给出的授权码或链接贴到下方完成入池。')
+                  : t('在手机上授权后，页面会跳转到 localhost，请复制地址栏里的完整链接贴到下方完成入池。')}
+              </span>
             </span>
           </span>
         </div>
@@ -375,7 +384,7 @@
             <input
               class="dv-in"
               bind:value={oauthInput}
-              placeholder={t('粘贴跳转后的完整链接或授权码')}
+              placeholder={oauthMode === 'cli' ? t('粘贴授权码或回调链接') : t('粘贴跳转后的完整链接或授权码')}
               autocapitalize="off"
               autocorrect="off"
               spellcheck="false"
@@ -387,36 +396,42 @@
         </button>
       {/if}
     </div>
-    <p class="gfoot">{t('授权后仅把刷新令牌保存在 Bridge 本地号池中，不覆盖本机 Antigravity 客户端登录。')}</p>
+    <p class="gfoot">
+      {agyPool.authMode === 'cli'
+        ? t('通过本机 agy 在独立目录完成 Google 授权，不覆盖系统钥匙串里的默认登录。')
+        : t('授权后仅把刷新令牌保存在 Bridge 本地号池中，不覆盖本机 Antigravity 客户端登录。')}
+    </p>
   {/if}
 
-  <div class="ig">
-    <button class="r" type="button" onclick={() => { showManual = !showManual; }}>
-      <span class="r-main">
-        <span class="r-tx">{isAdd ? t('或手动填写 Refresh Token') : t('更换 Refresh Token（可选）')}</span>
-        <span class="r-d">{showManual ? t('收起') : t('展开')}</span>
-      </span>
-    </button>
-    {#if showManual}
-      <div class="r">
+  {#if agyPool.manualTokenSupported}
+    <div class="ig">
+      <button class="r" type="button" onclick={() => { showManual = !showManual; }}>
         <span class="r-main">
-          <input
-            class="dv-in"
-            bind:value={formToken}
-            placeholder={t('粘贴 Google OAuth Refresh Token（1//…）')}
-            autocapitalize="off"
-            autocorrect="off"
-            spellcheck="false"
-          />
+          <span class="r-tx">{isAdd ? t('或手动填写 Refresh Token') : t('更换 Refresh Token（可选）')}</span>
+          <span class="r-d">{showManual ? t('收起') : t('展开')}</span>
         </span>
-      </div>
-      {#if isAdd}
-        <button class="r" type="button" disabled={!formToken.trim() || busy} onclick={submitManualOrEdit}>
-          <span class="r-main center"><span class="r-tx accent">{busy ? t('验证中…') : t('验证并添加')}</span></span>
-        </button>
+      </button>
+      {#if showManual}
+        <div class="r">
+          <span class="r-main">
+            <input
+              class="dv-in"
+              bind:value={formToken}
+              placeholder={t('粘贴 Google OAuth Refresh Token（1//…）')}
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck="false"
+            />
+          </span>
+        </div>
+        {#if isAdd}
+          <button class="r" type="button" disabled={!formToken.trim() || busy} onclick={submitManualOrEdit}>
+            <span class="r-main center"><span class="r-tx accent">{busy ? t('验证中…') : t('验证并添加')}</span></span>
+          </button>
+        {/if}
       {/if}
-    {/if}
-  </div>
+    </div>
+  {/if}
 
   {#if formErr}<p class="gfoot err">{formErr}</p>{/if}
 

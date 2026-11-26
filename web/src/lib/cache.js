@@ -16,7 +16,7 @@ import { bootCacheTag } from './accountVault.js';
 const NS = [cacheNamespace(), bootCacheTag()].filter(Boolean).join('~');
 const DB = 'bridge-chat-cache' + (NS ? '@' + NS : '');
 const VER = 1;
-const MESSAGE_PREFIXES = ['msg:', 'vmsg:'];
+const MESSAGE_PREFIXES = ['msg:', 'vmsg:', 'agy:'];
 const MAX_MESSAGE_ENTRIES = 100;
 const MAX_MESSAGE_BYTES = 48 * 1024 * 1024; // 每个聊天源约 48 MiB，保留最近写入的正文
 let dbp = null;
@@ -156,6 +156,11 @@ export const cacheMessages = (id, messages, fp) => put('msg:' + id, snap(message
 export const getCachedMessages = (id) => get('msg:' + id);
 export const getCachedMessagesMeta = (id) => getMeta('msg:' + id);
 export const removeCachedMessages = (id) => remove('msg:' + id);
+
+// —— 单会话详情快照（Antigravity，含消息与标题/目录/用量/配置）——
+export const cacheAgySession = (id, detail, fp) => put('agy:' + id, snap(detail), fp ? { fp: String(fp) } : null);
+export const getCachedAgySessionMeta = (id) => getMeta('agy:' + id);
+export const removeCachedAgySession = (id) => remove('agy:' + id);
 
 
 // 启动即预热 DB 连接：Android WebView 冷启的 indexedDB.open 可到几百 ms，提前开好，

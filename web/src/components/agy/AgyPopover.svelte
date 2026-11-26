@@ -594,6 +594,14 @@
     min-height: 0;
     overflow-y: auto;
     padding: 5px;
-    scrollbar-width: thin;
+  }
+  @supports not (selector(::-webkit-scrollbar)) {
+    .pop-body {
+      scrollbar-width: thin;
+      scrollbar-color: transparent transparent;
+    }
+    .pop-body:hover {
+      scrollbar-color: var(--ag-sb-thumb) transparent;
+    }
   }
 </style>

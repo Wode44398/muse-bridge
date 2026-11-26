@@ -11,7 +11,7 @@ if (window.BridgeDesktop) document.documentElement.dataset.desktop = '1';
 import './lib/selection.js';    // 选区的墨 + 正文右键菜单（必须在 nativeMenu 之前：先登记的右键监听先跑）
 import './lib/nativeMenu.js';   // 桌面壳原生右键菜单（无桥=空操作）
 import './lib/mediaHeal.js';   // 全站媒体元素加载失败自愈（LAN→隧道 / 换 token / 重试），新写的 <img> 不用再各挂 onerror
-import './lib/scrollbars.js';   // Edge 同款滚动条：滚动或鼠标移到滚条上才显形，停下隐身
+import './lib/scrollbars.js';   // 全站滚动条：滚动或鼠标移到滚条上才显形、停下隐身；拉宽把手在拇指上让开
 
 // /w/<token> = 公开只读分享工作空间，挂轻量 SharePage（复用 FilesPanel + 预览查看器）；
 // /c/<token> = 公开聊天快照，挂 SnapPage（阉割版 Claude 分页：只有对话，复用 Thread/Composer）；

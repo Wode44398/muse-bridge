@@ -16,7 +16,9 @@ import path from 'node:path';
 // studio 的 MediaProviderManager：模型中心（核心）经 loadPage.studioProviders 打开媒体服务面板（方案 §3.8）。
 export const MODULE_ENTRIES = {
   studio: ['src/components/studio/StudioPage.svelte', 'src/components/studio/settings/StudioSettings.svelte', 'src/components/studio/settings/MediaProviderManager.svelte'],
-  codex: ['src/components/ChatGPTPage.svelte'],
+  // store：通知点进来（lib/agentUi.js）经它懒加载打开 Codex 线程（只在 Codex 开着时才走到）
+  codex: ['src/components/codex/CodexPage.svelte', 'src/desktop/settings/CodexSection.svelte', 'src/components/settings/ios/codex/CodexSettingsPages.svelte',
+    'src/lib/codex/store.svelte.js'],
   // store：lib/agentUi.js 点通知回跳与 agy 的 ui_open 经它懒加载（只在 agy 分页开着时才走到）
   // antigravity-logo：Claude 页插件工作区外观里的 agy 标志（components/claude/workspace/AgentTile）懒加载引擎，agy 开着才取
   agy: ['src/components/agy/AgyPage.svelte', 'src/desktop/settings/AgySection.svelte', 'src/components/settings/ios/agy/AgySettingsPages.svelte', 'src/lib/agy/file-target.js',
@@ -25,12 +27,13 @@ export const MODULE_ENTRIES = {
 };
 
 // public/ 下原样拷贝、属于某个扩展的目录。
-export const MODULE_PUBLIC_DIRS = { codex: ['chatgpt'] };
+export const MODULE_PUBLIC_DIRS = {};
 
 // 判「扩展源码漏进核心」用的路径特征（相对 web/，正斜杠）。只用于报告，不影响归属。
 const MODULE_SOURCES = {
   studio: [/^src\/components\/studio\//, /^src\/modules\/studio\//],
-  codex: [/^src\/components\/ChatGPTPage\.svelte$/, /^src\/components\/dock\/CodexWorkspace\.svelte$/],
+  codex: [/^src\/components\/codex\//, /^src\/components\/dock\/CodexWorkspace\.svelte$/, /^src\/lib\/codex\//,
+    /^src\/desktop\/settings\/Codex\w*\.svelte$/, /^src\/components\/settings\/ios\/codex\//],
   agy: [/^src\/components\/agy\//, /^src\/lib\/agy\//, /^src\/desktop\/settings\/Agy(?:Ext|Pool)?Section\.svelte$/, /^src\/components\/settings\/ios\/agy\//],
   dimensio: [/^src\/components\/HarnessPage\.svelte$/, /^src\/components\/dock\/HxWorkbench\.svelte$/, /^src\/components\/dock\/DimensioMemoryNote\.svelte$/, /^\.\.\/harness\/web\/src\//],
 };

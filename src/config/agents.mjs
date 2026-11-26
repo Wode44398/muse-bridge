@@ -24,7 +24,7 @@ export const AGENTS = Object.freeze([
   { id: 'claude', label: 'Claude', screen: 'claude', chat: 'claude', multiUser: true },
   // Media Studio（2026-11-04）：媒体创作工作室（图像 / 视频 / 配音 / 音乐）。成员能用的服务 = 自己的 Key + 管理员共享的。
   { id: 'studio', label: 'Media Studio', screen: 'studio', chat: null, multiUser: true, tool: true },
-  { id: 'codex', label: 'ChatGPT · Codex', screen: 'chatgpt', chat: 'codex', multiUser: true, fullTrust: true },
+  { id: 'codex', label: 'Codex', screen: 'chatgpt', chat: 'codex', multiUser: true, fullTrust: true },
   { id: 'agy', label: 'Antigravity', screen: 'agy', chat: 'agy', multiUser: true, fullTrust: true },
   // dimensio：2026-09-28 起每个注册用户一个 harness 进程（routes/harness.mjs 实例池 + harness 租户模式），可以按人放行。
   { id: 'dimensio', label: 'dimensio', screen: 'harness', chat: null, multiUser: true },

@@ -20,12 +20,15 @@
   // Studio 列表读失败时，照旧在这里管自己的媒体服务。引的是核心 lib，不违反「核心不静态引扩展」。
   import { hub, loadHub, openHubSheet } from '../../../lib/modelHub.svelte.js';
   import { openSettings } from '../../../lib/settingsNav.svelte.js';
+  import { me } from '../../../lib/state.svelte.js';
+  import { grow, swap } from '../../../lib/arrive.js';
 
   let { page = 'studio', push = null, agentIds = null, openMgr = () => {}, openFolder = () => {} } = $props();
 
   // 设置外壳打开时已经拉过；这一页单独挂起来也补一次，同一时刻只发一个请求
   if (!hub.ok) loadHub();
-  const viaHub = $derived(hub.ok && !!hub.v2 && !hub.studioErr);
+  // 管理员第一次打开、总览还在路上时先按「经模型中心」排（v2 服务端都是这样），别先画一整组「添加服务…」再整块换掉
+  const viaHub = $derived(hub.ok ? !!hub.v2 && !hub.studioErr : me.kind === 'admin' && !!hub.loading);
   // 行尾状态：只数 Studio 自己的服务与启用的模型（同服务管理器顶上那句），没有服务就不写
   const svcSum = $derived.by(() => {
     if (!sp.providers.length) return '';
@@ -45,14 +48,18 @@
   const hue = (s) => { let h = 0; for (const c of String(s || '?')) h = (h * 31 + c.codePointAt(0)) % 360; return h; };
   const firstChar = (s) => (String(s || '?').trim().match(/[\p{L}\p{N}]/u) || ['?'])[0].toUpperCase();
 
-  // 默认模型行尾：选了且还在目录里 = 模型名；选了但停用 / 删了 = 提示；没选 = 目录给的自动值
+  // 默认模型行尾：选了且还在目录里 = 模型名；选了但停用 / 删了 = 提示；没选 = 目录给的自动值。
+  // 「已停用」「没有可用模型」是结论，只有设置与目录这次都从网络拿到了才下；之前（快照里也对不上）行尾先空着，
+  // 不然设置先到、目录后到时同一处会被改写两次
   function defLine(k) {
     const pick = defaultOf(k);
     const r = resolvePick(k, pick);
     if (r) return { text: r.label };
+    const a = pick ? null : resolvePick(k, cat.kinds?.[k]?.defaults);
+    if (a) return { text: a.label };
+    if (!ss.loaded || !cat.loaded) return { text: '', pend: true };
     if (pick) return { text: t('已停用'), warn: true };
-    const a = resolvePick(k, cat.kinds?.[k]?.defaults);
-    return a ? { text: a.label } : { text: t('没有可用模型'), dim: true };
+    return { text: t('没有可用模型'), dim: true };
   }
   const pickTitle = (k) => t('默认{kind}模型', { kind: kindName(k) });
   const isSel = (k, provider, model) => { const p = defaultOf(k); return !!p && p.provider === provider && p.model === model; };
@@ -81,7 +88,7 @@
       <button class="r" type="button" onclick={openHub}>
         <span class="r-main">
           <span class="r-tx">{t('模型中心')}</span>
-          {#if svcSum}<span class="r-d"><span class="r-dt">{svcSum}</span></span>{/if}
+          {#if svcSum}<span class="r-d" in:swap><span class="r-dt">{svcSum}</span></span>{/if}
           {@render chev()}
         </span>
       </button>
@@ -136,7 +143,8 @@
         <span class="tile" data-k={k}>{@html kindSvg(k)}</span>
         <span class="r-main">
           <span class="r-tx"><span class="r-lbl">{kindName(k)}{#if defaultMine(k)}<span class="pill">{t('我的')}</span>{/if}</span></span>
-          <span class="r-d" class:warn={d.warn} class:faint={d.dim}><span class="r-dt">{d.text}</span></span>
+          <!-- 还不知道时只占一行高、不写字；到了原地淡入（换字也一样），行高与左边的字都不动 -->
+          <span class="r-d" class:warn={d.warn} class:faint={d.dim}>{#key d.text}<span class="r-dt" in:swap>{#if d.pend}&nbsp;{:else}{d.text}{/if}</span>{/key}</span>
           {@render chev()}
         </span>
       </button>
@@ -160,10 +168,12 @@
 
   <!-- 管理员：主机级的那几组（哪些 agent 能生成、能生成什么、内容安全）不常动，收进「高级」子页 -->
   {#if hostGroups.length}
-    <div class="ig">
-      <button class="r" type="button" onclick={() => push?.('st:adv', t('高级'))}>
-        <span class="r-main"><span class="r-tx">{t('高级')}</span>{@render chev()}</span>
-      </button>
+    <div class="grp" transition:grow>
+      <div class="ig">
+        <button class="r" type="button" onclick={() => push?.('st:adv', t('高级'))}>
+          <span class="r-main"><span class="r-tx">{t('高级')}</span>{@render chev()}</span>
+        </button>
+      </div>
     </div>
   {/if}
   {#if ss.err}<p class="gfoot err">{ss.err}</p>{/if}
@@ -240,6 +250,7 @@
 
 <style>
   /* 尺寸照 Settings.svelte：组圆角 18、行 50 高、左右 16、分隔线从正文起；17/22 正文、13/18 副文与脚注 */
+  .grp { display: flow-root; }   /* 晚到时整组 grow：flow-root 把 .ig 的下外边距收进来一起长 */
   .ig { position: relative; background: var(--c-card); border-radius: 18px; overflow: hidden; margin-bottom: 26px; box-shadow: inset 0 0 0 .5px var(--c-line); }
   .ig:has(+ .gfoot) { margin-bottom: 0; }
   .ghead { display: flex; align-items: center; gap: 8px; margin: 0; padding: 0 16px 8px; font-size: 13px; line-height: 18px; font-weight: 500; letter-spacing: .2px; color: var(--c-ink2); }

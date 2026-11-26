@@ -66,7 +66,13 @@ export const agyApi = {
     const tail = qs.toString();
     return api.get('/api/agy/sessions' + (tail ? '?' + tail : ''));
   },
-  getSession: (id, cwd = '') => api.get('/api/agy/session/' + encodeURIComponent(id) + (cwd ? '?cwd=' + encodeURIComponent(cwd) : '')),
+  getSession: (id, cwd = '', fp = '') => {
+    const qs = new URLSearchParams();
+    if (cwd) qs.set('cwd', cwd);
+    if (fp) qs.set('fp', fp);
+    const tail = qs.toString();
+    return api.get('/api/agy/session/' + encodeURIComponent(id) + (tail ? '?' + tail : ''));
+  },
   hideSession: (id) => api.post('/api/agy/session/delete', { id }),
   hideSessions: (ids) => api.post('/api/agy/sessions/hide', { ids }),
   restoreSession: (id) => api.post('/api/agy/session/restore', { id }),

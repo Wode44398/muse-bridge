@@ -115,7 +115,7 @@ function refreshAttachmentUrls(curList, next, n) {
     const old = a.attachments || [];
     // 按位合并（指纹已保证附件名逐个对得上）：保留直播那份的 path/file（「重试」要靠 path 重发），
     // 只拿服务端的 url/thumb 覆盖。
-    a.attachments = b.attachments.map((t, j) => ({ ...(old[j] || {}), ...t }));
+    a.attachments = b.attachments.map((t, j) => { const { vurl, ...o } = old[j] || {}; return { ...o, ...t }; });   // vurl 随旧的一起释放，封面改走服务端抽帧
     revokeMessageBlobUrls([{ attachments: old }]);
     changed = true;
   }

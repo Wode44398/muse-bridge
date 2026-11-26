@@ -25,6 +25,9 @@ import {
   getOAuthStatus,
   finishOAuthLogin,
   cancelOAuthLogin,
+  oauthClientConfigured,
+  poolAuthMode,
+  deleteSlotDir,
   agyUpstreamStatus,
 } from '../pool/index.mjs';
 
@@ -64,6 +67,8 @@ export function registerAgyPoolRoutes(router, { agyCtx, parseJsonBody, sendJson 
       router: routerStatus(),
       upstream: agyUpstreamStatus(),
       localAuthed: !!localInfo.authed,
+      authMode: poolAuthMode(),
+      manualTokenSupported: oauthClientConfigured(),
     }, { 'Cache-Control': 'no-store' });
   });
 
@@ -185,6 +190,7 @@ export function registerAgyPoolRoutes(router, { agyCtx, parseJsonBody, sendJson 
     if (r.error) { sendJson(res, 400, r); return; }
     invalidateAccessToken(id);
     deleteAccountQuota(id);
+    deleteSlotDir(id);
     clearCooldown(id);
     refreshAgentStatus();
     sendJson(res, 200, {

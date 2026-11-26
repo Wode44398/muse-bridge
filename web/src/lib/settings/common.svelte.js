@@ -17,27 +17,42 @@ import { setServerBase } from '../server.js';
 import { normalizeServerAddress } from '../connectPair.js';
 import { startPairLogin } from '../pair.js';
 import { changeMyPassword } from '../me.js';
+import { recall, remember } from '../lastKnown.js';
+
+// 两个入口探针的结果放在模块里、并记进快照（lib/lastKnown）：设置每开一次控制器都是新建的，
+// 结果要是跟着实例走，每次打开根页都从「没有」起步，探针一回来「服务器」那一组才插进来、把下面整列推开。
+// 现在先按上次的结果画，探针回来只在真变了时才增减（增减那一下由 RootPages 的 grow 过渡接住）。
+const probes = $state({ ext: recall('probe.ext') === true, srvAdmin: recall('probe.srvAdmin') === true });
+const keepProbes = () => { remember('probe.ext', probes.ext); remember('probe.srvAdmin', probes.srvAdmin); };
 
 // —— 服务端控制台入口：服务端就在这台电脑上（本机直连放行），或服务端开着远程管理（features.remoteAdmin）时的管理员 ——
 // 后端探针（/api/admin/ping，本地管理员门；旧后端 404 → 入口不出现，绝不给一个点了报错的入口）
 export function createSrvAdminProbe() {
-  let srvAdminOk = $state(false);
+  let pinged = false;
   $effect(() => {
     const want = serverOnThisMachine() || (me.kind === 'admin' && !!me.features?.remoteAdmin);
-    if (want && !srvAdminOk) saPing().then(() => { srvAdminOk = true; }).catch(() => {});
+    if (!want) { if (probes.srvAdmin) { probes.srvAdmin = false; keepProbes(); } return; }
+    if (pinged) return;
+    pinged = true;
+    // 每开一次设置复核一次（服务端可能刚关了远程管理）；没通过才撤掉入口
+    saPing().then(() => { probes.srvAdmin = true; }).catch(() => { probes.srvAdmin = false; }).finally(keepProbes);
   });
-  return { get ok() { return srvAdminOk; } };
+  return { get ok() { return probes.srvAdmin; } };
 }
 
 // —— 扩展中心入口：admin 探针通过才显示。门是 admin token/cookie（可远程），与控制台的 loopback 门不同——手机出门也能管扩展。
 // 成员探的是自己的技能接口（/api/my-extensions：只有技能，见 ext/Customize 的成员模式）。
 export function createExtProbe() {
-  let extOk = $state(false);
-  // 探针落定（成功或失败）：冷开直达「扩展」（插件详情）时探针还在路上，两套外壳都要等它落定、确实没过才把人撤出这一分区
+  // 探针落定（成功或失败）：冷开直达「扩展」（插件详情）时探针还在路上，两套外壳都要等它落定、确实没过才把人撤出这一分区。
+  // 落定看的是这一次打开发出的探针（跟着实例），结果本身沿用上次的（模块里）
   let extSettled = $state(false);
   const extMember = me.kind === 'user';
-  api.get(extMember ? '/api/my-extensions' : '/api/extensions').then(() => { extOk = true; }).catch(() => {}).finally(() => { extSettled = true; });
-  return { get ok() { return extOk; }, get settled() { return extSettled; }, member: extMember };
+  api.get(extMember ? '/api/my-extensions' : '/api/extensions')
+    .then(() => { probes.ext = true; })
+    // 断网 / 超时不算「没有」：留着上次的结果，别让一次抖动把整组入口撤掉又加回
+    .catch((e) => { if ([401, 403, 404].includes(e?.status)) probes.ext = false; })
+    .finally(() => { extSettled = true; keepProbes(); });
+  return { get ok() { return probes.ext; }, get settled() { return extSettled; }, member: extMember };
 }
 
 // —— 模型中心那一页 / 分区出不出现：hub.ok（管理员的总览）|| cp.ok（能自定义 API 的成员自己的 Claude 服务），两样都是开设置才拉。
@@ -76,6 +91,8 @@ export function createAgentList({ devClaude = false } = {}) {
     const rows = (ags.agents?.agents?.length ? ags.agents.agents : agentOn('claude') || devClaude ? [{ id: 'claude', label: 'Claude', local: true }] : [])
       .filter((a) => (a.local || a.id === 'claude' || a.switch !== false) && a.id !== 'gemini');
     if (!ags.agents?.agents?.length && me.kind === 'user' && Array.isArray(me.agents) && me.agents.includes('dimensio')) rows.push({ id: 'dimensio', label: 'dimensio', local: true });
+    // 被授权用 Codex 的成员（完全信任档）：分区里只有他自己的默认档与已归档的对话
+    if (!ags.agents?.agents?.length && me.kind === 'user' && Array.isArray(me.agents) && me.agents.includes('codex')) rows.push({ id: 'codex', label: 'Codex', local: true });
     if (studioOn && !rows.some((a) => a.id === 'studio')) rows.splice(rows[0]?.id === 'claude' ? 1 : 0, 0, { id: 'studio', label: 'Media Studio', local: true });
     return rows;
   });
@@ -120,6 +137,22 @@ export function createBypass() {
 // —— 子 agent 调用策略的入口行（Claude 那份 + dimensio 那份）——
 // 状态模块 lib/dispatchPolicy.svelte.js 与子页正文 components/claude/dispatch/DispatchPolicy.svelte 都懒加载：
 // 页面露面才取状态模块（副标题要读生效策略），进子页才取正文——设置页首屏不带它们
+// dimensio 页「子 agent 调用策略」那一行的快照（lib/lastKnown）：策略要先懒加载状态模块、再等一个请求，
+// 冷开时副标题和行尾开关要晚一秒才出现。只留副标题与开关要的几项（策略名、总开关、跟随、范围、能不能改），
+// 状态模块读到了就以它为准。放模块里：设置每开一次控制器都是新建的。
+const LK_DDP = 'dimensio.dispatchRow';
+let ddpLast = $state.raw((() => { const v = recall(LK_DDP); return v && v.policy ? v : null; })());
+function keepDdp(d) {
+  const p = d?.policy;
+  if (!p) return;
+  ddpLast = {
+    policy: { enabled: !!p.enabled, follow: p.follow, scope: { ...(p.scope || {}) }, activeId: p.activeId, strategies: (p.strategies || []).map((x) => ({ id: x.id, name: x.name })) },
+    claude: d.claude ? { name: d.claude.name } : null,
+    canEdit: d.canEdit,
+  };
+  remember(LK_DDP, ddpLast);
+}
+
 export function createDispatchRows() {
   const dpShown = $derived(cs.shell || cs.admin);   // 能改策略的身份（管理员 / 能跑命令的）才有这一行
   let dpm = $state.raw(null);      // 状态模块（{ dp, loadDispatch, setDispatch, … }）
@@ -153,17 +186,26 @@ export function createDispatchRows() {
   }
   // dimensio 那份（手机设置的 dimensio 页那一行用；桌面的 desktop/settings/DimensioSection 自己管）：副标题读 dimensio 那份状态（dimDispatch），
   // 状态模块同上懒加载
-  const ddp = $derived(dpm?.dimDispatch.dp || null);
+  // 状态模块读到了策略就用它；还没读到（模块在路上、请求在路上、一时读失败）先用上次的快照
+  const ddp = $derived(dpm?.dimDispatch.dp.policy ? dpm.dimDispatch.dp : ddpLast || dpm?.dimDispatch.dp || null);
+  const ddpImport = () => (dpImp ||= import('../dispatchPolicy.svelte.js'));
   function ddpLoad() {
-    dpImp ||= import('../dispatchPolicy.svelte.js');
-    dpImp.then((m) => { dpm = m; return m.dimDispatch.loadDispatch(); }).catch(() => { if (!dpm) dpImp = null; });
+    ddpImport().then((m) => { dpm = m; return m.dimDispatch.loadDispatch().then((ok) => { if (ok) keepDdp(m.dimDispatch.dp); }); })
+      .catch(() => { if (!dpm) dpImp = null; });
   }
   const ddpSub = $derived(ddp ? dimDispatchLine(ddp) : '');
   let ddpRowErr = $state(''), ddpErrTimer = 0;
   async function toggleDimDispatch() {
-    if (!dpm || !ddp?.policy) return;
+    if (!ddp?.policy) return;
+    const want = !ddp.policy.enabled;   // 按用户此刻看到的那一档翻（快照画出来的开关也能点）
     ddpRowErr = '';
-    try { await dpm.dimDispatch.setDispatch({ enabled: !ddp.policy.enabled }); }
+    try {
+      const m = dpm || await ddpImport();
+      dpm = m;
+      if (!m.dimDispatch.dp.policy && !(await m.dimDispatch.loadDispatch())) throw new Error(m.dimDispatch.dp.err || '');
+      await m.dimDispatch.setDispatch({ enabled: want });
+      keepDdp(m.dimDispatch.dp);
+    }
     catch (e) {
       ddpRowErr = tr(e?.message || '') || t('没保存上，请重试');
       clearTimeout(ddpErrTimer); ddpErrTimer = setTimeout(() => { ddpRowErr = ''; }, 4000);

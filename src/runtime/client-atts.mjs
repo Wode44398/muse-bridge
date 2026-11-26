@@ -1,6 +1,7 @@
 // 用户消息附件：从注入进 prompt 的「[用户上传了以下附件…]」清单里抽出附件，并换成前端能取图的形态。
 // 历史重开（routes/sessions.mjs）与直播插话（agents/claude.mjs 的 steer 事件）共用，两边气泡同形。
 import { statSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseDeviceRefNote, basenameOf, parseDeviceRef } from './device-refs.mjs';
 
@@ -74,5 +75,48 @@ export function toClientAtt(a, ctx) {
   }
   if (under(ctx.uploads)) return a.kind === 'chat' ? { file: a.file, name: a.name, kind: 'chat', quoteId: a.quoteId } : { file: a.file, name: a.name };
   if (under(ctx.cwd)) return { rel: path.relative(ctx.cwd, raw).split(path.sep).join('/'), name: a.file };
+  // 桌面壳零拷贝引用的本机文件（没进 uploads、也不在工作空间里，如截图工具的录屏）：只回文件名 lfile，
+  // 绝对路径照旧不出服务器——前端要封面 / 播放时带 lfile 去问 /api/claude/artifact（path=bridge-att:<名>），
+  // 服务端在这条会话自己的附件清单里按名字找回原路径（attachedPathOf）。名字不剥前缀：那是原文件名，不是存盘时间戳。
+  if (raw && path.isAbsolute(raw) && a.file) return { name: a.file, lfile: a.file };
   return { name: a.name };
+}
+
+// 「bridge-att:<文件名>」→ 这条会话里用户自己附过的那个文件的绝对路径（找不到给 null）。
+// 只认 transcript 里注入的附件清单（同 splitAttachments），按文件名对，同名取最后一次；电脑上的引用不算。
+// 结果按 transcript 缓存：命中直接用（附过的路径不会变），没命中且文件变过才重扫。
+// 授权不在这里：调用方（/api/claude/artifact）照旧过会话所有权 + 交付根守卫。
+export const ATT_REF_PREFIX = 'bridge-att:';
+const attIndex = new Map();   // transcript → { mt, size, map: 文件名 → 绝对路径 }
+function collectStrings(v, out) {
+  if (typeof v === 'string') { if (v.includes(ATT_MARK)) out.push(v); return; }
+  if (Array.isArray(v)) { for (const x of v) collectStrings(x, out); return; }
+  if (v && typeof v === 'object') for (const k in v) collectStrings(v[k], out);
+}
+export async function attachedPathOf(transcript, name) {
+  const base = String(name || '');
+  if (!base || /[\\/]/.test(base)) return null;
+  let st;
+  try { st = statSync(transcript); } catch { return null; }
+  const hit = attIndex.get(transcript);
+  if (hit && (hit.map.has(base) || (hit.mt === st.mtimeMs && hit.size === st.size))) return hit.map.get(base) || null;
+  const map = new Map();
+  let text = '';
+  try { text = await readFile(transcript, 'utf8'); } catch { return null; }
+  for (const line of text.split('\n')) {
+    if (!line.includes(ATT_MARK)) continue;
+    let o;
+    try { o = JSON.parse(line); } catch { continue; }
+    const strs = [];
+    collectStrings(o, strs);
+    for (const s of strs) {
+      for (const a of splitAttachments(s).attachments) {
+        if (!a.device && a.raw && path.isAbsolute(a.raw) && a.file) map.set(a.file, a.raw);
+      }
+    }
+  }
+  attIndex.delete(transcript);
+  attIndex.set(transcript, { mt: st.mtimeMs, size: st.size, map });
+  if (attIndex.size > 64) attIndex.delete(attIndex.keys().next().value);
+  return map.get(base) || null;
 }

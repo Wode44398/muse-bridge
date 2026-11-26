@@ -15,7 +15,8 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { buildAgyBridgeToolDefs } from './agy-bridge-tools.mjs';
+import { buildAgyBridgeToolDefs, agyToolJsonSchema } from './agy-bridge-tools.mjs';
+import { expandFamilyCall } from './catalog.mjs';
 
 const API_BASE = String(process.env.BRIDGE_API_URL || 'http://127.0.0.1:8787').replace(/\/+$/, '');
 const SECRET = String(process.env.BRIDGE_HOST_SECRET || '').trim();
@@ -124,12 +125,7 @@ const localDefs = buildAgyBridgeToolDefs({
 });
 const localByName = new Map(localDefs.map((d) => [d.name, d]));
 
-const jsonSchemaOf = (shape) => {
-  const schema = z.toJSONSchema(z.object(shape || {}), { io: 'input', unrepresentable: 'any' });
-  delete schema.$schema;
-  return schema;
-};
-const localTools = localDefs.map((d) => ({ name: d.name, description: d.description, inputSchema: jsonSchemaOf(d.schema) }));
+const localTools = localDefs.map((d) => ({ name: d.name, description: d.description, inputSchema: agyToolJsonSchema(d.schema) }));
 
 const categoryOf = (name) => String(name).split('_')[0];   // media_image → media、ui_view → ui、phone_list → phone
 
@@ -137,18 +133,27 @@ const categoryOf = (name) => String(name).split('_')[0];   // media_image → me
 // 注意 agy 对同一份配置只在子进程启动时取一次 tools/list——之后开关变了要靠服务端让 agy 常驻进程重启（client.mjs noteTooling）。
 let lastHubTools = [];
 let lastCategories = null;
+// 服务端算好的本地工具清单（精简、合并、夹进份额之后的，catalog.mjs）；服务端没给（旧版）就按类别列原始定义
+let lastLocalTools = null;
 async function refreshCatalog() {
   if (FIXED && !HUB_ON) return;
   try {
     const r = await callInternal('/api/agy/internal/hub/tools', {}, { timeoutMs: 15_000 });
-    lastHubTools = HUB_ON && Array.isArray(r.tools) ? r.tools.filter((t) => t && t.name && !localByName.has(t.name)) : [];
+    lastHubTools = HUB_ON && Array.isArray(r.tools) ? r.tools.filter((t) => t && t.name && !localByName.has(t.name) && !localFamily(t.name)) : [];
     if (Array.isArray(r.categories)) lastCategories = r.categories.map((c) => String(c).toLowerCase());
+    if (Array.isArray(r.local)) lastLocalTools = r.local.filter((t) => t && t.name && (localByName.has(t.name) || localFamily(t.name)));
   } catch (err) {
     process.stderr.write(`[agy-bridge] 取工具清单失败：${err?.message || err}\n`);
   }
 }
+// 合并工具（phone_files）里有本地成员 = 它归子进程执行
+function localFamily(name) {
+  const x = expandFamilyCall(name, {});
+  return !!x && x.family.members.some((m) => localByName.has(m));
+}
 function listedLocalTools() {
   if (FIXED) return localTools;   // 旧挂载：本地工具已按环境变量里的类别建好
+  if (lastLocalTools) return lastLocalTools;
   const cats = new Set(lastCategories || DEFAULT_CATEGORIES);
   return localTools.filter((t) => cats.has(categoryOf(t.name)));
 }
@@ -186,9 +191,16 @@ async function reportLocalResult(name, args, result) {
 async function handleCall(req, extra) {
   const name = String(req.params?.name || '');
   const args = req.params?.arguments && typeof req.params.arguments === 'object' ? req.params.arguments : {};
-  const local = localByName.get(name);
+  // 合并工具（phone_files 等）：按 action 换回原工具执行；步骤记录仍按 agy 看到的名字与参数报
+  const fam = localFamily(name) ? expandFamilyCall(name, args) : null;
+  if (fam && !fam.member) {
+    const bad = { content: [{ type: 'text', text: `${name} 的 action 只能是 ${fam.family.members.map((m) => m.slice(fam.family.prefix.length)).join(' / ')}` }], isError: true };
+    await reportLocalResult(name, args, bad);
+    return bad;
+  }
+  const local = localByName.get(fam ? fam.member : name);
   if (local) {
-    const parsed = z.object(local.schema || {}).safeParse(args);
+    const parsed = z.object(local.schema || {}).safeParse(fam ? fam.args : args);
     if (!parsed.success) {
       const bad = { content: [{ type: 'text', text: `参数不合法：${parsed.error.issues.map((i) => `${i.path.join('.') || '(根)'} ${i.message}`).join('；')}` }], isError: true };
       await reportLocalResult(name, args, bad);

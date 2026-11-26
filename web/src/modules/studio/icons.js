@@ -14,6 +14,13 @@ export const KIND = {
   // 音乐：一对八分音符
   music: '<path d="M9 17.5V6.6l10-2.1v10.9"/><circle cx="6.8" cy="17.5" r="2.2"/><circle cx="16.8" cy="15.4" r="2.2"/><path d="M9 9.6l10-2.1"/>',
 };
+/** 顶栏分段的种类字形：一份底稿 + 一份「描」（每段笔画 pathLength=100，在跑时一小段墨沿笔画走，见 StudioTabs） */
+export function tabGlyph(page) {
+  const body = KIND[page] || KIND.image;
+  const traced = body.replace(/<(path|rect|circle)/g, '<$1 pathLength="100"');
+  const svg = (cls, w, inner) => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
+  return svg('tg-base', 1.6, body) + svg('tg-trace', 1.75, traced);
+}
 /** 作品 / 任务 / 目录的任意一种 kind 叫法 → 种类字形 */
 export function kindGlyph(kind) {
   const k = { speech: 'voice', audio: 'voice', tts: 'voice' }[kind] || kind;
@@ -24,15 +31,11 @@ export function kindGlyph(kind) {
 const I = {
   back: '<path d="M14.5 5.5 8 12l6.5 6.5"/>',
   side: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.6"/><path d="M9.5 4.5v15"/>',
-  menu: '<path d="M4.5 7h15M4.5 12h15M4.5 17h15"/>',
   gear: '<path d="M12.22 2.75h-.44a1.9 1.9 0 0 0-1.9 1.9v.17a1.9 1.9 0 0 1-.95 1.64l-.41.24a1.9 1.9 0 0 1-1.9 0l-.14-.08a1.9 1.9 0 0 0-2.6.7l-.21.36a1.9 1.9 0 0 0 .7 2.6l.14.09a1.9 1.9 0 0 1 .95 1.63v.49a1.9 1.9 0 0 1-.95 1.65l-.14.08a1.9 1.9 0 0 0-.7 2.6l.21.36a1.9 1.9 0 0 0 2.6.7l.14-.08a1.9 1.9 0 0 1 1.9 0l.41.24a1.9 1.9 0 0 1 .95 1.64v.17a1.9 1.9 0 0 0 1.9 1.9h.44a1.9 1.9 0 0 0 1.9-1.9v-.17a1.9 1.9 0 0 1 .95-1.64l.41-.24a1.9 1.9 0 0 1 1.9 0l.14.08a1.9 1.9 0 0 0 2.6-.7l.21-.37a1.9 1.9 0 0 0-.7-2.6l-.14-.08a1.9 1.9 0 0 1-.95-1.65v-.48a1.9 1.9 0 0 1 .95-1.65l.14-.08a1.9 1.9 0 0 0 .7-2.6l-.21-.36a1.9 1.9 0 0 0-2.6-.7l-.14.08a1.9 1.9 0 0 1-1.9 0l-.41-.24a1.9 1.9 0 0 1-.95-1.64v-.17a1.9 1.9 0 0 0-1.9-1.9z"/><circle cx="12" cy="12" r="2.8"/>',
-  tray: '<path d="M4 13.5h4.2l1.3 2.5h5l1.3-2.5H20"/><path d="M5.5 6.5h13L20 13.5V18a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18v-4.5z"/>',
   plus: '<path d="M12 5.5v13M5.5 12h13"/>',
   minus: '<path d="M5.5 12h13"/>',
   // 恢复默认：逆时针回转的箭头
   reset: '<path d="M5 12a7 7 0 1 0 2.3-5.2"/><path d="M4.5 4.8v4.4h4.4"/>',
-  // 新的一张（另起续改链）：方框 + 笔
-  compose: '<path d="M11 4.5H6.5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V13"/><path d="M17.6 3.9a1.9 1.9 0 0 1 2.7 2.7l-7.6 7.6-3.6.9.9-3.6z"/>',
   close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   down: '<path d="m7 10 5 5 5-5"/>',
@@ -72,14 +75,6 @@ export function icon(name, sz) {
   const s = sz ? ` width="${sz}" height="${sz}"` : '';
   return `<svg viewBox="0 0 24 24"${s} fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 }
-/* ——— Studio 标「错拍」（web/public/assets/icons/studio-mono.svg 的简化重绘：拱 + 水面 + 错开半拍的倒影弧）———
-   给作品栏栏头 22px 用；只用 currentColor（深浅两套自动跟墨走）。几何取自 scripts/brand/studio-mark.cjs 出的 64px 图标。 */
-export const MARK = '<svg viewBox="21.9 22.4 61.2 61.2" aria-hidden="true">'
-  + '<path fill="currentColor" d="M25.693 55A17.7 17.7 0 0 1 61.093 55H55.593A12.2 12.2 0 0 0 31.193 55Z"/>'
-  + '<path fill="currentColor" d="M24.4 54.43Q54 53.62 83.6 54.43a.575.575 0 0 1 0 1.15Q54 56.38 24.4 55.57a.575.575 0 0 1 0-1.15Z"/>'
-  + '<path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".6" d="M58.66 57.75A11.96 11.96 0 0 0 81.56 59.05"/>'
-  + '</svg>';
-
 /** 角色 → 图标名（素材角标、落点槽、添加素材层） */
 export const ROLE_ICON = { edit: 'edit', ref: 'ref', first: 'first', last: 'last', audio: 'audio', video: 'video', text: 'text' };
 

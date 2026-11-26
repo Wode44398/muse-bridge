@@ -15,6 +15,18 @@ import {
   updateAccount,
   noteAccountMeta,
 } from './accounts.mjs';
+import {
+  slotDirFor,
+  promoteSlotDir,
+  startSlotLoginFlow,
+  getSlotLoginStatus,
+  submitSlotLoginCode,
+  markSlotFlowResult,
+  cancelSlotLoginFlow,
+  captureSlotAccessToken,
+  shutdownSlotFlows,
+  _resetSlotsForTest,
+} from './slots.mjs';
 
 const OAUTH_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -29,9 +41,9 @@ const OAUTH_SCOPES = [
 
 // 号池用的 Google OAuth 客户端（Antigravity CLI 官方程序自带的安装型客户端）。源码里不写死这组值：公开库会被 GitHub 推送保护按密钥拦下，
 // 公开版也不该替用户分发它。取值顺序：环境变量 AGY_OAUTH_CLIENT_ID / AGY_OAUTH_CLIENT_SECRET > 私有 overlay 钩子 agyOAuthClient
-// （{ clientId, clientSecret }，见 src/runtime/overlay-hooks.mjs）。都没有时「添加 Google 账号」与号池账号续期报 OAUTH_NOT_CONFIGURED；
-// 本机默认账号走 agy 自己的登录，不受影响。
-export const OAUTH_NOT_CONFIGURED = '没有配置 Antigravity 号池用的 Google OAuth 客户端：设置环境变量 AGY_OAUTH_CLIENT_ID 与 AGY_OAUTH_CLIENT_SECRET 后重启 bridge。本机默认账号不受影响。';
+// （{ clientId, clientSecret }，见 src/runtime/overlay-hooks.mjs）。都没配时，添加 Google 账号自动切换为本机 agy CLI 托管槽位模式（slots.mjs），
+// 仅直接换取裸 Refresh Token 仍需配置上述客户端。
+export const OAUTH_NOT_CONFIGURED = '没有配置 Antigravity 号池用的 Google OAuth 客户端：手动填写 Refresh Token 需要设置环境变量 AGY_OAUTH_CLIENT_ID 与 AGY_OAUTH_CLIENT_SECRET 后重启 bridge；普通添加多号可直接点击「使用 Google 账号授权登录」。';
 function oauthClient() {
   const env = { clientId: String(process.env.AGY_OAUTH_CLIENT_ID || '').trim(), clientSecret: String(process.env.AGY_OAUTH_CLIENT_SECRET || '').trim() };
   if (env.clientId && env.clientSecret) return env;
@@ -41,6 +53,7 @@ function oauthClient() {
   return fromHook.clientId && fromHook.clientSecret ? fromHook : null;
 }
 export const oauthClientConfigured = () => !!oauthClient();
+export const poolAuthMode = () => (oauthClientConfigured() ? 'oauth' : 'cli');
 function requireOAuthClient() {
   const c = oauthClient();
   if (!c) throw new Error(OAUTH_NOT_CONFIGURED);
@@ -140,6 +153,37 @@ export async function exchangeRefreshToken(refreshToken) {
 export async function getAccessToken(accountId, { forceRefresh = false } = {}) {
   const acct = getAccountInternal(accountId);
   if (!acct) return { token: '', source: 'none', error: '账号不存在' };
+  if (acct.source === 'slot') {
+    const now = Date.now();
+    const cached = tokenCache.get(acct.id);
+    const leadMs = cached?.exactExpiry ? 15_000 : TOKEN_REFRESH_LEAD_MS;
+    if (!forceRefresh && cached && cached.accessToken && cached.expiresAt - now > leadMs) {
+      return { token: cached.accessToken, source: 'slot', error: null };
+    }
+
+    let p = refreshInflight.get(acct.id);
+    if (!p) {
+      p = captureSlotAccessToken(slotDirFor(acct.id), { retryOnNearExpiry: true }).then((r) => {
+        if (r.userAgent && /antigravity/i.test(r.userAgent)) {
+          noteHostAuth({ userAgent: r.userAgent });
+        }
+        tokenCache.set(acct.id, {
+          accessToken: r.accessToken,
+          expiresAt: Date.now() + Math.max(30, r.expiresIn) * 1000,
+          exactExpiry: !!r.exactExpiry,
+        });
+        return { token: r.accessToken, source: 'slot', error: null };
+      }).catch((err) => {
+        if (err?.code === 'invalid_grant') tokenCache.delete(acct.id);
+        return { token: '', source: 'slot', error: err?.message || String(err), code: err?.code || '' };
+      }).finally(() => {
+        if (refreshInflight.get(acct.id) === p) refreshInflight.delete(acct.id);
+      });
+      refreshInflight.set(acct.id, p);
+    }
+    return p;
+  }
+
   if (!acct.refreshToken) {
     if (hostAuth.accessToken) return { token: hostAuth.accessToken, source: 'local', error: null };
     return { token: '', source: 'local', error: '' };
@@ -356,7 +400,10 @@ function callbackHtml(ok, detail = '') {
 }
 
 export async function startOAuthLogin({ label = '', accountId = '', plan = '' } = {}) {
-  requireOAuthClient();   // 没配置客户端就别起回环端口
+  // 未配置直连 OAuth 客户端时自动切到本机 agy CLI 托管槽位登录（公开版免密钥开箱即用）。
+  if (!oauthClientConfigured()) {
+    return startSlotLoginFlow({ label, accountId, plan });
+  }
   // 控制并发挂起流数量，防止重复点按泄露监听端口
   for (const [fid, f] of flows.entries()) {
     if (f.status !== 'pending' || Date.now() > f.expiresAt) {
@@ -448,6 +495,7 @@ export async function startOAuthLogin({ label = '', accountId = '', plan = '' } 
   return {
     ok: true,
     flowId,
+    mode: 'oauth',
     url: `${OAUTH_AUTH_URL}?${authParams.toString()}`,
     redirectUri: flow.redirectUri,
     expiresAt: flow.expiresAt,
@@ -455,7 +503,9 @@ export async function startOAuthLogin({ label = '', accountId = '', plan = '' } 
 }
 
 export function getOAuthStatus(flowId) {
-  const flow = flows.get(String(flowId || ''));
+  const id = String(flowId || '');
+  if (id.startsWith('as-')) return getSlotLoginStatus(id);
+  const flow = flows.get(id);
   if (!flow) return { ok: false, status: 'expired', error: '授权会话不存在或已过期' };
   if (flow.status === 'pending' && Date.now() > flow.expiresAt) {
     flow.status = 'expired';
@@ -464,14 +514,80 @@ export function getOAuthStatus(flowId) {
   }
   return {
     ok: flow.status === 'done',
+    mode: 'oauth',
     status: flow.status,
     ...(flow.account ? { account: flow.account } : {}),
     ...(flow.error ? { error: flow.error } : {}),
   };
 }
 
+async function finishSlotLoginFlow(flowId, rawInput, overrides = {}) {
+  const sub = await submitSlotLoginCode(flowId, rawInput);
+  if (sub.error) return { error: sub.error };
+  if (sub.alreadyDone) return { ok: true, account: sub.account };
+  const flow = sub.flow;
+  if (flow.completing) return flow.completing;
+
+  flow.completing = (async () => {
+    try {
+      const cap = await captureSlotAccessToken(flow.tmpDir, { retryOnNearExpiry: true });
+      if (cap.userAgent && /antigravity/i.test(cap.userAgent)) {
+        noteHostAuth({ userAgent: cap.userAgent });
+      }
+      const profile = await fetchAccountProfile(cap.accessToken, { userAgent: cap.userAgent || undefined });
+      const label = String(overrides.label ?? flow.label ?? '').trim();
+      const plan = typeof overrides.plan === 'string' ? overrides.plan : (flow.plan || '');
+
+      let res;
+      if (flow.accountId) {
+        res = updateAccount(flow.accountId, {
+          ...(label ? { label } : {}),
+          ...(plan ? { plan } : {}),
+          source: 'slot',
+          email: profile.email,
+          project: profile.project,
+          tierId: profile.tierId,
+          tierName: profile.tierName,
+        });
+      } else {
+        res = addAccount({
+          label,
+          plan,
+          source: 'slot',
+          email: profile.email,
+          project: profile.project,
+          tierId: profile.tierId,
+          tierName: profile.tierName,
+          autoActivateIfOnlyEmptyLocal: !hostAuth.accessToken,
+        });
+      }
+      if (res?.error) throw new Error(res.error);
+      const targetId = res.id || flow.accountId;
+      if (!targetId) throw new Error('未能分配账号 ID');
+      promoteSlotDir(flow.tmpDir, targetId);
+      tokenCache.set(targetId, {
+        accessToken: cap.accessToken,
+        expiresAt: Date.now() + Math.max(30, cap.expiresIn) * 1000,
+        exactExpiry: !!cap.exactExpiry,
+      });
+      markSlotFlowResult(flowId, { ok: true, account: res.account || null, keepTmpDir: true });
+      return { ok: true, id: targetId, account: res.account || null };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      markSlotFlowResult(flowId, { ok: false, error: msg });
+      return { error: msg };
+    } finally {
+      flow.completing = null;
+    }
+  })();
+
+  return flow.completing;
+}
+
 export async function finishOAuthLogin(flowId, rawInput, overrides = {}) {
-  const flow = flows.get(String(flowId || ''));
+  const id = String(flowId || '');
+  if (id.startsWith('as-')) return finishSlotLoginFlow(id, rawInput, overrides);
+  const flow = flows.get(id);
   if (!flow) return { error: '授权会话不存在或已过期，请重新生成授权链接' };
   if (flow.status === 'done') return { ok: true, account: flow.account };
   if (Date.now() > flow.expiresAt) {
@@ -486,6 +602,7 @@ export async function finishOAuthLogin(flowId, rawInput, overrides = {}) {
 
 export function cancelOAuthLogin(flowId) {
   const id = String(flowId || '');
+  if (id.startsWith('as-')) return cancelSlotLoginFlow(id);
   const flow = flows.get(id);
   if (!flow) return { ok: true };
   closeFlowServer(flow);
@@ -496,6 +613,7 @@ export function cancelOAuthLogin(flowId) {
 export function shutdownOAuthFlows() {
   for (const flow of flows.values()) closeFlowServer(flow);
   flows.clear();
+  shutdownSlotFlows();
 }
 
 export function _setOAuthFetchForTest(fn) {
@@ -504,6 +622,7 @@ export function _setOAuthFetchForTest(fn) {
 
 export function _resetOAuthForTest() {
   shutdownOAuthFlows();
+  _resetSlotsForTest();
   tokenCache.clear();
   refreshInflight.clear();
   hostAuth.accessToken = '';

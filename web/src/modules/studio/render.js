@@ -25,7 +25,7 @@ export const textPx = (s) => [...String(s ?? '')].reduce((n, c) => n + (c.charCo
 
 /**
  * 每个参数用哪种控件（方案 §11：选项尽量直接摆出来，一步点到，不再「点选择钮 → 再弹一层菜单」）：
- *   seg     ≤4 项的短枚举（右栏宽度放得下才用）· pills 选项直接摆成一排排小块（≤10 项、每项不太长；标签在上、选项在下）
+ *   seg     ≤4 项的短枚举（右栏宽度放得下才用）· pills 选项直接摆成一排排小块（≤8 项、每项不太长；标签在上、选项在下）
  *   aspect  比例小形状格 · select 选择钮 + 菜单（只留给项多 / 标签长的；>12 项菜单带搜索）
  *   steps   小范围整数（1–4 这类）→ 分段 · stepper 张数这类整数（− 3 +）· slider 有上下限的数值（滑条 + 可直接改的数字框）
  *   number  没上下限的数值 · switch 开关 · seed 种子 · voice 音色 · text 单行 · textarea 多行 · json 原始参数
@@ -33,7 +33,7 @@ export const textPx = (s) => [...String(s ?? '')].reduce((n, c) => n + (c.charCo
  * @param labelOf (opt) → 显示文字（界面先过 tr()）
  * @param room 右侧控件列大约多宽（px）：参数坞里实测约 142，各端用同一个数，控件不随设备变
  */
-export const PILLS_MAX = 10;
+export const PILLS_MAX = 8;
 export function controlOf(spec, opts = [], { labelOf = (o) => String(o.label ?? o.value), room = 140 } = {}) {
   switch (spec?.type) {
     case 'size': return 'size';
@@ -47,6 +47,8 @@ export function controlOf(spec, opts = [], { labelOf = (o) => String(o.label ?? 
       const step = spec.step || 1;
       const n = Math.round((spec.max - spec.min) / step) + 1;
       if (Number.isInteger(step) && n >= 2 && n <= 5 && formatOf(spec) !== 'duration') return 'steps';
+      // 张数这类少量离散值（方案 §12.4「一种选中样子」）：≤8 档直接摆成一排，多了才 − 3 +
+      if (formatOf(spec) === 'count' && Number.isInteger(step) && n >= 2 && n <= 8) return 'steps';
       if (formatOf(spec) === 'count' && Number.isInteger(step) && n <= 64) return 'stepper';
       return 'slider';
     }
@@ -56,7 +58,7 @@ export function controlOf(spec, opts = [], { labelOf = (o) => String(o.label ?? 
       // 分段：最多 4 项，按字宽估每项（textPx + 左右内距 16，槽内距 6）总宽放得下；估错了还有实测兜底（Segmented onoverflow）
       const ws = opts.map((o) => textPx(labelOf(o)));
       if (opts.length <= 4 && ws.reduce((s, w) => s + w + 16, 6) <= room) return 'seg';
-      // 小块：≤10 项、单项不超过半行、总共不超过三行左右（每行约 260）——再多再长才收进菜单
+      // 小块：≤8 项（方案 §12.4：再多就是长枚举，照旧菜单）、单项不超过半行、总共不超过三行左右（每行约 260）——再多再长才收进菜单
       if (opts.length <= PILLS_MAX && Math.max(...ws) <= 132 && ws.reduce((s, w) => s + w + 28, 0) <= 780) return 'pills';
       return 'select';
     }

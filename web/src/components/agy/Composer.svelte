@@ -137,8 +137,9 @@
   // 开口 = 运行模式；点开选模式、看明细
   const ctxPct = $derived(agyContextPct(agy.contextUsage));
   const gq = $derived(gaugeQuota(agy.quota));
-  // 额度读的是 language server 的本机缓存（不联网、不耗额度）：挂着就每分钟读一次，后台标签页不空转、回前台立刷
+  // 额度读的是 language server 的本机缓存（不联网、不耗额度）：仅在本分页可见时每分钟读一次，休眠时不空转、切回立刷
   $effect(() => {
+    if (ui.screen !== 'agy') return;
     refreshAgyQuota();
     const iv = setInterval(() => { if (!document.hidden) refreshAgyQuota(); }, 60_000);
     const onVis = () => { if (!document.hidden) refreshAgyQuota(); };
@@ -227,7 +228,7 @@
   });
 
   $effect(() => {
-    if (!centered || !textareaEl) return;
+    if (!centered || !textareaEl || ui.screen !== 'agy') return;
     const coarse = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)')?.matches;
     if (!coarse) textareaEl.focus({ preventScroll: true });
   });

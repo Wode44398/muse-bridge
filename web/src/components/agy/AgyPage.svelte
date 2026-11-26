@@ -10,7 +10,7 @@
   import { layout, makeSideYield } from '../../lib/layout.svelte.js';
   import { agyDock, dock as claudeDock, openAgyDock, closeAgyDock } from '../../lib/dock.svelte.js';
   import { reportUi } from '../../lib/uiReport.js';
-  import { agy, bootAgy, newAgyChat, createAgyProjectAt, refreshAgySessions, checkAgyForegroundSync } from '../../lib/agy/store.svelte.js';
+  import { agy, bootAgy, newAgyChat, createAgyProjectAt, refreshAgySessions, agySessionsSyncedRecently, checkAgyForegroundSync } from '../../lib/agy/store.svelte.js';
   import { agySubagents, refreshAgySubagents } from '../../lib/agy/subagents.svelte.js';
   import { agySwarm, refreshAgySwarm } from '../../lib/agy/swarm.svelte.js';
   import { agyPrefs } from '../../lib/agy/settings.svelte.js';
@@ -92,8 +92,9 @@
       if (ui.screen === 'agy' && pageEl) captureHeroTransition(c ? 'toChat' : 'toWelcome', pageEl);
     });
   });
-  // 液态标记引擎 120KB：分页一打开就在后台拉好，欢迎页 logo 与底部状态栏都不用等
+  // 液态标记引擎 120KB + 侧栏基础数据：预挂载休眠时就在后台静默就绪，首次切进分页直接秒开
   onMount(() => {
+    bootAgy();
     const idle = globalThis.requestIdleCallback || ((fn) => setTimeout(fn, 300));
     idle(() => { import('../../lib/agy/antigravity-logo.js').catch(() => {}); });
   });
@@ -152,7 +153,7 @@
   $effect(() => {
     if (!isActiveScreen) return;
     untrack(() => {
-      if (agy.booted) refreshAgySessions();
+      if (agy.booted && !agySessionsSyncedRecently(3000)) refreshAgySessions();
       ui.taskDone = false;
     });
     bootAgy();
@@ -471,12 +472,14 @@
     height: 100%;
     flex: none;
   }
+  /* 拉宽把手 12px 骑缝，高亮线压在 1px 分隔线上。骑进侧栏那半盖住侧栏滚动条的槽——鼠标正落在拇指上时
+     lib/scrollbars.js 让把手临时不吃指针（拇指优先），别处照常能拖 */
   .agy-side-sash {
     position: absolute;
     top: 0;
-    right: -4px;
+    right: -6px;
     bottom: 0;
-    width: 8px;
+    width: 12px;
     cursor: col-resize;
     touch-action: none;
     -webkit-app-region: no-drag;
@@ -485,7 +488,7 @@
   .agy-side-sash::after {
     content: '';
     position: absolute;
-    left: 3px;
+    left: 5px;
     top: 0;
     bottom: 0;
     width: 2px;

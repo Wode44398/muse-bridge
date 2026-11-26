@@ -28,7 +28,13 @@
   // svelte-ignore state_referenced_locally
   const base = JSON.stringify(advPayload(advDraft(model)));
   const payload = $derived(advPayload(draft));
-  const dirty = $derived(JSON.stringify(payload) !== base);
+  // 显示名（备注名）：单独走 POST /model/label，和调用配置一起保存；留空 = 恢复识别到的原名
+  // svelte-ignore state_referenced_locally
+  const name0 = model?.label && model.label !== model.id ? model.label : '';
+  let name = $state(name0);
+  const nameDirty = $derived(name.trim() !== name0);
+  const advDirty = $derived(JSON.stringify(payload) !== base);
+  const dirty = $derived(advDirty || nameDirty);
   const problem = $derived(advProblem(draft, { toClaude, tierProblem }));
   let saving = $state(false);
   let err = $state('');
@@ -74,8 +80,10 @@
     if (saving || !dirty || problem) return;
     saving = true; err = '';
     try {
-      const r = await hubPost('model/advanced', { id: svc.id, model: model.id, ...payload });
-      onsaved?.(r.service || null);
+      let r = null;
+      if (nameDirty) r = await hubPost('model/label', { id: svc.id, model: model.id, label: name.trim() });
+      if (advDirty) r = await hubPost('model/advanced', { id: svc.id, model: model.id, ...payload });
+      onsaved?.(r?.service || null);
       showToast(t('已保存'), 'ok');
       sheet?.dismiss();
     } catch (e) {
@@ -125,6 +133,14 @@
       ? t('dimensio 直连这家，这个别家型号的思考写法也按这里的发。')
       : t('dimensio 用自带适配直连这家：思考写法按它自己的适配，只对 Claude 生效；其余两边都生效。')}</p>
   {/if}
+
+  <section class="sec">
+    <div class="row first">
+      <div class="lab"><div class="nm">{t('显示名')}</div><div class="hint">{t('模型菜单里显示的名字（备注名）；留空显示识别到的原名，没有原名就显示 ID')}</div></div>
+      <div class="ctl"><div class="numf txt"><input type="text" maxlength="80" autocomplete="off" spellcheck="false" placeholder={model.id}
+        bind:value={name} aria-label={t('显示名')} /></div></div>
+    </div>
+  </section>
 
   <section class="sec">
     <div class="sh"><h4>{t('能力')}</h4>{@render who(both)}<span class="spx"></span>
@@ -195,6 +211,9 @@
   .numf:focus-within { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text) 55%, transparent); }
   .numf input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 13.5px; padding: 0 10px; font-variant-numeric: tabular-nums; }
   .numf input::placeholder { color: var(--st-muted); }
+  .numf.txt { width: 300px; }
+  .numf.txt input { font-variant-numeric: normal; }
+  .row.first { padding-top: 0; }
   .unit { padding: 0 10px 0 4px; font-size: 12px; color: var(--st-muted); }
   .sel { height: 34px; min-width: 200px; padding: 0 10px; border: 0; border-radius: 9px; background: var(--st-field); color: var(--text); box-shadow: inset 0 0 0 1px var(--st-line);
     font: inherit; font-size: 13.5px; outline: none; }
@@ -222,7 +241,7 @@
   @media (max-width: 699px) {
     .row { grid-template-columns: 1fr; gap: 10px; }
     .ctl { justify-content: flex-start; }
-    .numf, .sel { width: 100%; }
+    .numf, .numf.txt, .sel { width: 100%; }
     .btn { height: 44px; padding: 0 18px; font-size: 15px; border-radius: 12px; }
     .ferr { display: none; }
   }

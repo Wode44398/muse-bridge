@@ -19,7 +19,7 @@
   import { dropHasDirs, entriesFromDrop, walkEntries, itemsFromDirInput, groupByRoot, skipNote, pool } from '../lib/dirDrop.js';
   import { nativePathForFile } from '../lib/nativeDesktop.js';
   import { canRefDeviceFolder, localPathOf, deviceFolderAttachment, thisDeviceName } from '../lib/deviceRefs.js';
-  import { fileToBase64, filesFromInput, removeAttachment, uploadAttachment } from '../lib/attachments.js';
+  import { filesFromInput, removeAttachment, uploadAttachment } from '../lib/attachments.js';
   import { untrack } from 'svelte';
   import { draft, registerComposerReader } from '../lib/composerBridge.svelte.js';
   import { draftText, noteComposerText, startComposerDrafts, uploadThumbUrl } from '../lib/composerDrafts.svelte.js';
@@ -238,13 +238,13 @@
         compose.attachments.push({ path: localPath, name: f.name || localPath.split(/[\\/]/).pop(), kind: 'file', url: null, pending: false, local: true, ...(vurl ? { vurl } : {}) });
         continue;
       }
-      if (f.size > 20_000_000) { uiAlert(f.name ? t('{name}：超过 20MB，暂不支持', { name: f.name }) : t('文件：超过 20MB，暂不支持')); continue; }
+      // 走 /api/upload-chunk 流式落盘（服务端上限 2 GB）；老的 base64 单发 /api/upload 封顶 20MB，手机录屏动辄超。
       // 先放占位（pending）再上传——上传期间附件先可见，用户点发送会被 uploading 拦住。
       const isImg = (f.type || '').startsWith('image/');
       const name = f.name || (isImg ? 'image.png' : 'file');   // 粘贴的截图常无文件名，兜底
       await uploadAttachment(compose.attachments, f, {
         draft: { path: null, name, kind: isImg ? 'image' : 'file', url: isImg ? URL.createObjectURL(f) : null, pending: true, ...(vurl ? { vurl } : {}) },
-        upload: async (file) => api.upload(name, await fileToBase64(file)),
+        upload: (file) => api.uploadBlob(name, file),
         onError: () => { if (vurl) { try { URL.revokeObjectURL(vurl); } catch {} } uiAlert(t('上传失败：{name}', { name })); },
       });
     }

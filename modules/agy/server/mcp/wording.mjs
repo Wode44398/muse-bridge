@@ -3,12 +3,12 @@
 
 const WORDING = [
   [/[；，]?另开并行会话优先用 `?mcp__sessions__start_session`?[；。]?/g, (m) => (m.endsWith('。') ? '。' : m.startsWith('；') && m.endsWith('；') ? '；' : '')],
-  [/操作手机用 `?mcp__phoneControl__\*`?(，读写手机文件用 `?mcp__phone__\*`?)?(，这两组只在可用时才有)?/g, '操作手机用 phone_control，读写手机上已授权的文件用 phone_* 工具（这两样只在可用时才有）'],
+  [/操作手机用 `?mcp__phoneControl__\*`?(，读写手机文件用 `?mcp__phone__\*`?)?(，这两组只在可用时才有)?/g, '操作手机用 phone_control，读写手机上已授权的文件用 phone_files（这两样只在可用时才有）'],
   [/mcp__phoneControl__phone_([a-z_]+)/g, 'phone_control(action:"$1")'],
   [/mcp__phoneControl__\*/g, 'phone_control'],
   [/mcp__sessions__([a-z_]+)/g, '$1'],
   [/mcp__pr__(get_status|bind_pr|unbind_pr|set_monitor|set_auto_merge|sync_with_base_branch)/g, (m, n) => PR_NAMES[n]],
-  [/mcp__project__memory_([a-z]+)/g, 'project_memory_$1'],
+  [/mcp__project__memory_([a-z]+)/g, 'project_memory(action:"$1")'],
   [/mcp__media__generate_(image|video|speech|music)/g, 'media_$1'],
   [/mcp__media__\*/g, 'media_image / media_video / media_speech / media_music'],
   [/mcp__media__/g, 'media_'],
@@ -17,12 +17,13 @@ const WORDING = [
   [/mcp__bridge__(manual|call)/g, '$1'],
   [/mcp__(browser|terminal|workspace)__\1/g, '$1'],
   [/mcp__(browser|terminal|workspace)__\*/g, '$1'],
+  [/mcp__phone__(list|read|write|scan|delete)/g, 'phone_files(action:"$1")'],
   [/mcp__phone__/g, 'phone_'],
 ];
-// 拉取请求组在 agy 这边的名字（groups/pr.mjs）
+// 拉取请求组在 agy 这边的名字（groups/pr.mjs 的六样，对 agy 合并成一个 pr 工具，见 catalog.mjs）
 export const PR_NAMES = Object.freeze({
-  get_status: 'pr_status', bind_pr: 'pr_bind', unbind_pr: 'pr_unbind',
-  set_monitor: 'pr_set_monitor', set_auto_merge: 'pr_set_auto_merge', sync_with_base_branch: 'pr_sync_base',
+  get_status: 'pr(action:"status")', bind_pr: 'pr(action:"bind")', unbind_pr: 'pr(action:"unbind")',
+  set_monitor: 'pr(action:"set_monitor")', set_auto_merge: 'pr(action:"set_auto_merge")', sync_with_base_branch: 'pr(action:"sync_base")',
 });
 // 不带 mcp__ 前缀、但同样只在 Claude 分页成立的说法（工具名、界面位置）
 const WORDING_PLAIN = [

@@ -127,7 +127,15 @@ async function openAgySessionTarget(id) {
   if (agy.sessionId !== String(id)) await openAgySession(String(id));
   return true;
 }
-export const openSessionFromNotice = (id, agent = '') => (agent === 'agy' ? openAgySessionTarget(id) : openSessionTarget(id));
+// Codex 的会话 id 是 Codex 自己的线程 id：交给 Codex 页的数据层打开（页面代码懒加载，Codex 没开就不去取）
+async function openCodexSessionTarget(id) {
+  if (!screenOn('chatgpt')) return notOpen();
+  await gotoScreen('chatgpt');
+  const { openThread, codex } = await import('./codex/store.svelte.js');
+  if (codex.sessionId !== String(id)) await openThread(String(id));
+  return true;
+}
+export const openSessionFromNotice = (id, agent = '') => (agent === 'agy' ? openAgySessionTarget(id) : agent === 'codex' ? openCodexSessionTarget(id) : openSessionTarget(id));
 export async function openRoutinesFromNotice() {
   if (!screenOn('claude')) return notOpen();
   await gotoScreen('claude');

@@ -1,0 +1,62 @@
+// 英文界面文案 · settings-codex-desktop：桌面设置 › Codex 的正文（desktop/settings/CodexSection、CodexPoolSection）。
+// 选项名照 Codex 官方桌面版英文（Approval policy / Sandbox settings / Web search / Output detail…）（键 = 中文原文，见 lib/i18n.js）
+export default {
+  // —— 新对话默认（官方「配置」页）——
+  '只对之后新开的对话生效。': 'Applies to new chats only.',
+  '批准策略': 'Approval policy',
+  '沙盒设置': 'Sandbox settings',
+  'Windows 上没配 Codex 沙盒时会降成只读': 'On Windows, falls back to Read only unless the Codex sandbox is set up',
+  '允许网络访问': 'Allow network access',
+  '只在「工作空间写入」下生效': 'Only applies with Workspace write',
+  '网页搜索': 'Web search',
+  '输出详细程度': 'Output detail',
+  '推理摘要': 'Reasoning summary',
+  // —— 成员 ——
+  '成员的默认档': 'Member defaults',
+  '注册用户只能在这两档里选。': 'Registered users can only choose from these options.',
+  '同时能跑几轮': 'Concurrent turns',
+  '你的默认档': 'Your defaults',
+  '由管理员设置': 'Set by your admin',
+  '同时能跑': 'Concurrent turns',
+  // —— 实验性质功能 / 个性化 ——
+  '实验性质功能': 'Experimental features',
+  '请求用户输入': 'Request user input',
+  '允许 Codex 在对话里向你提问': 'Let Codex ask you questions during a chat',
+  '目标': 'Goal',
+  '没人看着时 Codex 会按目标自己接着跑，持续消耗额度': 'Codex keeps working toward the goal on its own when no one is watching, using up usage limits',
+  '自定义指令': 'Custom instructions',
+  '附在每个新对话的开发者指令末尾。': 'Appended to the developer instructions of every new chat.',
+  // —— 运行 ——
+  'settings::运行': 'Runtime',
+  '空闲多久停掉进程': 'Stop idle processes after',
+  '本机账号的进程常驻，不受影响': 'The local account’s process always stays running',
+  // —— 已归档的对话 ——
+  '已归档的对话': 'Archived chats',
+  '没有已归档的对话': 'No archived chats',
+  '显示全部（{n}）': 'Show all ({n})',
+  '删除对话「{name}」？': 'Delete “{name}”?',
+  '删除后无法恢复。': 'This can’t be undone.',
+  // —— 号池 ——
+  '账号凭据只存在这台服务器上各自的 Codex 目录里。': 'Account credentials are stored only on this server, each in its own Codex folder.',
+  '在跑 {n} 轮': { one: 'Running {n} turn', other: 'Running {n} turns' },
+  '登录中': 'Signing in',
+  '上次读到的': 'Last known',
+  '进程没在跑，用过一次才有额度数据': 'Not running. Usage limits appear after it’s been used once.',
+  '会登出这个号，并删掉它在这台服务器上的 Codex 目录。': 'Signs this account out and deletes its Codex folder on this server.',
+  '给「{name}」用一张重置卡？': 'Use a reset on “{name}”?',
+  '这个号的额度会立刻重置，用掉的卡不能撤回。': 'This account’s usage limits reset right away. A used reset can’t be undone.',
+  '使用重置卡（剩 {n} 张）': 'Use a reset ({n} left)',
+  '备注名': 'Label',
+  '账号不存在': 'Account not found',
+  // —— 加号：设备码登录 / API 密钥 ——
+  '先在 ChatGPT 网页「设置 › 安全」里打开设备码登录': 'First turn on device code sign-in in ChatGPT on the web, under Settings › Security',
+  '点验证码复制': 'Click the code to copy it',
+  '{time} 后过期': 'Expires in {time}',
+  '备注名（可不填）': 'Label (optional)',
+  '正在发起…': 'Starting…',
+  '重新开始': 'Start over',
+  '开始登录': 'Start sign-in',
+  '取消登录': 'Cancel sign-in',
+  '改用 API 密钥': 'Use an API key instead',
+  'OpenAI API 密钥（sk-…）': 'OpenAI API key (sk-…)',
+};

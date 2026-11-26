@@ -64,7 +64,7 @@ export default {
 
   // —— Ctrl+K 命令面板（keys = 英文搜索关键词）——
   '打开 Claude': 'Open Claude',
-  '打开 ChatGPT': 'Open ChatGPT',
+  '打开 Codex': 'Open Codex',
   '打开 dimensio': 'Open dimensio',
   '打开 Vertex': 'Open Vertex',
   '打开工作空间': 'Open Workspace',

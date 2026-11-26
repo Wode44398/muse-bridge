@@ -300,6 +300,17 @@ export function startChat(params, handlers, opts) {
         if (handlers.onError) handlers.onError(Object.assign(new Error(msg || 'chat HTTP 409'), { status: 409 }));
         return;
       }
+      // 服务端开跑前就拒了、且带 JSON 原因（{error}）的（Codex 项目文件夹没了、选号失败、扩展 agent 未授权……）：
+      // 这一轮根本没起来，重连 /active 也挂不上——把原因原样报出去，别只剩一句「chat HTTP 404」。
+      if (!res.ok && /json/i.test(res.headers.get('content-type') || '')) {
+        let msg = '';
+        try { msg = String((await res.json())?.error || ''); } catch {}
+        if (msg) {
+          w.release();
+          if (handlers.onError) handlers.onError(Object.assign(new Error(msg), { status: res.status }));
+          return;
+        }
+      }
       if (!res.ok || !res.body) throw Object.assign(new Error('chat HTTP ' + res.status), { status: res.status });
       w.touch();
       const how = await pump(res, emit, ctrl.signal, w.touch);

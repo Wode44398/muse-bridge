@@ -75,6 +75,8 @@ export async function handleResponses({ service, upstream, rest, search, method,
     return { status: 200, json: { object: 'list', data: codexModels(p).map((m) => ({ id: m.id, object: 'model', owned_by: service.name || service.id })) } };
   }
   if (!upstream) return errJson(500, `模型网关不认识的服务类型：${service.kind}`, 'server_error', 'server_error');
+  // ChatGPT 订阅：上游本来就是 Responses，由它自己的处理器清洗请求体、换账号（chatgpt/upstream.mjs）
+  if (service.kind === 'chatgpt') return upstream({ service, proto: 'responses', rest: path, search, method, headers, body, signal });
   const mode = service.kind === 'vertex' ? 'translate' : responsesModeOf(service);
   if (mode === 'native' && service.kind === 'openai') {
     return upstream({ service, proto: service.kind, rest, search, method, headers, body, signal });

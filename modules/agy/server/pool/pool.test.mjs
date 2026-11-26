@@ -1,6 +1,8 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -12,6 +14,7 @@ process.env.AGY_OAUTH_CLIENT_SECRET = 'test-client-secret';
 
 const accountsMod = await import('./accounts.mjs');
 const oauthMod = await import('./oauth.mjs');
+const slotsMod = await import('./slots.mjs');
 const quotaMod = await import('./quota.mjs');
 const routerMod = await import('./router.mjs');
 const upstreamMod = await import('./upstream.mjs');
@@ -29,6 +32,7 @@ function resetAll() {
   oauthMod._resetOAuthForTest();
   quotaMod._resetQuotaCacheForTest();
   routerMod._resetRouterForTest();
+  slotsMod._setSlotsRootForTest(path.join(tmp, 'slots-' + Math.random().toString(16).slice(2)));
   accountsMod._setAccountsFileForTest(path.join(tmp, 'accounts-' + Math.random().toString(16).slice(2) + '.json'));
   quotaMod._setQuotaCacheFileForTest(path.join(tmp, 'quota-' + Math.random().toString(16).slice(2) + '.json'));
   routerMod._setDispatchFileForTest(path.join(tmp, 'dispatch-' + Math.random().toString(16).slice(2) + '.json'));
@@ -161,17 +165,214 @@ test('oauth：解析回调输入、Access Token 单飞缓存刷新与交互式�
   assert.equal(tokenCalls, callsBefore + 1);
 });
 
-test('OAuth 客户端没配置（无环境变量、无 overlay 钩子）：添加账号与续期给出明确提示，不起回环端口', async () => {
+test('OAuth 客户端没配置（无环境变量、无 overlay 钩子）：手动 Refresh Token 明确拒绝，添加账号自动切换为本机 agy 托管槽位模式', async () => {
+  resetAll();
   const saved = [process.env.AGY_OAUTH_CLIENT_ID, process.env.AGY_OAUTH_CLIENT_SECRET];
-  delete process.env.AGY_OAUTH_CLIENT_ID; delete process.env.AGY_OAUTH_CLIENT_SECRET;
+  delete process.env.AGY_OAUTH_CLIENT_ID;
+  delete process.env.AGY_OAUTH_CLIENT_SECRET;
+
+  const spawnCalls = [];
+  let captureSeq = 0;
+  let forceUnauth = false;
+  let nearExpiryOnce = false;
+
+  slotsMod._setSlotSpawnForTest((args, opts) => {
+    const proc = new EventEmitter();
+    proc.pid = 90000 + spawnCalls.length;
+    proc.exitCode = null;
+    proc.stdin = new PassThrough();
+    proc.stdout = new PassThrough();
+    proc.stderr = new PassThrough();
+    proc.kill = () => {
+      if (proc.exitCode === null) {
+        proc.exitCode = 0;
+        proc.emit('close', 0, null);
+      }
+    };
+    spawnCalls.push({ args, env: opts.env });
+
+    if (args.includes('--login')) {
+      setTimeout(() => {
+        proc.stdout.write(
+          'Open this link in a browser to log in with Google:\n\n'
+          + '  https://accounts.google.com/o/oauth2/auth?client_id=mock&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&state=st-cli\n\n'
+          + 'Then paste the authorization code, or the full URL of the page you land on, and press Enter:\n',
+        );
+      }, 5);
+      let received = '';
+      proc.stdin.on('data', (d) => {
+        received += String(d);
+        if (received.includes('\n')) {
+          const line = received.trim();
+          const marker = path.join(opts.env.USERPROFILE, 'slot-token-marker.txt');
+          writeFileSync(marker, line, 'utf8');
+          proc.exitCode = line.includes('bad-code') ? 1 : 0;
+          if (proc.exitCode !== 0) proc.stderr.write('invalid authorization code\n');
+          proc.emit('close', proc.exitCode, null);
+        }
+      });
+    } else {
+      const epIdx = args.indexOf('--cloud_code_endpoint');
+      const endpoint = epIdx >= 0 ? args[epIdx + 1] : '';
+      let buf = '';
+      proc.stdin.on('data', (d) => {
+        buf += String(d);
+        let idx;
+        while ((idx = buf.indexOf('\n')) >= 0) {
+          const raw = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 1);
+          if (!raw) continue;
+          const msg = JSON.parse(raw);
+          if (msg.method === 'initialize') {
+            proc.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1 } }) + '\n');
+          } else if (msg.method === 'session/list') {
+            if (forceUnauth) {
+              proc.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: 'Authentication required' } }) + '\n');
+            } else {
+              captureSeq += 1;
+              const markerPath = path.join(opts.env.USERPROFILE, 'slot-token-marker.txt');
+              const tag = existsSync(markerPath) ? readFileSync(markerPath, 'utf8') : 'unknown';
+              const tok = `ya29.slot-${tag}-${captureSeq}`;
+              fetch(`${endpoint}/v1internal:loadCodeAssist`, {
+                method: 'POST',
+                headers: {
+                  authorization: `Bearer ${tok}`,
+                  'user-agent': 'antigravity/cli/1.5.13 (aidev_client; os_type=windows; arch=amd64; auth_method=consumer)',
+                  'content-type': 'application/json',
+                },
+                body: '{}',
+              }).catch(() => {});
+            }
+          }
+        }
+      });
+    }
+    return proc;
+  });
+
+  slotsMod._setSlotFetchForTest(async (url) => {
+    const u = String(url);
+    if (u.includes('tokeninfo')) {
+      if (nearExpiryOnce) {
+        nearExpiryOnce = false;
+        return new Response(JSON.stringify({ expires_in: '1' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ expires_in: '3500' }), { status: 200 });
+    }
+    return new Response('{}', { status: 404 });
+  });
+
+  oauthMod._setOAuthFetchForTest(async (url, init) => {
+    const u = String(url);
+    const auth = String(init?.headers?.authorization || '');
+    if (u.includes('userinfo')) {
+      const email = auth.includes('code-2') ? 'slot-two@example.com' : 'slot-one@example.com';
+      return new Response(JSON.stringify({ email }), { status: 200 });
+    }
+    if (u.includes('loadCodeAssist')) {
+      const isTwo = auth.includes('code-2');
+      return new Response(JSON.stringify({
+        cloudaicompanionProject: isTwo ? 'proj-slot-2' : 'proj-slot-1',
+        paidTier: isTwo ? { id: 'g1-ultra-tier', name: 'Google AI Ultra' } : { id: 'g1-pro-tier', name: 'Google AI Pro' },
+      }), { status: 200 });
+    }
+    return new Response('{}', { status: 404 });
+  });
+
   try {
     assert.equal(oauthMod.oauthClientConfigured(), false);
-    await assert.rejects(oauthMod.startOAuthLogin({ label: '没配置' }), (e) => e.message === oauthMod.OAUTH_NOT_CONFIGURED);
+    assert.equal(oauthMod.poolAuthMode(), 'cli');
     await assert.rejects(oauthMod.exchangeRefreshToken('1//rt-x'), (e) => e.message === oauthMod.OAUTH_NOT_CONFIGURED);
+
+    // 1) 启动本机 agy 托管登录，验证 SSH_CONNECTION 与独立目录隔离
+    const started = await oauthMod.startOAuthLogin({ label: '槽位一号' });
+    assert.equal(started.ok, true);
+    assert.equal(started.mode, 'cli');
+    assert.match(started.flowId, /^as-/);
+    assert.match(started.url, /^https:\/\/accounts\.google\.com\/o\/oauth2\/auth\?/);
+    const loginEnv = spawnCalls[0].env;
+    assert.ok(loginEnv.SSH_CONNECTION, '必须注入 SSH_CONNECTION 避开系统钥匙串');
+    assert.equal(loginEnv.USERPROFILE, loginEnv.HOME);
+    assert.equal(loginEnv.AGY_HOME_DIR, undefined);
+
+    // 2) 提交授权码 → 抓取令牌 → 入池为 source:'slot' 且归档槽位目录
+    const fin = await oauthMod.finishOAuthLogin(started.flowId, '4/code-1');
+    assert.equal(fin.ok, true);
+    assert.equal(fin.account.source, 'slot');
+    assert.equal(fin.account.hasToken, true);
+    assert.equal(fin.account.email, 'slot-one@example.com');
+    assert.equal(fin.account.effectivePlan, 'pro');
+    assert.equal(accountsMod.hasNonLocalAccounts(), true);
+    assert.equal(slotsMod.hasSlotDir(fin.id), true);
+
+    // 3) 缓存命中不重复拉进程；失效后触发近过期自动二次抓取
+    const beforeCap = captureSeq;
+    const cachedTok = await oauthMod.getAccessToken(fin.id);
+    assert.equal(cachedTok.source, 'slot');
+    assert.equal(cachedTok.token, 'ya29.slot-4/code-1-1');
+    assert.equal(captureSeq, beforeCap);
+
+    nearExpiryOnce = true;
+    oauthMod.invalidateAccessToken(fin.id);
+    const [r1, r2] = await Promise.all([oauthMod.getAccessToken(fin.id), oauthMod.getAccessToken(fin.id)]);
+    assert.equal(r1.token, r2.token);
+    assert.equal(captureSeq, beforeCap + 2, '近过期令牌应自动重抓一次');
+
+    // 4) 第二个槽位号入池 + upstream 429 无缝切号
+    const s2 = await oauthMod.startOAuthLogin({ label: '槽位二号' });
+    const fin2 = await oauthMod.finishOAuthLogin(s2.flowId, '4/code-2');
+    assert.equal(fin2.ok, true);
+    assert.equal(fin2.account.email, 'slot-two@example.com');
+    assert.equal(fin2.account.effectivePlan, 'ultra');
+
+    accountsMod.deleteAccount(accountsMod.localAccountId());
+    accountsMod.setActive(fin.id);
+    accountsMod.setRouterSettings({ enabled: true, strategy: 'fill', seamless: true });
+    quotaMod._setQuotaFetchForTest(async () => new Response(JSON.stringify({ groups: [] }), { status: 200 }));
+
+    const upstreamHits = [];
+    upstreamMod._setUpstreamFetchForTest(async (url, init) => {
+      const auth = init?.headers?.authorization || '';
+      const body = init?.body ? JSON.parse(Buffer.from(init.body).toString('utf8')) : {};
+      upstreamHits.push({ auth, project: body.project || '' });
+      if (auth.includes('code-1')) {
+        return new Response(JSON.stringify({ error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'QUOTA_EXHAUSTED' } }), { status: 429 });
+      }
+      return new Response('data: {"response":{"candidates":[{"content":{"parts":[{"text":"slot-ok"}]}}]}}\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    });
+
+    const base = await upstreamMod.ensureAgyUpstream();
+    const res = await fetch(`${base}/v1internal:streamGenerateContent?alt=sse`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer host-ignored' },
+      body: JSON.stringify({ project: 'host-proj', model: 'gemini-4-neon', requestType: 'agent' }),
+    });
+    assert.equal(res.status, 200);
+    assert.match(await res.text(), /slot-ok/);
+    assert.equal(upstreamHits.length, 2);
+    assert.equal(upstreamHits[0].project, 'proj-slot-1');
+    assert.equal(upstreamHits[1].project, 'proj-slot-2');
+    assert.equal(accountsMod.activeAccountId(), fin2.id);
+
+    // 5) 槽位凭据失效（-32000）应快速报 invalid_grant
+    forceUnauth = true;
+    oauthMod.invalidateAccessToken(fin.id);
+    const badTok = await oauthMod.getAccessToken(fin.id);
+    assert.equal(badTok.token, '');
+    assert.equal(badTok.code, 'invalid_grant');
+
+    // 6) 删除槽位目录
+    assert.equal(slotsMod.deleteSlotDir(fin.id), true);
+    assert.equal(slotsMod.hasSlotDir(fin.id), false);
   } finally {
     [process.env.AGY_OAUTH_CLIENT_ID, process.env.AGY_OAUTH_CLIENT_SECRET] = saved;
+    slotsMod._resetSlotsForTest();
   }
   assert.equal(oauthMod.oauthClientConfigured(), true);
+  assert.equal(oauthMod.poolAuthMode(), 'oauth');
 });
 
 test('quota：CCPA 直查携带完整 AGY User-Agent、4 桶归一化、过期清零与本地回落', async () => {

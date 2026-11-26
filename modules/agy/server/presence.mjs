@@ -9,6 +9,7 @@ import { busPublish } from '@bridge/core/runtime/bus.mjs';
 import { postNotice, plainSummary } from '@bridge/core/runtime/notices.mjs';
 import { getLiveGens } from '@bridge/core/runtime/gen.mjs';
 import { getSessionMeta } from './sessions.mjs';
+import { memberToolName } from './mcp/catalog.mjs';
 
 export const AGY_LABEL = 'Antigravity';
 
@@ -25,8 +26,9 @@ const clip = (s, n) => {
 function bridgeAskText(tc = {}) {
   const m = /^mcp_bridge_(?:[0-9a-f]{8}_)?([a-z0-9_]+)$/i.exec(String(tc.name || '').trim());
   if (!m) return '';
-  const id = m[1].toLowerCase();
   const a = tc.args && typeof tc.args === 'object' ? tc.args : {};
+  // 合并工具（pr / project_memory / phone_files）按 action 换回原工具名
+  const id = memberToolName(m[1].toLowerCase(), a);
   const act = String(a.action || '').toLowerCase();
   if (id === 'terminal') return act === 'run' ? `在共享终端执行：${a.command || ''}` : act === 'restart' ? '重启共享终端' : `共享终端：${act || '操作'}`;
   if (id === 'device_shell') return `在你的电脑上执行：${a.command || ''}`;

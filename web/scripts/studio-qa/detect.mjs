@@ -9,7 +9,9 @@
 //   tap        d2) 触屏点按区 < 32px（算上 ::before / ::after 的命中扩展）
 //   hscroll    e) 出现横向滚动（整页，或者没标 data-hscroll / 白名单的元素自己横向能滚）
 //   safe       f) 底部可点控件压在手势条（--sab）里 / 顶部压在状态栏（--sat）下；滚动区滚到底最后一项仍被裁
-//   squeeze    g) 画布被挤扁（创作页滚动区不到视口的 22%）、输入框比视口的 45% 还高
+//   squeeze    g) 画布被挤扁（顶栏和浮在底部的输入栏之间露出来的墙不到视口的 22%）、输入框比视口的 45% 还高
+// v4（方案 §12）：输入栏浮在作品墙 / 焦点上面（墙按 --cf-dock-h 留了底距）——墙里的格子被输入栏盖住，只要还能往下滚出来就不算遮挡；
+// 滚到底最后一项要露在输入栏上面（不只是视口里）。
 //   overlap    h) 两段不相干的文字互相压住
 export const DETECT_SRC = String.raw`
 window.__qaDetect = function (opts = {}) {
@@ -20,7 +22,7 @@ window.__qaDetect = function (opts = {}) {
   const SAT = parseFloat(rs.getPropertyValue('--sat')) || 0;
   const SAB = parseFloat(rs.getPropertyValue('--sab')) || 0;
   const scope = opts.scope ? [...document.querySelectorAll(opts.scope)] : [document.body];
-  const HSCROLL_OK = ['.cf-chips', '.cp-chips', '.sb-chips', '[data-hscroll]', '.seg', '.cm-scroller', 'pre', 'code', '.md-table', 'table'];
+  const HSCROLL_OK = ['[data-hscroll]', '.cm-scroller', 'pre', 'code', '.md-table', 'table'];
   const issues = [];
   const csCache = new Map();
   const cs = (el) => { let s = csCache.get(el); if (!s) { s = getComputedStyle(el); csCache.set(el, s); } return s; };
@@ -121,11 +123,11 @@ window.__qaDetect = function (opts = {}) {
   }
 
   // b1) 浮层 / 菜单 / sheet 超出视口（含安全区：sheet / 菜单不该伸进状态栏和手势条）
-  const LAYERS = '.ly-pop, .pv, .sh-panel, .sh, .mn, [role=dialog], [role=menu], [role=listbox], .studio-root.compact .sd-side.open, .studio-root.compact .sd-rail.open, .toast, .tt-pop';
+  const LAYERS = '.ly-pop, .pv, .sh-panel, .sh, .mn, [role=dialog], [role=menu], [role=listbox], .studio-root.compact .sd-shelf.open, .toast';
   for (const el of vis) {
     if (!el.matches(LAYERS)) continue;
     // 浮层里面套的 listbox / menu（Sheet 正文里的选项列表）跟着外层滚，量外层那一个就够
-    if (!el.matches('.ly-pop, .pv, .sh-panel, .sh, .mn, .tt-pop, .toast') && el.parentElement?.closest(LAYERS)) continue;
+    if (!el.matches('.ly-pop, .pv, .sh-panel, .sh, .mn, .toast') && el.parentElement?.closest(LAYERS)) continue;
     const r = el.getBoundingClientRect();
     const out = [];
     if (r.left < -0.5) out.push('左 ' + Math.round(r.left));
@@ -133,7 +135,7 @@ window.__qaDetect = function (opts = {}) {
     if (r.top < -0.5) out.push('上 ' + Math.round(r.top));
     if (r.bottom > VH + 0.5) out.push('下 ' + Math.round(r.bottom - VH));
     if (out.length) add('layer', el, '浮层超出视口：' + out.join('，'));
-    else if (touch && SAB && r.bottom > VH - SAB + 0.5 && !el.matches('.sd-side, .sd-rail')) {
+    else if (touch && SAB && r.bottom > VH - SAB + 0.5 && !el.matches('.sd-shelf')) {
       // 底边贴在手势条里没关系（iOS 式 sheet），但它最底下的可点内容不能压在手势条里——这一条交给 safe
     }
   }
@@ -141,7 +143,7 @@ window.__qaDetect = function (opts = {}) {
   // b2) 内容顶出容器：最近的「看得见边界」的祖先（圆角且有底色 / 描边 / 阴影，或者按钮 / 浮层）
   function boxy(a) {
     const s = cs(a);
-    if (a.matches('button, [role=button], [role=menuitem], .ly-pop, .pv, .sh-panel, .sh, .mn, .cp, .pl-card, .pl-panel, .pl-model, .op-card, .cp-att, .pc, .chip, .pl-cell, .pl-ac, .pl-sel, .dt-slot, .cv-thumb, .fc-audio, .cv-row, .busy, .cv-err, .ch-bubble, .tt-r')) return true;
+    if (a.matches('button, [role=button], [role=menuitem], .ly-pop, .pv, .sh-panel, .sh, .mn, .cp, .pl-panel, .pl-model, .cp-att, .pl-sel, .dt-slot, .cf-tray, .sw-arow, .sw-err, .sf-media, .sd-tile, .sw-tile, .sg')) return true;
     if (parseFloat(s.borderTopLeftRadius) < 4) return false;
     const bg = s.backgroundColor; const bgOn = bg && !/rgba\(.*,\s*0\)$/.test(bg) && bg !== 'transparent';
     return bgOn || s.boxShadow !== 'none' || parseFloat(s.borderTopWidth) > 0;
@@ -164,7 +166,7 @@ window.__qaDetect = function (opts = {}) {
     if (v.right > ar.right + tol) o.push('右 ' + Math.round(v.right - ar.right));
     if (v.top < ar.top - tol) o.push('上 ' + Math.round(ar.top - v.top));
     if (v.bottom > ar.bottom + tol) o.push('下 ' + Math.round(v.bottom - ar.bottom));
-    if (o.length && !(el.matches('.cp-x, .cp-link, .sd-pip, .sd-dot, .wr-g, .wr-g *, .sd-resize, .sh-grip, .ms, .ms *'))) add('spill', el, '顶出所属容器 ' + sel(a).split(' > ').pop() + '：' + o.join('，'));
+    if (o.length && !(el.matches('.cp-x, .cp-link, .sd-dot, .sh-grip, .ms, .ms *, .t-n'))) add('spill', el, '顶出所属容器 ' + sel(a).split(' > ').pop() + '：' + o.join('，'));
   }
 
   // c / c2 / h) 文字
@@ -183,7 +185,9 @@ window.__qaDetect = function (opts = {}) {
     for (const tr of rects) {
       texts.push({ n, p, r: tr });
       // c) 被祖先裁掉
-      const cutX = tr.left < c.l - 1 ? c.by.l : tr.right > c.r + 1 ? c.by.r : null;
+      // pre-wrap 的行尾空格挂在行框外（看不见）：右边多出不到一个空格宽的不算裁字
+      const wsTol = /pre-wrap|break-spaces/.test(cs(p).whiteSpace) ? parseFloat(cs(p).fontSize) * 0.4 + 1 : 1;
+      const cutX = tr.left < c.l - 1 ? c.by.l : tr.right > c.r + wsTol ? c.by.r : null;
       const cutY = tr.top < c.t - 1 ? c.by.t : tr.bottom > c.b + 1 ? c.by.b : null;
       const v = inter(tr, c);
       const fullyOut = v.right - v.left <= 0.5 || v.bottom - v.top <= 0.5;
@@ -206,7 +210,8 @@ window.__qaDetect = function (opts = {}) {
         for (let e = p; e && !ok; e = e.parentElement) {
           const es = cs(e);
           if (axis === 'x' && es.textOverflow === 'ellipsis') ok = true;
-          if (axis === 'y' && (es.webkitLineClamp && es.webkitLineClamp !== 'none')) ok = true;
+          // line-clamp 自己在最后一行末尾画省略号（那一行的文字矩形会伸到框外）：横竖都算有省略号
+          if (es.webkitLineClamp && es.webkitLineClamp !== 'none') ok = true;
           if (e === cut) break;
         }
         if (!ok && (cs(cut).maskImage || 'none') !== 'none' && axis === 'x') ok = true;   // 横滑渐隐（有意的）
@@ -221,8 +226,10 @@ window.__qaDetect = function (opts = {}) {
       // c2) 溢出所在块（overflow 可见）
       if (block && block !== document.body) {
         const br = block.getBoundingClientRect(), bs = cs(block);
-        if (!clips(bs, 'x') && (tr.right > br.right + 2 || tr.left < br.left - 2)) add('textspill', p, '文字比所在的 ' + sel(block).split(' > ').pop() + ' 宽（' + Math.round(Math.max(tr.right - br.right, br.left - tr.left)) + 'px）');
-        else if (!clips(bs, 'y') && tr.bottom > br.bottom + 3 && block.matches('button, [role=button], .pc, .chip, .pl-cell, .pl-ac, .pl-sel, .cp-role, .sd-tab, .tbtn')) add('textspill', p, '文字比所在的 ' + sel(block).split(' > ').pop() + ' 高');
+        // pre-wrap 的行尾空格挂在框外（看不见），量到的行矩形会多出一个空格宽：容差放到一个空格
+        const tolX = /pre-wrap|break-spaces/.test(cs(p).whiteSpace) ? parseFloat(cs(p).fontSize) * 0.4 + 2 : 2;
+        if (!clips(bs, 'x') && (tr.right > br.right + tolX || tr.left < br.left - tolX)) add('textspill', p, '文字比所在的 ' + sel(block).split(' > ').pop() + ' 宽（' + Math.round(Math.max(tr.right - br.right, br.left - tr.left)) + 'px）');
+        else if (!clips(bs, 'y') && tr.bottom > br.bottom + 3 && block.matches('button, [role=button], .pl-sel, .t-seg, .st-tab, .sg-o, .tbtn')) add('textspill', p, '文字比所在的 ' + sel(block).split(' > ').pop() + ' 高');
       }
     }
   }
@@ -262,6 +269,9 @@ window.__qaDetect = function (opts = {}) {
           const glass = bf !== 'none' && (getComputedStyle(e, '::before').borderImageSource || 'none') !== 'none';
           if (alpha >= 0.85 || e.tagName === 'IMG' || glass || (bf !== 'none' && (alpha >= 0.3 || /gradient/.test(cs(e).backgroundImage)))) hidden = true;
         }
+        // 浮在底部的输入栏身后有一层纸色渐变（画在 .cf-dock::before 上，命中测试看不见）：从上往下 30% 处起已经是 82% 的纸色，墙上的字到这里就看不见了
+        const dk = upper.closest('.cf-dock');
+        if (!hidden && dk && lower.closest('.cf-canvas')) { const d = dk.getBoundingClientRect(); const gTop = d.top - 30; if (y > gTop + (d.bottom - gTop) * 0.3) hidden = true; }
         if (hidden) continue;
         add('overlap', upper, '文字和「' + (upper === A.p ? B : A).n.nodeValue.trim().slice(0, 16) + '」(' + sel(lower).split(' > ').pop() + ') 压在一起');
       }
@@ -272,10 +282,12 @@ window.__qaDetect = function (opts = {}) {
   // d) 可点控件：遮挡 + 点按区
   const MODALS = [...document.querySelectorAll('.sh-root, .mn-root, .ly-root, .studio-root > .sh')].filter((m) => !hidden(m));
   const top = MODALS.length ? MODALS[MODALS.length - 1] : null;
-  const drawerOpen = document.querySelector('.studio-root.compact .sd-side.open, .studio-root.compact .sd-rail.open');
+  const drawerOpen = document.querySelector('.studio-root.compact .sd-shelf.open');
   const INTER = 'button, a[href], input:not([type=hidden]):not([type=file]), textarea, select, [role=button], [role=tab], [role=radio], [role=menuitem], [role=switch], [contenteditable=true], [role=separator][tabindex]';
   function hitExt(el, r) {
     let w = r.width, h = r.height;
+    // 自己 overflow 不是 visible：伸出去的 ::before / ::after 被自己裁掉，点不到
+    if (cs(el).overflowX !== 'visible' || cs(el).overflowY !== 'visible') return { w, h };
     for (const pe of ['::before', '::after']) {
       const s = getComputedStyle(el, pe);
       if (!s || s.content === 'none' || s.position !== 'absolute' || s.pointerEvents === 'none') continue;
@@ -310,7 +322,18 @@ window.__qaDetect = function (opts = {}) {
     let sticky = null;
     for (let a = hit; a && a !== document.body; a = a.parentElement) if (cs(a).position === 'sticky') { sticky = a; break; }
     const bySticky = !!sticky && !sticky.contains(el) && !!sticky.parentElement?.contains(el);
-    if (hit && !byPopover && !bySticky && hit !== el && !el.contains(hit) && !hit.contains(el) && !(hit.closest('label') && hit.closest('label').contains(el))) {
+    // 浮在底部的输入栏盖住墙 / 焦点里的东西：墙留了 --cf-dock-h 的底距，往下还能滚出来就不算（滚到底还盖着才算）
+    let byDock = false;
+    const dock = hit && hit.closest('.cf-dock');
+    if (dock && !dock.contains(el) && el.closest('.cf-canvas')) {
+      let sc = null;
+      // 横滑区（overflow-x:auto 的 y 也算出 auto）不算：找真能竖着滚的那一层
+      for (let a = el.parentElement; a; a = a.parentElement) { const s = cs(a); if (isScroll(s, 'y') && a.scrollHeight > a.clientHeight + 1) { sc = a; break; } }
+      const need = r.bottom - dock.getBoundingClientRect().top;
+      const room = sc ? sc.scrollHeight - sc.clientHeight - sc.scrollTop : 0;
+      if (room >= need - 1) byDock = true;
+    }
+    if (hit && !byPopover && !bySticky && !byDock && hit !== el && !el.contains(hit) && !hit.contains(el) && !(hit.closest('label') && hit.closest('label').contains(el))) {
       add('cover', el, '被 ' + sel(hit).split(' > ').slice(-2).join(' > ') + ' 盖住');
     }
     // 点按区
@@ -350,7 +373,10 @@ window.__qaDetect = function (opts = {}) {
     const prev = el.scrollTop;
     el.scrollTop = el.scrollHeight;
     const er = el.getBoundingClientRect();
-    const bottomLimit = Math.min(er.top + el.clientTop + el.clientHeight, touch && SAB ? VH - SAB : VH);
+    let bottomLimit = Math.min(er.top + el.clientTop + el.clientHeight, touch && SAB ? VH - SAB : VH);
+    // 墙 / 焦点的滚动区一直伸到输入栏底下：滚到底最后一项要露在输入栏上面
+    const fdock = el.closest('.cf-canvas') && el.closest('.cf')?.querySelector(':scope > .cf-dock');
+    if (fdock) bottomLimit = Math.min(bottomLimit, fdock.getBoundingClientRect().top);
     let lastB = -1e9, lastEl = null;
     for (const d of el.querySelectorAll('*')) {
       if (!visSet.has(d) || d.children.length) continue;
@@ -368,8 +394,11 @@ window.__qaDetect = function (opts = {}) {
   // g) 画布被挤扁 / 输入框太高（只看当前创作页）
   const pg = document.querySelector('.studio-root .sd-page.on');
   if (pg && !top) {
-    const sc = pg.querySelector('.cf-scroll'), cp = pg.querySelector('.cp');
-    if (sc && sc.clientHeight < VH * 0.22) add('squeeze', sc, '画布只剩 ' + sc.clientHeight + 'px（视口高 ' + VH + '）');
+    const cv = pg.querySelector('.cf-canvas'), dk = pg.querySelector('.cf-dock'), cp = pg.querySelector('.cp');
+    if (cv && dk) {
+      const seen = Math.round(dk.getBoundingClientRect().top - cv.getBoundingClientRect().top);
+      if (seen < VH * 0.22) add('squeeze', cv, '输入栏上面只露出 ' + seen + 'px 的墙（视口高 ' + VH + '）');
+    }
     if (cp && cp.getBoundingClientRect().height > VH * 0.45) add('squeeze', cp, '输入框 ' + Math.round(cp.getBoundingClientRect().height) + 'px，超过视口的 45%');
   }
   return issues;

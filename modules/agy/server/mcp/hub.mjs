@@ -29,6 +29,10 @@ import { makeDeviceMcp } from '@bridge/core/mcp/device-tools.mjs';
 import { makeVisualizeMcp } from '@bridge/core/mcp/visualize.mjs';
 import { getSessionMeta } from '../sessions.mjs';
 import { agyWording, rewordResult } from './wording.mjs';
+import {
+  AGY_DOCS_TOOL, agyTokenEstimate, compactAgyTool, mergeFamilies, familyOf, expandFamilyCall, fitBridgeShare,
+} from './catalog.mjs';
+import { localToolCatalog } from './agy-bridge-tools.mjs';
 import { SESSIONS_GROUP } from './groups/sessions.mjs';
 import { PHONE_GROUP } from './groups/phone.mjs';
 import { PR_GROUP } from './groups/pr.mjs';
@@ -181,74 +185,10 @@ async function listGroupTools(group, ctx, cwd) {
   return tools;
 }
 
-// ── 工具清单的体量预算 ─────────────────────────────────────────────────────────
-// agy（ACP 模式）给一个会话里全部 MCP 工具的定义（说明 + 参数表）设了一个总 token 预算，超了就从体量最大的工具开始
-// 整个丢掉，不报错，模型根本不知道有这个工具（-p 模式没有这个限制）。11-20 对照实测：20 个各 5000 字符的工具，纯英文留
-// 11 个、中文只留 3 个，折算总预算约 1.4 万～1.5 万 token；bridge 原来的工具全量约 2.3 万，侧边浏览器（约 5600）和设备
-// 浏览器（约 4400）最大，所以 agy 从来没拿到过这两个。名字、anyOf 都和这个无关（同样实测排除过）。
-// 预算还和用户自己装的 MCP（如 context7）共用，所以这里按需展开：体量大的工具只给一句话说明 + 精简参数表，
-// 完整说明经 tool_docs(name) 现取；系统提示里各组的用法提示照旧给。
-export const AGY_DOCS_TOOL = 'tool_docs';
-const COMPACT_OVER = 450;   // 估算 token 超过这个数的工具才精简
-export function agyTokenEstimate(v) {
-  const s = typeof v === 'string' ? v : JSON.stringify(v ?? '');
-  const wide = (s.match(/[^\x00-\x7f]/g) || []).length;
-  return Math.round((s.length - wide) * 0.25 + wide * 0.9);
-}
-const firstPara = (text, max = 260) => {
-  const p = String(text || '').split('\n').map((x) => x.trim()).find(Boolean) || '';
-  return p.length > max ? p.slice(0, max).replace(/[，,；;。.\s]*$/, '') + '…' : p;
-};
-// batch 单步的字段骨架：只留字段名与类型（不带说明、不带枚举，单步 action 的枚举另留）。
-// agy 把对象的 properties 当成封闭表：没列的字段一律「additional properties not allowed」，在 agy 那头就拒了，
-// 根本到不了 bridge（11-22 反馈：batch 里写 text / ref / x 全被拦，多步只能一轮一步）。所以字段名一个都不能省。
-function fieldSkeleton(v) {
-  if (!v || typeof v !== 'object') return {};
-  if (Array.isArray(v.anyOf)) return { anyOf: v.anyOf.map(fieldSkeleton) };
-  const out = {};
-  if (v.type) out.type = v.type;
-  if (v.type === 'array') out.items = fieldSkeleton(v.items);
-  if (v.type === 'object' && v.properties) out.properties = Object.fromEntries(Object.entries(v.properties).map(([k, x]) => [k, fieldSkeleton(x)]));
-  return out;
-}
-// 参数表精简：只留结构（类型、枚举、必填），参数说明只留 30 字以内的；batch 单步只留字段骨架（见上）
-function compactSchema(schema) {
-  const walk = (o, depth) => {
-    if (Array.isArray(o)) return o.map((x) => walk(x, depth));
-    if (!o || typeof o !== 'object') return o;
-    const r = {};
-    for (const [k, v] of Object.entries(o)) {
-      if (k === 'description') { if (depth > 0 && typeof v === 'string' && v.length <= 30) r[k] = v; continue; }
-      r[k] = k === 'properties' ? Object.fromEntries(Object.entries(v || {}).map(([pk, pv]) => [pk, walk(pv, depth + 1)])) : walk(v, depth);
-    }
-    return r;
-  };
-  const out = walk(schema, 0);
-  // 单步能用哪些动作要留着：设备的批内动作和单步不是同一张表（批里能截图、不能 launch），不留模型只能撞校验
-  const steps = schema?.properties?.actions;
-  if (steps?.items?.properties) {
-    const props = steps.items.properties;
-    const stepActions = props.action?.enum;
-    const fields = Object.fromEntries(Object.entries(props).map(([k, v]) => [k, fieldSkeleton(v)]));
-    if (Array.isArray(stepActions)) fields.action = { type: 'string', enum: stepActions };
-    out.properties.actions = {
-      type: 'array',
-      description: '多步：每步一个对象，字段同单步调用',
-      items: { type: 'object', properties: fields, ...(steps.items.required ? { required: steps.items.required } : {}) },
-      ...(steps.maxItems ? { maxItems: steps.maxItems } : {}),
-    };
-  }
-  return out;
-}
-export function compactAgyTool(tool) {
-  const cost = agyTokenEstimate(tool.description) + agyTokenEstimate(tool.inputSchema);
-  if (cost <= COMPACT_OVER) return tool;
-  return {
-    ...tool,
-    description: `${firstPara(tool.description)}\n（精简版说明：动作、参数含义与注意事项先调 ${AGY_DOCS_TOOL}(name:"${tool.name}") 看完整说明。）`,
-    inputSchema: compactSchema(tool.inputSchema),
-  };
-}
+// ── 工具清单的体量 ─────────────────────────────────────────────────────────────
+// agy 给一个会话里的全部工具声明设了总上限，超了从最大的工具开始整个丢掉、不报错（11-24 丢的是 device_browser）。
+// 精简、合并、份额的口径都在 catalog.mjs（子进程本地工具也用同一套）；这里只是中枢这一侧怎么接。
+export { AGY_DOCS_TOOL, agyTokenEstimate, compactAgyTool } from './catalog.mjs';
 const DOCS_TOOL_DEF = {
   name: AGY_DOCS_TOOL,
   description: '查看某个 bridge 工具的完整说明（动作列表、每个参数的含义、注意事项）。标着「精简版说明」的工具，第一次用或参数拿不准时先调这个。',
@@ -274,7 +214,13 @@ async function fullHubTools(ctx, settings, cwd) {
       console.error(`[agy-hub] 列出 ${group.key} 组工具失败：`, e?.message || e);
     }
   }
-  return out;
+  // 拉取请求、项目记忆各合成一个按 action 分派的工具（catalog.mjs AGY_TOOL_FAMILIES）；_members 留着原工具给 tool_docs
+  return mergeFamilies(out);
+}
+
+// 子进程本地工具（媒体 / 界面 / 手机文件）的完整定义：tool_docs 与总清单都要（按类别过滤，手机文件也合并成一个）
+function localFullTools(categories = ['media', 'ui', 'phone']) {
+  return mergeFamilies(localToolCatalog(categories));
 }
 
 // 完整说明的文字版：工具说明原文 + 每个参数一行（类型 / 可选值 / 说明）；batch 单步的字段同顶层，不重复列。
@@ -292,15 +238,21 @@ function schemaLines(schema, indent = '') {
   }
   return lines;
 }
+const docOf = (t) => `${t.description}\n\n## 参数\n${schemaLines(t.inputSchema).join('\n') || '（无）'}`;
 async function toolDocsResult(ctx, settings, cwd, name) {
   const want = String(name || '').trim().replace(/^mcp_bridge_/, '');
-  if (cappedNames.has(want)) return { isError: true, content: [{ type: 'text', text: `${want} 没列进工具清单（插件 / 连接器的工具超出了 Antigravity 的工具清单预算），这一轮调不了。` }] };
-  const all = await fullHubTools(ctx, settings, cwd);
+  if (cappedNames.has(want)) return { isError: true, content: [{ type: 'text', text: `${want} 这次没列进工具清单：bridge 的工具总量超出了 Antigravity 的工具清单上限，先让出了它，这一轮调不了。` }] };
+  const all = [...localFullTools(), ...await fullHubTools(ctx, settings, cwd)];
   const t = all.find((x) => x.name === want);
   if (!t) {
     return { isError: true, content: [{ type: 'text', text: `没有叫 ${want || '(空)'} 的 bridge 工具。可查：${all.map((x) => x.name).join('、')}` }] };
   }
-  const text = `# ${t.name}\n\n${t.description}\n\n## 参数\n${schemaLines(t.inputSchema).join('\n') || '（无）'}`;
+  // 合并工具：先给总说明，再按 action 逐个给原工具的完整说明与参数（调用时写 action + 那一节的参数）
+  const fam = familyOf(t.name);
+  const text = fam && Array.isArray(t._members)
+    ? `# ${t.name}\n\n${agyWording(t.description)}\n\n调用：action 选下面一节的名字，其余参数照那一节写。\n\n`
+      + t._members.map((m) => `## action: "${m.name.slice(fam.prefix.length)}"\n\n${docOf({ ...m, description: agyWording(m.description || '') })}`).join('\n\n')
+    : `# ${t.name}\n\n${docOf(t)}`;
   return { content: [{ type: 'text', text }] };
 }
 
@@ -311,7 +263,7 @@ export async function listHubTools(ctx, settings = {}, { cwd = '' } = {}) {
   cappedNames.clear();
   const tools = [];
   for (const t0 of await fullHubTools(ctx, settings, cwd)) {
-    const { _group, ...t } = t0;
+    const { _group, _members, ...t } = t0;
     const note = BUDGET_NOTE[t.name] || '';
     const bare = note && t.description.endsWith(note) ? { ...t, description: t.description.slice(0, -note.length) } : t;
     const c = compactAgyTool(bare);
@@ -330,14 +282,44 @@ export async function listHubTools(ctx, settings = {}, { cwd = '' } = {}) {
   return tools;
 }
 
-/** 对外名 → { group, toolName }；不认识返回 null（只认已启用的组）。 */
-// 超出组预算、没列进清单的工具名（tool_docs 与调不了的原因据此说明）
+/**
+ * 子进程 tools/list 要的整份清单：本地工具（媒体 / 界面 / 手机文件，按 categories）+ 中枢工具，精简、合并后
+ * 整体夹进 bridge 的份额（catalog.mjs fitBridgeShare）。超了就按先后让出不常用的，并在 tool_docs 的说明里写明让出了谁——
+ * 不夹的话 agy 会自己丢掉最大的那个（就是浏览器），还不告诉任何人。
+ * 返回 { local, hub, withheld, total }：local / hub 都是 MCP tools/list 形状（对外名）。
+ */
+export async function listAgyBridgeCatalog(ctx, settings = {}, { categories = [], cwd = '' } = {}) {
+  const cats = (Array.isArray(categories) ? categories : []).map((c) => String(c).toLowerCase());
+  const localCats = cats.filter((c) => c === 'media' || c === 'ui' || c === 'phone');
+  const local = localCats.length ? localFullTools(localCats).map(({ _members, ...t }) => compactAgyTool(t)) : [];
+  const hub = cats.includes('hub') ? await listHubTools(ctx, settings, { cwd }) : [];   // 这里会重置 cappedNames
+  const fit = fitBridgeShare([...local, ...hub]);
+  for (const n of fit.withheld) cappedNames.add(n);
+  const kept = new Set(fit.tools.map((t) => t.name));
+  const keptHub = hub.filter((t) => kept.has(t.name)).map((t) => (t.name === AGY_DOCS_TOOL && fit.withheld.length
+    ? { ...t, description: `${t.description}\n（bridge 的工具总量超出了 Antigravity 的工具清单上限，这次没有列出：${fit.withheld.join('、')}。）` }
+    : t));
+  if (fit.withheld.length) console.warn(`[agy-hub] 工具清单超出份额，这次让出：${fit.withheld.join('、')}（留下约 ${fit.total}）`);
+  return { local: local.filter((t) => kept.has(t.name)), hub: keptHub, withheld: fit.withheld, total: fit.total };
+}
+
+/** 对外名 → { group, toolName }（合并工具另带 family，执行时按 action 换成原工具）；不认识返回 null（只认已启用的组）。 */
+// 超出组预算 / 总份额、没列进清单的工具名（tool_docs 与调不了的原因据此说明）
 const cappedNames = new Set();
 export async function resolveHubTool(ctx, settings, exposed, { cwd = '' } = {}) {
   const name = String(exposed || '').trim();
   if (!name) return null;
   if (cappedNames.has(name)) return null;
   if (name === AGY_DOCS_TOOL && enabledHubGroups(ctx, settings).length) return { group: { key: 'docs' }, toolName: AGY_DOCS_TOOL, settings };
+  const fam = familyOf(name);
+  if (fam) {
+    // 族里任一成员认得出来，就说明这个合并工具在（属于哪一组看成员）
+    for (const m of fam.members) {
+      const hit = await resolveHubTool(ctx, settings, m, { cwd });
+      if (hit) return { group: hit.group, toolName: null, family: fam, settings };
+    }
+    return null;
+  }
   for (const group of enabledHubGroups(ctx, settings)) {
     let tools;
     try { tools = await listGroupTools(group, ctx, cwd || ctx.cwd || ''); } catch { continue; }
@@ -350,9 +332,11 @@ export async function resolveHubTool(ctx, settings, exposed, { cwd = '' } = {}) 
 /** 一个对外名现在调不了的原因（给模型看的一句话）：设置里关了 / 没有登记电脑 / 插件没开 / 根本没有这个工具。 */
 export function hubToolUnavailableReason(ctx, settings, exposed) {
   const name = String(exposed || '').trim();
-  if (cappedNames.has(name)) return `工具 ${name} 没列进工具清单：插件 / 连接器的工具太多，超出了 Antigravity 的工具清单预算。少开几个连接器或插件后再试`;
-  const group = HUB_GROUPS.find((g) => (typeof g.owns === 'function' ? g.owns(name)
-    : g.key === 'bridge' ? name === 'manual' || name === 'call' : name === g.key || name.startsWith(g.key + '_')));
+  if (cappedNames.has(name)) return `工具 ${name} 没列进工具清单：bridge 的工具总量超出了 Antigravity 的工具清单上限（插件、连接器开得多时更容易超），这次先让出了它。少开几个连接器或插件后再试`;
+  // 合并工具按它的第一个成员认组（pr → pr_status、project_memory → project_memory_read）
+  const probe = familyOf(name)?.members[0] || name;
+  const group = HUB_GROUPS.find((g) => (typeof g.owns === 'function' ? g.owns(probe)
+    : g.key === 'bridge' ? probe === 'manual' || probe === 'call' : probe === g.key || probe.startsWith(g.key + '_')));
   if (!group) return `没有叫 ${name || '(空)'} 的 bridge 工具`;
   const bt = settings?.bridgeTools && typeof settings.bridgeTools === 'object' ? settings.bridgeTools : {};
   if (bt.enabled === false || bt[group.setting] === false) return `工具 ${name} 未启用：在 设置 › Antigravity › Bridge 工具 里打开对应开关`;
@@ -370,8 +354,17 @@ export function hubGroupOf(key) { return GROUP_BY_KEY.get(key) || null; }
  * 在归属轮 gen 上执行一次中枢工具。返回 MCP CallToolResult（content 原样：文本、图片都行）。
  * cwd：这一轮的授权工作目录（浏览器 / 终端池键与工作区相对路径都按它，和右侧面板同一把键）。
  */
-export async function callHubTool(ctx, gen, { group, toolName, settings }, args = {}, { cwd = '', signal = null } = {}) {
+export async function callHubTool(ctx, gen, { group, toolName, settings, family }, args = {}, { cwd = '', signal = null } = {}) {
   if (group.key === 'docs') return toolDocsResult(ctx, settings || {}, cwd || gen?.cwd || ctx.cwd || '', args?.name);
+  if (family) {
+    // 合并工具：按 action 换回原工具，参数去掉 action 原样交给它（必填项由原工具自己校验）
+    const x = expandFamilyCall(family.name, args);
+    const actions = family.members.map((m) => m.slice(family.prefix.length));
+    if (!x?.member) return { isError: true, content: [{ type: 'text', text: `${family.name} 的 action 只能是 ${actions.join(' / ')}（收到：${String(args?.action ?? '') || '空'}）。` }] };
+    const sub = await resolveHubTool(ctx, settings || {}, x.member, { cwd });
+    if (!sub) return { isError: true, content: [{ type: 'text', text: hubToolUnavailableReason(ctx, settings || {}, x.member) }] };
+    return callHubTool(ctx, gen, sub, x.args, { cwd, signal });
+  }
   const getGen = () => gen;
   const dir = cwd || gen?.cwd || ctx.cwd || '';
   const job = typeof group.call === 'function'

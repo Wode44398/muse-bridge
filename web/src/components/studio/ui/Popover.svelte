@@ -9,6 +9,7 @@
   import { onMount } from 'svelte';
   import { pushLayer } from '../../../modules/studio/layers.js';
   import { pop } from '../../../modules/studio/motion.js';
+  import { edgeFade } from '../../../modules/studio/edge.js';
 
   let {
     anchor, onclose, children, head = null,
@@ -104,5 +105,6 @@
   style:transform-origin={pos.origin}
   {role} aria-label={label || null} tabindex="-1" onkeydown={onKey} in:pop|global out:pop|global>
   {#if head}{@render head()}{/if}
-  <div class="pv-scroll"><div class="pv-in">{@render children?.()}</div></div>
+  <!-- 正文滚进标题下面时化开（edgeFade），不被一刀切掉 -->
+  <div class="pv-scroll" use:edgeFade={{ top: 16, bot: 18 }}><div class="pv-in">{@render children?.()}</div></div>
 </div>

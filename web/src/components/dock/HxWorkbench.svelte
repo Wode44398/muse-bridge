@@ -11,6 +11,7 @@
   import { isPluginView, workbenchByKey, openWorkbenchStandalone } from '../../lib/pluginUi.svelte.js';
   import { inAndroidApp } from '../../lib/pluginPanels.svelte.js';
   import { t } from '../../lib/i18n.js';
+  import { agentPopOut, listenCardBack } from '../../lib/solo.js';
   import Workbench from './Workbench.svelte';
 
   let { dk, panel, icon } = $props();
@@ -92,6 +93,11 @@
   });
   const tools = $derived(dk.tools.map((x) => ({ ...(x.own ? {} : sharedTool(x.key) || {}), ...x, ...(x.plugin ? { iconSvg: true } : {}), match: null, ok: null })));
 
+  // 共用卡拖出 app 成独立窗口（同 Claude 分页）：dimensio 自己的终端 / 浏览器（没并到 bridge 运行时那会儿）是专属卡，不放出去
+  const basePop = agentPopOut('dimensio', () => view, () => theme);
+  const popOut = { ...basePop, ok: (v) => basePop.ok(v) && !tools.find((x) => x.key === v)?.own };
+  $effect(() => listenCardBack('dimensio', (v) => { if (tools.some((x) => x.key === v)) { host.open(v); try { window.focus(); } catch {} } }));
+
   let two = $state(false);
   $effect(() => { const v = two; untrack(() => dk.setTwo(v)); });
   // 明暗跟 dimensio 自己的档（跟系统 / 浅 / 深），不跟 bridge 全站主题
@@ -99,4 +105,4 @@
 </script>
 
 <Workbench {host} {tools} wide={dk.docked} multi sizing="host" twoOk={dk.twoOk} bind:two skin="dimensio" mobile="sheet"
-  filesFloat="always" {theme} label={t('工作区')} {panel} {icon} keysOn={false} backLayer={dk.pushLayer} />
+  filesFloat="always" {theme} label={t('工作区')} {panel} {icon} {popOut} keysOn={false} backLayer={dk.pushLayer} />

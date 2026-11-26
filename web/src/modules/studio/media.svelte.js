@@ -12,9 +12,12 @@ import { studioApi, onFixtureEvent } from './api.js';
 import { PAGES, catKind, pageOf, splitKey, uploadRel } from './kinds.js';
 import { resolveValues, payloadParams, roleState, paramIssues } from './params.js';
 import { paramLabel, sizeIssueText } from './words.js';
+import { PAGE_ASSET_KIND, newWall, mergeAssets, appendAssets, resetWallItems, pickWallJobs, matchModel, parseSide } from './walls.js';
 
 const newDraft = () => ({ model: '', params: {}, inputs: [], parent: null, negative: '' });
-const LS_SIDE = 'studio-side';
+// 侧列：pinned 改成「展开成墙」后换了键（旧键 studio-side 只用来搬宽度 / 分段 / 参数坞，见 walls.js parseSide）
+const LS_SIDE = 'studio-side-v4';
+const LS_SIDE_OLD = 'studio-side';
 // 每页选的模型、调过的参数、负面提示词记在本机（方案 §11：以前刷新 / 重开就全回默认）。素材和血缘不记（文件可能已经不在了）
 const LS_DRAFTS = 'studio-drafts';
 const DRAFT_PAGES = ['image', 'video', 'voice', 'music'];
@@ -36,10 +39,10 @@ function readDrafts() {
 const LS_ADV = 'studio-adv-open';
 function readAdv() { try { return localStorage.getItem(LS_ADV) === '1'; } catch { return false; } }
 
-// 作品栏宽：dimensio 侧栏 272，可拖 240–400；dock＝参数坞（宽屏才有）开没开
+// 侧列：width 可拖 240–400；pinned = 宽屏侧列展开成 300 的墙（默认收成 64 的一条）；tab = 作品 / 文件；dock = 参数坞开没开
 function readSide() {
-  try { const o = JSON.parse(localStorage.getItem(LS_SIDE) || '{}'); return { width: Math.min(400, Math.max(240, Number(o.width) || 272)), pinned: o.pinned !== false, tab: o.tab === 'files' ? 'files' : 'works', dock: o.dock !== false }; }
-  catch { return { width: 272, pinned: true, tab: 'works', dock: true }; }
+  try { return parseSide(localStorage.getItem(LS_SIDE), localStorage.getItem(LS_SIDE_OLD)); }
+  catch { return parseSide(null, null); }
 }
 // 新发现的模型（isNew）本机选过一次就不再冒朱点（后端要等这个人真用它跑过任务才知道）
 const LS_SEEN = 'studio-seen-models';
@@ -51,15 +54,20 @@ export const studio = $state({
   saveDir: 'Media Studio',
   drafts: readDrafts(),
   advOpen: readAdv(),        // 参数面板的「更多」展开着（参数多的模型才会收起）
-  // 画布：图像是当前续改链（turns），其余三页是「正在看的那一件」（任务或作品）
+  // 图像续改链（打开图像焦点时就是这条链；没有焦点时是空的，从墙上发 = 另起一条）。
+  // 其余三页的 focus 是改版前画布用的，新墙不再写它（openAsset 仍顺手写，给还没改完的旧组件）
   views: { image: { thread: null, turns: [] }, video: { focus: null }, voice: { focus: null }, music: { focus: null } },
   jobs: [],
-  assets: [], cursor: null, assetsLoading: false, assetsErr: '', assetsDone: false,
+  // 每页的作品墙：{ items, cursor, done, loading, err, loaded }
+  walls: { image: newWall(), video: newWall(), voice: newWall(), music: newWall() },
+  focus: null,               // { page, asset }：打开着的那一件（图像 / 视频）
+  pick: null,                // { page, role }：素材架挑选态（点一张就当这一页的这个角色）
+  assets: [], cursor: null, assetsLoading: false, assetsErr: '', assetsDone: false,   // 素材架：全部种类
   filter: 'all', q: '',
-  side: readSide(),          // 侧栏：width / pinned（桌面常驻、平板推入）/ tab
+  side: readSide(),          // 侧列：width / pinned（宽屏展开成墙）/ tab / dock
   drawer: false,             // 手机抽屉、平板推入的开合
   unseen: 0,                 // 完成了还没看的任务数（任务胶囊上的小点）
-  flash: '',                 // 侧栏里要闪一下的作品 id
+  flash: '',                 // 要闪一下的作品 id（素材架格子、音频墙的那一行）
   clock: Date.now(),         // 进行中任务的计时（1s 一跳，只在有进行中任务时跑）
   notice: '',                // 输入岛下方的一次性提示（「已换到 X：它支持首帧」）
   filesTarget: null,         // { dir, open, seq }：侧栏「文件」要定位到的目录（作品菜单「在文件中显示」）
@@ -312,7 +320,7 @@ export function upsertJob(raw) {
   else { studio.jobs.unshift(raw); job = studio.jobs[0]; }
   studio.jobs.sort((a, b) => ts(b.createdAt) - ts(a.createdAt));
   if (job.state === 'done') {
-    // 结果并进作品流（按 id 去重，重复到达无害）；只有亲眼看着它跑完的才冒点、飞进侧栏
+    // 结果并进素材架和对应的墙（按 id 去重，重复到达无害）；只有亲眼看着它跑完的才冒点、调完成回调
     prependAssets(job.result || []);
     attachToView(job);
     if (wasActive) {
@@ -320,6 +328,8 @@ export function upsertJob(raw) {
       for (const fn of doneHooks) try { fn(job); } catch {}
     }
   } else if (job.state === 'error' || job.state === 'canceled') {
+    // 墙上只留亲眼看着失败的（ErrCard 原地出）；进页对账拉回来的旧失败不往墙上摆
+    if (job.state === 'error' && wasActive) job._failSeen = true;
     attachToView(job);
   }
   syncTicker();
@@ -333,12 +343,16 @@ function attachToView(job) {
     const v = studio.views.image;
     const turn = v.turns.find((x) => x.jobId === job.id);
     if (turn) {
+      const was = turn.state;
       turn.state = job.state; turn.error = job.error || '';
       turn.assets = (job.result || []).filter((a) => !goneAssets.has(a?.id));
       // 续改链的 id ＝ 链上第一张作品的 id（后端 listAssets / loadThread 按 sessionId||id 分组）：
       // 第一轮出图时服务端还没有 thread 可回报，这里就拿第一张的 id 当链 id，下一轮带上它才接得上上下文
       const th = job.thread || job.result?.[0]?.thread || (job.state === 'done' && !v.thread && v.turns[0] === turn ? job.result?.[0]?.id : null);
       if (th && (!v.thread || v.thread === job.thread)) v.thread = th;
+      // 焦点里续改出了新的一版：焦点跟到这一版（版本条的墨圈落在最新的上）
+      const last = turn.assets.at(-1);
+      if (was !== 'done' && job.state === 'done' && last && studio.focus?.page === 'image') studio.focus = { page: 'image', asset: last };
     }
     return;
   }
@@ -355,20 +369,13 @@ export async function reconcile() {
   } catch {}
 }
 
-// 刷新 / 换设备回来时画布是空的，但服务端还有这一类的任务在跑：把画布接回最新那条，免得「明明在生成却看不到」
+// 在跑的任务墙上自己会画（wallJobs）；只有打开着的图像焦点要把这条链上在跑的轮次接回来
+// （刷新 / 换设备回来、或者在跑时打开了这条链），免得版本条上看不到正在改的那一版
 function adoptActive() {
-  for (const page of PAGES) {
-    const j = studio.jobs.find((x) => isActive(x) && pageOf(x.kind) === page && x.source !== 'claude' && x.source !== 'legacy');
-    if (!j) continue;
-    if (page === 'image') {
-      const v = studio.views.image;
-      if (v.turns.length) continue;
-      v.thread = j.thread || null;
-      v.turns.push({ jobId: j.id, prompt: j.prompt || '', state: j.state, assets: [], error: '', srcUrl: '' });
-    } else if (!studio.views[page].focus) {
-      studio.views[page].focus = { jobId: j.id };
-    }
-  }
+  const v = studio.views.image;
+  if (studio.focus?.page !== 'image' || !v.thread) return;
+  const mine = studio.jobs.filter((x) => isActive(x) && x.kind === 'image' && x.thread === v.thread && !v.turns.some((tn) => tn.jobId === x.id));
+  for (const j of mine.reverse()) v.turns.push({ jobId: j.id, prompt: j.prompt || '', state: j.state, assets: [], error: '', srcUrl: '' });
 }
 
 /** 生成：组请求体（§3.3）→ POST → 镜像任务；返回 { ok, error } */
@@ -377,6 +384,8 @@ export async function submit(page, text) {
   if (!model) return { ok: false, error: t('没有可用的模型，先到设置里接一个服务') };
   const d = studio.drafts[page];
   if (d.inputs.some((x) => x.pending)) return { ok: false, error: t('素材还在上传') };
+  // 从墙上发 = 另起一张；焦点里发 = 续改这条链（链 id、血缘都从 views.image 接）
+  if (page === 'image' && studio.focus?.page !== 'image') newImageThread();
   const values = valuesOf(page, model);
   // 自定义尺寸不合规（倍数 / 边长 / 比例 / 像素）：发出去也是 400，先拦下，那一行已经标红
   const bad = paramIssues(model.params || [], values)[0];
@@ -401,12 +410,15 @@ export async function submit(page, text) {
     // 链 id 兜底：画布上已经有图（从作品流打开的单张、旧作品）却还没有链 id 时，用第一张的 id（同后端的分组规则）
     if (!v.thread && prev) v.thread = prev.thread || v.turns.find((x) => x.assets?.length)?.assets[0]?.id || null;
     if (v.thread) body.thread = v.thread;
-    // 续改链里接着说「改成…」：新图就是从上一张改出来的，血缘自动接到链上最后一张
-    if (!parent && prev) parent = prev.id;
+    // 续改链里接着说「改成…」：新图是从焦点里正看着的那一版改出来的（版本条切回第 2 版再说一句，就接在第 2 版上），
+    // 没有焦点时才退回链上最后一张
+    const seen = studio.focus?.page === 'image' ? studio.focus.asset : null;
+    if (!parent && (seen || prev)) parent = (seen || prev).id;
   }
   if (parent) body.parent = parent;
+  // 只有焦点里发的进版本条；墙上发的由墙按 wallJobs 画
   let turn = null;
-  if (page === 'image') {
+  if (page === 'image' && studio.focus?.page === 'image') {
     const src = d.inputs.find((x) => x.role === 'edit' || x.role === 'ref');
     studio.views.image.turns.push({ jobId: null, prompt: body.prompt, state: 'queued', assets: [], error: '', srcUrl: src?.url || '' });
     turn = studio.views.image.turns[studio.views.image.turns.length - 1];
@@ -415,7 +427,6 @@ export async function submit(page, text) {
     const r = await studioApi.createJob(body);
     const job = upsertJob({ ...r.job, __mine: true, kind: r.job?.kind || body.kind, prompt: r.job?.prompt ?? body.prompt, key: r.job?.key || body.key, createdAt: r.job?.createdAt || Date.now() });
     if (turn) { turn.jobId = job.id; attachToView(job); }
-    else studio.views[page].focus = { jobId: job.id };
     // 发出去之后：素材与 parent 清掉（图像续改链靠 thread 接着走），正文由调用方清
     d.inputs = []; d.parent = null;
     return { ok: true, job };
@@ -436,7 +447,8 @@ export async function retryJob(job) {
     for (const k of ['negative', 'thread', 'parent']) if (job[k]) body[k] = job[k];
     const r = await studioApi.createJob(body);
     const nj = upsertJob({ ...r.job, __mine: true, kind: r.job?.kind || job.kind, prompt: r.job?.prompt ?? job.prompt, key: r.job?.key || job.key, createdAt: r.job?.createdAt || Date.now() });
-    // 画布上正显示着这条失败任务的（画布上的「重试」、任务托盘的「重试」都一样）：换成新任务接着看
+    // 墙上那张失败卡收起、新任务在原处画；图像焦点的版本条上那一轮换成新任务接着看
+    dismissJob(job.id);
     const page = pageOf(job.kind);
     if (nj && page === 'image') {
       const turn = studio.views.image.turns.find((x) => x.jobId === job.id);
@@ -450,13 +462,73 @@ export async function retryJob(job) {
 // —— 作品 ——
 // 本页面里删掉过的作品：旧任务记录（对账、晚到的总线事件、没升级的后端）的 result 里还带着它，别再并回来
 const goneAssets = new Set();
+// 任务结果并进素材架和各自那一页的墙（按作品的 kind 归页：视频任务带出来的尾帧图进图像墙）
 function prependAssets(list) {
-  for (const a of [...(list || [])].reverse()) {
-    if (!a?.id || goneAssets.has(a.id) || studio.assets.some((x) => x.id === a.id)) continue;
-    if (studio.filter !== 'all' && a.kind !== studio.filter) continue;
-    studio.assets.unshift(a);
+  const q = studio.q.trim().toLowerCase();
+  mergeAssets(studio.assets, list, {
+    gone: goneAssets, done: studio.assetsDone,
+    accept: (a) => (studio.filter === 'all' || a.kind === studio.filter) && (!q || String(a.prompt || '').toLowerCase().includes(q) || String(a.model || '').toLowerCase().includes(q)),
+  });
+  for (const page of PAGES) {
+    const w = studio.walls[page];
+    mergeAssets(w.items, (list || []).filter((a) => a?.kind === PAGE_ASSET_KIND[page]), { gone: goneAssets, done: w.done });
   }
 }
+
+// —— 作品墙（每页一面，只拉这一页的种类）——
+const wallSeq = { image: 0, video: 0, voice: 0, music: 0 };
+/** 拉一页的墙：reset = 从头拉（拉取途中刚完成的结果留在最前面）；否则接着翻下一页 */
+export async function loadWall(page, reset = true) {
+  const w = studio.walls[page];
+  if (!w) return;
+  if (!reset && (w.done || w.loading || !w.loaded)) return;
+  const my = ++wallSeq[page];
+  w.loading = true;
+  try {
+    const r = await studioApi.assets({ kind: PAGE_ASSET_KIND[page], cursor: reset ? '' : w.cursor });
+    if (my !== wallSeq[page]) return;
+    const items = r?.items || [];
+    if (reset) w.items = resetWallItems(w.items, items, goneAssets);
+    else appendAssets(w.items, items, goneAssets);
+    w.cursor = r?.cursor || null;
+    w.done = !r?.cursor;
+    w.err = '';
+    w.loaded = true;
+  } catch (e) { if (my === wallSeq[page]) w.err = e.status === 401 ? t('需要登录') : t('作品加载失败'); }
+  finally { if (my === wallSeq[page]) w.loading = false; }
+}
+/** 墙滚到底：接着翻 */
+export const moreWall = (page) => loadWall(page, false);
+/** 这一页的墙还没拉过就拉（切页、打开作品时调；拉过的不重拉） */
+export function ensureWall(page) {
+  const w = studio.walls[page];
+  if (w && !w.loaded && !w.loading) loadWall(page, true);
+}
+// 进 Studio 时先拉眼前这一页，其余三页等空闲了一页一页拉：手机一进来别同时打四个列表请求
+function warmWalls() {
+  const rest = PAGES.filter((p) => p !== studio.page);
+  const idle = (fn) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout: 2500 }) : setTimeout(fn, 900));
+  const next = () => {
+    const p = rest.shift();
+    if (!p) return;
+    const w = studio.walls[p];
+    (w.loaded || w.loading ? Promise.resolve() : loadWall(p, true)).finally(() => idle(next));
+  };
+  idle(next);
+}
+
+// —— 墙上的任务 ——
+/** 这一页要在墙上画的任务：在跑的（所有来源）+ 本页面里亲眼看着失败、还没收起的；新的在前 */
+export function wallJobs(page) { return pickWallJobs(studio.jobs, page); }
+/** 收起墙上的一张失败卡 */
+export function dismissJob(id) {
+  const j = studio.jobs.find((x) => x.id === id);
+  if (j) j._dismissed = true;
+}
+
+// —— 挑选态（素材架：点一张就当这一页的这个角色）——
+export function startPick(page, role) { studio.pick = { page, role }; }
+export function endPick() { studio.pick = null; }
 let assetsSeq = 0;
 export async function loadAssets(reset = true) {
   const my = ++assetsSeq;
@@ -478,18 +550,43 @@ export async function loadAssets(reset = true) {
 function dropAsset(id) {
   goneAssets.add(id);
   studio.assets = studio.assets.filter((a) => a.id !== id);
+  for (const page of PAGES) {
+    const w = studio.walls[page];
+    if (w.items.some((a) => a.id === id)) w.items = w.items.filter((a) => a.id !== id);
+  }
   for (const page of ['video', 'voice', 'music']) if (studio.views[page].focus?.asset?.id === id) studio.views[page].focus = null;
   for (const turn of studio.views.image.turns) turn.assets = (turn.assets || []).filter((a) => a.id !== id);
+  // 焦点正看着它：图像链上还有别的版本就落到最新那一版，否则关掉焦点
+  if (studio.focus?.asset?.id === id) {
+    const rest = studio.focus.page === 'image' ? studio.views.image.turns.flatMap((x) => x.assets || []).at(-1) : null;
+    if (rest) studio.focus = { page: 'image', asset: rest };
+    else closeFocus();
+  }
+}
+// 服务端后台补上的字段（视频宽高 / 时长、音频波形）：就地补进各处持有的同一件作品
+const PATCHABLE = ['w', 'h', 'duration', 'peaks'];
+function patchAsset(id, patch) {
+  if (!patch || typeof patch !== 'object') return;
+  const p = Object.fromEntries(PATCHABLE.filter((k) => patch[k] != null).map((k) => [k, patch[k]]));
+  if (!Object.keys(p).length) return;
+  const hit = (a) => { if (a?.id === id) Object.assign(a, p); };
+  studio.assets.forEach(hit);
+  for (const page of PAGES) studio.walls[page].items.forEach(hit);
+  for (const turn of studio.views.image.turns) (turn.assets || []).forEach(hit);
+  for (const j of studio.jobs) (j.result || []).forEach(hit);
+  hit(studio.focus?.asset);
 }
 /** 删作品：回 { ok, error? }。404 = 已经被别的设备 / 页面删掉了，按删成处理（别把幽灵作品放回列表）。 */
 export async function deleteAsset(id) {
   const prev = studio.assets;
+  const prevWalls = Object.fromEntries(PAGES.map((p) => [p, studio.walls[p].items]));
   dropAsset(id);
   try { await studioApi.deleteAsset(id); return { ok: true }; }
   catch (e) {
     if (e?.status === 404) return { ok: true };
     goneAssets.delete(id);
     studio.assets = prev;
+    for (const p of PAGES) studio.walls[p].items = prevWalls[p];
     return { ok: false, error: e?.status ? tr(e.message || '') : t('连不上服务器，请重试') };
   }
 }
@@ -498,23 +595,56 @@ export async function saveAsset(id, dir) {
   catch (e) { return { ok: false, error: tr(e.message || '') }; }
 }
 
-/** 在它的创作页画布里打开一件作品（图像：接回它的续改链） */
+let flashTimer = 0;
+/**
+ * 打开一件作品：切到它那一页。图像 / 视频设焦点（图像另接回它的续改链，按 thread 拉全链）；
+ * 配音 / 音乐没有焦点，只让墙上那一行闪一下（studio.flash）。
+ */
 export async function openAsset(a) {
   const page = pageOf(a?.kind);
   if (!page) return;
   studio.page = page;
-  if (page !== 'image') { studio.views[page].focus = { asset: a }; return; }
+  ensureWall(page);
+  if (page !== 'image') {
+    studio.views[page].focus = { asset: a };
+    if (page === 'video') studio.focus = { page, asset: a };
+    else {
+      if (studio.focus && studio.focus.page !== 'image') studio.focus = null;
+      studio.flash = a.id;
+      clearTimeout(flashTimer);
+      flashTimer = setTimeout(() => { if (studio.flash === a.id) studio.flash = ''; }, 1600);
+    }
+    return;
+  }
+  studio.focus = { page: 'image', asset: a };
   const v = studio.views.image;
   v.turns = [{ jobId: null, prompt: a.prompt || '', state: 'done', assets: [a], error: '', srcUrl: '' }];
   v.thread = a.thread || a.id;
-  if (!a.thread) return;
+  if (!a.thread) { adoptActive(); return; }
   try {
     const r = await studioApi.assets({ kind: 'image', thread: a.thread });
-    const items = (r?.items || []).slice().sort((x, y) => ts(x.createdAt) - ts(y.createdAt));
+    const items = (r?.items || []).filter((x) => !goneAssets.has(x.id)).sort((x, y) => ts(x.createdAt) - ts(y.createdAt));
     if (items.length && v.thread === a.thread) v.turns = items.map((x) => ({ jobId: x.jobId || null, prompt: x.prompt || '', state: 'done', assets: [x], error: '', srcUrl: '' }));
   } catch {}
+  adoptActive();
 }
-export function newImageThread() { studio.views.image = { thread: null, turns: [] }; }
+/** 关掉焦点（返回 / Esc / 点空白 / 素材行「接着改」的 ×）：图像另起一张，下次从墙上发就是新的一条链 */
+export function closeFocus() {
+  const f = studio.focus;
+  studio.focus = null;
+  if (!f) return;
+  if (f.page === 'image') {
+    newImageThread();
+    // 血缘是跟着焦点来的（继续改这张图）：素材里没有来自它的，就不再记
+    const d = studio.drafts.image;
+    if (d.parent && !d.inputs.some((x) => x.fromAsset === d.parent.id)) d.parent = null;
+  } else if (studio.views[f.page]) studio.views[f.page].focus = null;
+}
+/** 另起一条续改链（图像焦点一并关掉：焦点看的就是这条链） */
+export function newImageThread() {
+  studio.views.image = { thread: null, turns: [] };
+  if (studio.focus?.page === 'image') studio.focus = null;
+}
 
 /** 复用参数：把一件作品的模型和参数放回它那一页的输入框（正文也放回去）。模型不在目录里了就只放参数和正文 */
 export function reuseParams(a) {
@@ -522,15 +652,38 @@ export function reuseParams(a) {
   if (!page) return false;
   studio.page = page;
   const d = studio.drafts[page];
-  const all = modelsOf(page);
-  const bare = (s) => String(s || '').replace(/^[\w.-]+\//, '');
-  const m = all.find((x) => x.key === (a.provider ? a.provider + '/' + a.model : '')) || all.find((x) => x.id === a.model) || all.find((x) => bare(x.id) === bare(a.model));
+  const m = matchModel(modelsOf(page), a);
   if (m) d.model = m.key;
   d.params = { ...(a.params || {}) };
   if (typeof a.negative === 'string' && a.negative) d.negative = a.negative;
   saveDrafts();
   if (a.prompt) studio.pendingText = { page, text: a.prompt };
   return true;
+}
+
+/**
+ * 重画：用这件作品的模型 / 参数 / 提示词（含负面）原样再跑一次，草稿不动。回 { ok, job?, error? }。
+ * 模型不在目录里了：退回 reuseParams（参数和正文放回输入框让人自己挑模型），回 { ok: false, reused: true, error }。
+ * 原任务还在本机任务表里时连素材一起带上（作品本身只记了 parents，记不住角色）；不接续改链：重画是另起一张。
+ */
+export async function rerun(a) {
+  const page = pageOf(a?.kind);
+  if (!page) return { ok: false, error: t('生成失败') };
+  const m = matchModel(modelsOf(page), a);
+  if (!m) { reuseParams(a); return { ok: false, reused: true, error: t('原来的模型不在了，参数已放回输入框') }; }
+  const src = a.jobId ? studio.jobs.find((x) => x.id === a.jobId) : null;
+  const body = { kind: catKind(page), key: m.key, prompt: String(a.prompt || ''), params: { ...(src?.params || a.params || {}) }, inputs: Array.isArray(src?.inputs) ? src.inputs : [] };
+  const neg = src?.negative || a.negative;
+  if (neg) body.negative = neg;
+  const parent = src?.parent || a.parents?.[0];
+  if (parent && !goneAssets.has(parent)) body.parent = parent;
+  try {
+    const r = await studioApi.createJob(body);
+    const job = upsertJob({ ...r.job, __mine: true, kind: r.job?.kind || body.kind, prompt: r.job?.prompt ?? body.prompt, key: r.job?.key || body.key, createdAt: r.job?.createdAt || Date.now() });
+    return { ok: true, job };
+  } catch (e) {
+    return { ok: false, error: e.status === 401 ? t('需要登录') : tr(e.message || '') || t('生成失败') };
+  }
 }
 
 // —— 接着做（§5.1 表）——
@@ -635,6 +788,7 @@ export function startStudio() {
   started = true;
   loadCatalog();
   reconcile();
+  loadWall(studio.page, true).finally(warmWalls);
   loadAssets(true);
   loadSettings();
   const onEv = (ev) => {
@@ -643,6 +797,7 @@ export function startStudio() {
     else if (ev.type === 'studio.providers' || ev.type === 'studio.catalog') loadCatalog();
     else if (ev.type === 'studio.settings') { loadSettings(); loadCatalog(); }
     else if (ev.type === 'studio.asset.deleted' && ev.id) dropAsset(ev.id);
+    else if (ev.type === 'studio.asset.updated' && ev.id) patchAsset(ev.id, ev.patch);
     else if (ev.type === 'hello') reconcile();   // 总线重连
   };
   busOn(onEv);

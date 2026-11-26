@@ -3,7 +3,6 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { bridgeModuleChunks } from './scripts/module-chunks.mjs';
-import { chatgptPage } from './scripts/chatgpt-page.mjs';
 import { pdfjsAssets } from './scripts/pdfjs-assets.mjs';
 
 // The Bridge — mobile web frontend.
@@ -30,8 +29,6 @@ const HARNESS_SRC = fileURLToPath(new URL('../harness/web/src', import.meta.url)
 const APK_OUT = process.env.BRIDGE_APK_OUT || '';
 
 // 原版视觉资源（字体、玻璃图层、运行动画、壁纸、玻璃渲染等模块）在 src/visuals/，组件直接 import，vite 收进产物、带内容哈希。
-// Codex 分页的界面（ChatGPT 页面）在 public/chatgpt/，随 public 拷进 <outDir>/chatgpt，构建结束给它引用的脚本 / 样式
-// 打内容哈希，缺了页面就构建失败（scripts/chatgpt-page.mjs）。
 
 // 新旧构建的 hash 资产并存：生产 8787 上「构建即部署」，emptyOutDir 一清空，
 // 已打开的旧页面下一次懒加载（预览器/编辑器 chunk）就 404——桌面壳/手机端表现为
@@ -62,7 +59,7 @@ function pruneOldAssets(days = 7) {
 export default defineConfig(({ command }) => ({
   // bridgeModuleChunks：产物按「核心 / 各功能扩展」归属写进 bridge-modules.json（模块化打包与验收用）
   // pdfjsAssets：PDF.js 的 cmaps / 标准字体 / wasm / icc 随包带上（离线 apk 中文 PDF 不丢字），见 scripts/pdfjs-assets.mjs
-  plugins: [svelte(), chatgptPage(), pruneOldAssets(), pdfjsAssets({ webRoot: fileURLToPath(new URL('.', import.meta.url)) }), bridgeModuleChunks({ webRoot: fileURLToPath(new URL('.', import.meta.url)) })],
+  plugins: [svelte(), pruneOldAssets(), pdfjsAssets({ webRoot: fileURLToPath(new URL('.', import.meta.url)) }), bridgeModuleChunks({ webRoot: fileURLToPath(new URL('.', import.meta.url)) })],
   base: command === 'build' ? '/app/' : '/',
   resolve: {
     alias: { '@hx': HARNESS_SRC },

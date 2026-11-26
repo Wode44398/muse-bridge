@@ -7,7 +7,7 @@ import { untrack } from 'svelte';
 import { openSession } from '../chat.svelte.js';
 import { titleFor } from '../library.svelte.js';
 import { pointer } from '../layout.svelte.js';
-import { drag, beginDrag, makeHold, dropToast } from '../dragdrop.svelte.js';
+import { drag, beginDrag, makeHold, dropToast, scrollEdges } from '../dragdrop.svelte.js';
 import { moveId } from '../claudeSplit.js';
 import { soloUrl } from '../solo.js';
 import { CHAT_REF, canQuote, quoteSession } from '../chatQuote.js';
@@ -29,6 +29,7 @@ export function createSideDnd(pc) {
   let dragOut = false;             // 指针出了窗口（贴着视口边缘、relatedTarget=null 的 dragleave）
   let dropDone = false;            // 本页某个落点接住了这次拖拽（dragend 据此绝不再判「拖出窗口」）
   let insAt = $state(-1);          // 项目排序的插入位（0..n，n = 放到最后）；-1 = 没在排
+  const EDGE = 48, EDGE_MAX = 14;  // 项目排序边缘自动滚动：感应带高度、贴边时每 16ms 的最大位移
 
   // 拖拽图：浏览器默认把整行截图（半透明、带着悬停底色），换成一颗干净的卡片。元素须真在文档里
   // 渲染过才能被 setDragImage 采样——挂到屏幕外、下一拍就摘掉。样式在 app.css（.bridge-side-ghost）。
@@ -71,6 +72,7 @@ export function createSideDnd(pc) {
   }
   function onProjDragStart(e, p) {
     if (!mouseDnd) { e.preventDefault(); return; }
+    projList = e.currentTarget?.closest?.('.d-projs') || null;
     startSide(e, { kind: 'project', id: p.id, path: p.path || '', title: tr(p.name) });
   }
   // 会话拖到侧栏【另一条会话】上松手＝切到那条并引用拖着的这段（手指那套见 sessionDrop）。
@@ -193,6 +195,53 @@ export function createSideDnd(pc) {
     try { e.dataTransfer.dropEffect = 'move'; } catch {}
     insAt = insIndexAt(e.currentTarget, e.clientY);
   }
+  // 边缘自动滚动（鼠标）：项目一多侧栏就要滚，拖着项目块贴近侧栏滚动容器上 / 下缘时让它自己滚，
+  // 越贴边越快（rAF 按帧时长折算，不是一下跳一大段）。HTML5 拖拽里指针不动就没有 dragover，
+  // 所以滚动后用最后一次的指针坐标自己重算插入位。手指那条全站已有（dragdrop.svelte.js 的 armAutoScroll）。
+  let projList = null;             // 正在排序的那份项目列表（常驻列与手机抽屉各渲染一份，按拖源找）
+  let ptr = null, edgeRaf = 0, edgeT = 0;
+  function scrollerOf(el) {
+    for (let n = el?.parentElement; n && n !== document.body; n = n.parentElement) {
+      let oy = '';
+      try { oy = getComputedStyle(n).overflowY; } catch { continue; }
+      if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight - n.clientHeight > 1) return n;
+    }
+    return null;
+  }
+  // 每 16ms 的位移：感应带 48px（矮容器收窄到高度的 1/4），按深入感应带的比例平方加速，贴边最快。
+  // 边缘按「列表真正露出来的那一段」算（scrollEdges 扣掉底部 sticky 的账户卡），指针压在吸附条上＝最快。
+  function edgeSpeed(sc, x, y) {
+    const { left, right, top, bottom } = scrollEdges(sc);
+    if (x < left || x > right) return 0;
+    const band = Math.min(EDGE, (bottom - top) / 4);
+    if (band <= 0) return 0;
+    let f = 0;
+    if (y < top + band) f = -Math.min(1, (top + band - y) / band);
+    else if (y > bottom - band) f = Math.min(1, (y - (bottom - band)) / band);
+    return Math.sign(f) * f * f * EDGE_MAX;
+  }
+  const overList = (x, y) => { try { return document.elementFromPoint(x, y)?.closest('.d-projs') === projList; } catch { return false; } };
+  function edgeTick(now) {
+    edgeRaf = 0;
+    if (dragRec?.kind !== 'project' || !projList?.isConnected || !ptr) return;
+    const sc = scrollerOf(projList);
+    const v = sc ? edgeSpeed(sc, ptr.x, ptr.y) : 0;
+    if (!v) { edgeT = 0; return; }     // 离开感应带就停；下一发 dragover 再接上
+    const dt = edgeT ? Math.min(48, Math.max(1, now - edgeT)) : 16;
+    edgeT = now;
+    const before = sc.scrollTop;
+    sc.scrollTop += v * dt / 16;
+    if (sc.scrollTop !== before) insAt = overList(ptr.x, ptr.y) ? insIndexAt(projList, ptr.y) : -1;
+    edgeRaf = requestAnimationFrame(edgeTick);
+  }
+  function stopEdge() { if (edgeRaf) cancelAnimationFrame(edgeRaf); edgeRaf = 0; edgeT = 0; ptr = null; }
+  $effect(() => {
+    if (sideDrag?.kind !== 'project') return;
+    // 整页听：指针在侧栏顶部入口行 / 底部账户卡上（列表外）也要能滚
+    const over = (e) => { ptr = { x: e.clientX, y: e.clientY }; if (!edgeRaf) edgeRaf = requestAnimationFrame(edgeTick); };
+    document.addEventListener('dragover', over);
+    return () => { document.removeEventListener('dragover', over); stopEdge(); projList = null; };
+  });
   function onProjDragLeave(e) { if (!e.currentTarget.contains(e.relatedTarget)) insAt = -1; }
   function onProjDrop(e) {
     const rec = dragRec;
@@ -261,7 +310,15 @@ export function createSideDnd(pc) {
     drop: (pl, pt) => reorderProject(pl.id, insIndexAt(listAt(pt.x, pt.y), pt.y)),
   };
   // 手指拖着时插入线跟着 drag.y 走（drag 是 $state，这里读 DOM 几何只为换算位置）
-  const touchIns = $derived(touchProj && drag.overKey === 'claude-proj-order' ? insIndexAt(listAt(drag.x, drag.y), drag.y) : -1);
+  // 全站自动滚动滚起来时手指可能没动（drag.y 不变），靠 scrollTick 让插入线跟着列表几何重算
+  let scrollTick = $state(0);
+  $effect(() => {
+    if (!touchProj) return;
+    const bump = () => { scrollTick++; };
+    document.addEventListener('scroll', bump, true);
+    return () => document.removeEventListener('scroll', bump, true);
+  });
+  const touchIns = $derived(touchProj && drag.overKey === 'claude-proj-order' && scrollTick >= 0 ? insIndexAt(listAt(drag.x, drag.y), drag.y) : -1);
   // 手指拎起项目后真挪了才收起会话行：长按现在也是开菜单的手势，原地按住时整列一收一放会闪一下
   const projDragging = $derived(sideDrag?.kind === 'project' || (!!touchProj && drag.moved));
   const insShown = $derived(touchProj ? touchIns : insAt);

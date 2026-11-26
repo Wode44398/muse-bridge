@@ -6,7 +6,8 @@
   // 侧列（wide）= 一叠圆角卡片：一颗开关管一张卡，开几张摆几张。够宽且两列都有卡时摆两列，否则全叠一列；
   //   卡片标题行是拖拽把手（排顺序、换列，宿主支持时拖出 app 成独立窗口），双击或点放大钮铺满；
   //   卡与卡之间的缝可以拖，调上下两张的高度比；左缘把手调整个工作区的宽度。
-  //   宿主不许多卡时（分屏格 / 独立窗口 / 折叠屏）一次只放一张，开关就是切换。
+  //   宿主不许多卡时（分屏格 / 独立窗口）一次只放一张，开关就是切换；折叠屏展开与桌面一样多卡（窄就叠成一列）。
+  //   触屏上把手、卡间缝的热区放宽并常亮提示（没有悬停），拖卡片排序同样跟手。
   // 手机两种形态（mobile）：'sheet' = 底部抽屉（把手下拉 / 点遮罩可关）+ 工具直切条；
   //   'page' = 整屏页（左上返回 + 自适应标签）。一次一张。
   //
@@ -29,6 +30,7 @@
   import { GAP, columns, slots, boxCss, emptyColCss, dividers, resizePair, sameCols, target as dropTarget, weightOf } from '../../lib/dock/cards.js';
   import { toolForKey } from '../../lib/dock/tools.js';
   import { tabMode } from '../../lib/dock/tabs.js';
+  import { chatMin, twoFits, dragBounds } from '../../lib/dock/sizing.js';
   import SharedPanel from './SharedPanel.svelte';
   import './workbench-skins.css';
 
@@ -39,7 +41,9 @@
   // wide   = 以侧列形态摆（false = 手机）；overlay = 侧列盖在正文上而不是挤开它（分屏的窄格）
   // multi  = 允许几张卡同时开；card = 卡片窗口（整扇窗只放这一张，没有开关 / 多卡 / 拖排）
   // sizing = 'self' 外壳自己管宽度（左缘把手 + 本机记忆）；'host' = 宿主管，外壳铺满容器并用 two 回报此刻是不是两列
-  // reserve = 这一行里必须留给别人的宽度（对话下限 + 侧栏）；null = 按比例钳
+  // aside = 这一行里除了对话和工作区，还有谁占着宽度（Codex 的线程列表）；侧栏在这一行外面的分页不用给
+  //   四个分页的宽度规则全在 lib/dock/sizing.js 一处算：给对话留多少、一列 / 两列的上下限、多宽才摆两列
+  // reserve = 直接指定这一行里必须留给别人的宽度（覆盖 aside + 对话下限的算法；一般不用）
   // filesFloat = 文件卡的标题行浮在工作空间页上：'touch' 只在触屏那套文件页时浮，'always' 恒浮
   // band / panel / icon / empty = 宿主片段：顶带、专属卡内容、工具图标、没有工作空间时的空态
   // popOut = { url(view), key(view) }：给了就能把卡拖出 app 成独立窗口；onCardBack = 卡片窗口的「放回工作台」
@@ -48,7 +52,7 @@
   let {
     host, tools = [], wide = false, overlay = false, multi = false, card = '',
     skin = 'claude', mobile = 'sheet', sizing = 'self', twoOk = null, two = $bindable(false),
-    reserve = null, widthKey = '', twoColHost = 1020, filesFloat = 'touch',
+    aside = 0, reserve = null, widthKey = '', filesFloat = 'touch',
     snap = false, theme = '', label = t('工作台'),
     band = null, panel = null, icon = null, empty = null,
     popOut = null, onCardBack = null, keysOn = true, backLayer = pushBackLayer, onShown = null,
@@ -87,7 +91,8 @@
   });
   // 拖出窗口外那一刻起，这张卡就不占格子了（别的卡合拢补位，像把标签页拖出标签栏）
   const inGrid = $derived(shown.filter((v) => !(sort && sort.out && sort.v === v)));
-  const canTwo = $derived(sizing === 'host' ? !!twoOk : wide && hostW >= twoColHost && !overlay);
+  const resv = $derived(reserve ?? aside + chatMin(mid));
+  const canTwo = $derived(sizing === 'host' ? !!twoOk : wide && !overlay && twoFits(hostW, aside));
   const split = $derived(columns(cols, inGrid, true));
   // 拖动中列数由预览定（拖空的那一列留作落点，不当场塌成一列，免得工作区宽度在指针底下跳）
   const twoNow = $derived(!wide || card ? false : sort ? sort.n === 2 : canTwo && split[0].length > 0 && split[1].length > 0);
@@ -146,13 +151,9 @@
     gripping = true;
     document.body.style.userSelect = 'none';
     const move = (ev) => {
-      // 上限按【宿主容器】宽度算：分屏时工作区只属于那一格，别拿整窗宽度去钳。
-      // medium（折叠屏展开）横向本就紧张：下限放到 300、给正文留 300。
+      // 上下限按【宿主容器】宽度算（分屏时工作区只属于那一格，别拿整窗宽度去钳），规则见 lib/dock/sizing.js
       const hW = hostBox()?.clientWidth || window.innerWidth;
-      const lo = isTwo ? 560 : mid && !overlay ? 300 : 360;
-      const hi = overlay ? Math.max(lo, hW - 48)
-        : reserve != null ? Math.max(lo, hW - reserve)
-        : mid ? Math.max(lo, hW - 300) : isTwo ? Math.max(lo, hW - 360) : hW * 0.78;
+      const { lo, hi } = dragBounds({ hostW: hW, two: isTwo, mid, overlay, reserve: resv });
       const w = Math.round(Math.min(Math.max(rightEdge - ev.clientX, lo), hi));
       if (isTwo) dockW2 = w; else dockW = w;
     };
@@ -264,8 +265,8 @@
   const bdOf = () => { try { return window.BridgeDesktop || (window.parent !== window && window.parent.BridgeDesktop) || null; } catch { return null; } };
   // 这一下能不能拖成窗口：桌面壳走 openChat IPC（'old' = 老壳没有，松手提示更新）；网页走弹窗；
   // 壳里没挂 preload 的窗口（拖出来的对话窗）window.open 会被转给系统浏览器、那边没有登录态——不给拖。
-  function popMode() {
-    if (!popOut || card || snap || !wide) return '';
+  function popMode(v) {
+    if (!popOut || card || snap || !wide || (popOut.ok && !popOut.ok(v))) return '';
     const bd = bdOf();
     if (bd) return bd.window?.openChat ? 'shell' : 'old';
     return /\bElectron\//.test(navigator.userAgent) ? '' : 'web';
@@ -303,7 +304,7 @@
   }
   function headDown(e, v) {
     if (!wide || card || e.button !== 0 || e.target.closest?.('button') || !sortable(v)) return;
-    press = { v, x: e.clientX, y: e.clientY, pid: e.pointerId, head: e.currentTarget, pop: e.pointerType === 'mouse' ? popMode() : '', bandAt: 0, bandT: 0 };
+    press = { v, x: e.clientX, y: e.clientY, pid: e.pointerId, head: e.currentTarget, pop: e.pointerType === 'mouse' ? popMode(v) : '', bandAt: 0, bandT: 0 };
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
   }
   function beginSort() {
@@ -553,6 +554,15 @@
     const pad = 22, l = on.offsetLeft - box.offsetLeft, r = l + on.offsetWidth;
     if (r > box.scrollLeft + box.clientWidth - pad) box.scrollLeft = r - box.clientWidth + pad;
     else if (l < box.scrollLeft + 6) box.scrollLeft = Math.max(0, l - 10);
+    chipEdges();
+  }
+  // 两缘渐隐只开在真有内容藏着的那一侧：滚到头的一边不该被糊掉
+  let chipFade = $state({ l: false, r: false });
+  function chipEdges() {
+    const box = chipsEl;
+    if (!box) return;
+    const l = box.scrollLeft > 2, r = box.scrollLeft + box.clientWidth < box.scrollWidth - 2;
+    if (l !== chipFade.l || r !== chipFade.r) chipFade = { l, r };
   }
   $effect(() => { mView; untrack(chipIntoView); });
   $effect(() => {
@@ -632,7 +642,7 @@
 {#if wide}
 <aside class="wb wb-wide skin-{skin}" class:mid class:overlay class:gripping class:two={twoNow} class:full={!!maxed} class:sorting={!!sort} class:resizing={!!resizing}
   class:fill={sizing !== 'self'} class:hostband={!!band} bind:this={dockEl}
-  style:width={curW ? `${curW}px` : null} style:--wb-reserve={reserve != null ? `${reserve}px` : null} aria-label={label}>
+  style:width={curW ? `${curW}px` : null} style:--wb-reserve={`${resv}px`} aria-label={label}>
   {#if sizing === 'self' && !maxed}<div class="wb-grip" role="separator" aria-label={t('拖拽调整宽度')} onpointerdown={gripDown} ondblclick={gripReset}></div>{/if}
   {#if band}
     <!-- 宿主自己的顶带（Claude 的工具开关组：工作区收着时它挂在这一格右上角，展开后坐进这条带） -->
@@ -713,7 +723,7 @@
       <span class="wb-gripbar"></span>
       <!-- 收起钮钉在右上角、不随 chip 横滑：窄屏放不下时哪个工具的收起都在同一个固定位置 -->
       <div class="wb-chiprow">
-        <div class="wb-chips" bind:this={chipsEl}>
+        <div class="wb-chips" class:fl={chipFade.l} class:fr={chipFade.r} bind:this={chipsEl} onscroll={chipEdges}>
           {#each tools as x (x.key)}
             {@const on = mView === x.key}
             <button class="wb-chip" class:on onclick={() => host.open(x.key)}>
@@ -749,7 +759,7 @@
     width: clamp(400px, 44%, 760px); min-width: 360px; max-width: var(--wb-max, 78%);
     padding: var(--sat, 0px) 8px 8px 6px;
     --wb-sat: var(--sat, 0px); --wb-wco-r: min(var(--pane-wco-r, var(--wco-right, 0px)), 240px);
-    --wb-max: calc(100% - var(--wb-reserve, 22%));
+    --wb-max: calc(100% - var(--wb-reserve, 360px));
   }
   .wb-wide > * { --sat: 0px; --wco-right: 0px; }
   /* 宿主自带顶带（绝对定位坐在这一格右上角）：根部给它留出带高。
@@ -758,11 +768,11 @@
   .wb-wide.hostband { padding-top: calc(var(--sat, 0px) + 54px); }
   @media (pointer: coarse) { .wb-wide.hostband { padding-top: calc(var(--sat, 0px) + 58px); } }
   :global(html[data-wco="1"]) .wb-wide.hostband, :global(html[data-wco-band="1"]) .wb-wide.hostband { padding-top: var(--wco-h, 40px); }
-  /* 两列：默认更宽（两列各自够用），给对话留 ≥360 */
-  .wb-wide.two { width: clamp(640px, 62%, 1180px); min-width: 560px; --wb-max: calc(100% - var(--wb-reserve, 360px)); }
-  /* medium（折叠屏展开 / 竖屏平板）：默认占一半多一点，给正文留住 300px 下限。
-     min-width 一并降到 300，否则 max-width 钳不动、面板会顶破视口。 */
-  .wb-wide.mid { width: clamp(320px, 52%, 560px); min-width: 300px; --wb-max: calc(100% - var(--wb-reserve, 300px)); }
+  /* 给对话留的宽度（--wb-reserve）由脚本按 lib/dock/sizing.js 统一给，四个分页同一条规则。
+     两列：默认更宽（两列各自够用） */
+  .wb-wide.two { width: clamp(640px, 62%, 1180px); min-width: 560px; }
+  /* medium（折叠屏展开 / 竖屏平板）：默认占一半多一点；min-width 降到 300，否则 max-width 钳不动、面板会顶破视口 */
+  .wb-wide.mid:not(.two) { width: clamp(320px, 52%, 560px); min-width: 300px; }
   /* 宽度归宿主管：铺满它给的那一栏 */
   .wb-wide.fill { box-sizing: border-box; width: 100%; height: 100%; min-width: 0; max-width: none; }
   /* 盖在正文上（分屏的窄格）：贴这一格的右缘整高浮起，正文不让位；留 48px 给正文露个边 */
@@ -776,13 +786,21 @@
   .wb.gripping :global(iframe), .wb.sorting :global(iframe), .wb.resizing :global(iframe) { pointer-events: none; }
   .wb.sorting, .wb.resizing { user-select: none; }
   .wb.resizing { cursor: row-resize; }
-  /* 左缘把手：7px 命中区整条落在工作区这一侧（左 6px 内边距 + 卡片 1px 边框），一点不伸进正文列——
-     正文列的滚动条槽就贴在这条接缝左边，骑缝会盖住滚动条、点滑块变成拖宽度。
+  /* 左缘把手：12px 骑缝（伸进正文列 5px + 工作区 6px 内边距 + 卡片 1px 边框）。伸进正文列那段会盖住
+     正文滚动条的槽——鼠标正落在拇指上时 lib/scrollbars.js 让把手临时不吃指针（拇指优先），别处照常能拖。
      no-drag：桌面壳下顶上那条标题栏带是窗口拖拽区，把手不打洞的话顶端拖不动宽度。 */
-  .wb-grip { position: absolute; left: 0; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 5; touch-action: none; -webkit-app-region: no-drag; }
-  .wb-grip::after { content: ''; position: absolute; left: 2px; top: 0; bottom: 0; width: 2px; background: transparent; transition: background-color .15s ease; }
+  .wb-grip { position: absolute; left: -5px; top: 0; bottom: 0; width: 12px; cursor: col-resize; z-index: 5; touch-action: none; -webkit-app-region: no-drag; }
+  .wb-grip::after { content: ''; position: absolute; left: 7px; top: 0; bottom: 0; width: 2px; background: transparent; transition: background-color .15s ease; }
   @media (hover: hover) { .wb-grip:hover::after { background: color-mix(in srgb, var(--muted) 45%, transparent); } }
   .wb.gripping .wb-grip::after { background: var(--wb-accent, var(--coral)); }
+  /* 触屏（折叠屏展开 / 平板）：12px 手指按不中、又没有悬停可提示——热区放宽到 24px（照样骑缝），
+     缝的正中常亮一枚竖把手（同 iPad 分屏的那根），按住时变实 */
+  @media (pointer: coarse) {
+    .wb-grip { left: -11px; width: 24px; }
+    .wb-grip::after { left: 50%; top: 50%; bottom: auto; width: 4px; height: 40px; margin: -20px 0 0 -2px; border-radius: 2px;
+      background: color-mix(in srgb, var(--muted) 38%, transparent); transition: background-color .15s ease, height .2s ease, margin .2s ease; }
+    .wb.gripping .wb-grip::after { height: 56px; margin-top: -28px; }
+  }
 
   /* 默认顶带：与对话列顶栏同高；桌面壳无边框窗口下右侧让出系统窗控 */
   .wb-band { flex: none; box-sizing: border-box; height: var(--wb-band-h, 44px); display: flex; align-items: center; gap: 6px; padding: 0 2px; }
@@ -810,7 +828,7 @@
   }
   .wb-card.hid { display: none; }
   @keyframes wbCardIn { from { opacity: 0; transform: translateY(6px); } }
-  .wb-card-head { flex: none; display: flex; align-items: center; gap: 2px; height: 38px; padding: 0 5px 0 13px; touch-action: none; user-select: none; -webkit-app-region: no-drag; }
+  .wb-card-head { flex: none; display: flex; align-items: center; gap: 2px; height: var(--wb-head-h, 38px); padding: 0 5px 0 13px; touch-action: none; user-select: none; -webkit-app-region: no-drag; }
   .wb-card-head.grab { cursor: grab; }
   .wb-card-ic { display: var(--wb-head-ic, none); align-items: center; justify-content: center; flex: none; width: 16px; height: 16px; margin-right: 5px; font-size: 16px; line-height: 1; color: var(--muted); }
   .wb-card-ic :global(svg) { width: 16px; height: 16px; }
@@ -826,7 +844,7 @@
   /* 浮动标题行（见 filesFlt）：叠在内嵌页之上、不占流；内嵌页拿它当「状态栏」——--sat 设成标题行高，
      工作空间页的顶栏钮 / 滚动边缘 / 菜单锚点 / 工具栏、预览头都按 --sat 让位，滚动内容从标题行底下穿过 */
   .wb-card.flt > .wb-card-head { position: absolute; top: 0; left: 0; right: 0; z-index: 3; }
-  .wb-card.flt :global(.wb-embed) { --sat: 38px; }
+  .wb-card.flt :global(.wb-embed) { --sat: var(--wb-head-h, 38px); }
   /* 被点名时描一圈（脚本只动它的透明度） */
   .wb-ring { position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1.5px var(--wb-accent, var(--coral)); opacity: 0; pointer-events: none; }
   /* 拖动排序：拿起的那张浮在最上、投影加深，跟着指针走（inline transform 每帧改，不加过渡）；
@@ -848,6 +866,13 @@
     background: color-mix(in srgb, var(--muted) 55%, transparent); opacity: 0; transition: opacity .12s ease; }
   @media (hover: hover) { .wb-seam:hover::after { opacity: 1; } }
   .wb-seam.on::after { opacity: 1; background: var(--muted); }
+  /* 触屏：缝的热区上下各外扩 8px（手指按不中 8px 的缝），短横线常亮——没有悬停，看不见就不知道能拖 */
+  @media (pointer: coarse) {
+    .wb-seam::before { content: ''; position: absolute; left: 0; right: 0; top: -8px; bottom: -8px; }
+    .wb-seam::after { opacity: .7; }
+    .wb-cbtn { width: 32px; height: 32px; border-radius: 8px; }
+    .wb { --wb-head-h: 42px; }
+  }
 
   /* —— 卡片窗口（拖出 app 的那一张）：整扇窗就是卡片底色，顶上一条细标题行 —— */
   .wb-cardwin { flex: 1; min-height: 0; background: var(--wb-card); --bg: var(--wb-card); }
@@ -884,16 +909,30 @@
   .wb-gripbar { display: block; width: 38px; height: 4.5px; border-radius: 3px; background: var(--divider); margin: 8px auto 2px; }
   .wb-sheet.pv .wb-gripbar { margin: 6px auto 5px; }
   .wb-chiprow { display: flex; align-items: center; padding: 6px 8px 8px 0; }
-  /* 右缘渐隐：被截住的 chip 一看就知道还能横滑 */
-  .wb-chips { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; padding: 0 14px 0 10px; overflow-x: auto; scrollbar-width: none;
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent); }
+  /* 横滑容器的 overflow-x:auto 会连带把纵向也裁掉：上下各留 8px 给选中钮的描边与投影，
+     再用等量负外边距抵掉，行高不变。只在真有内容藏着的那一侧渐隐，一看就知道还能横滑。 */
+  .wb-chips { --fl: 0px; --fr: 0px; flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px;
+    padding: 8px 14px 8px 10px; margin: -8px 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
+    touch-action: pan-x;  /* 竖向手势留给抽屉下拉（见 dockTouch.js 方向锁），浏览器只认领横滑 */
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--fl), #000 calc(100% - var(--fr)), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 var(--fl), #000 calc(100% - var(--fr)), transparent); }
+  .wb-chips.fl { --fl: 24px; }
+  .wb-chips.fr { --fr: 28px; }
   .wb-chips::-webkit-scrollbar { display: none; }
-  .wb-chip { flex: none; display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 13px; border-radius: 11px;
-    color: var(--muted); font-size: 13px; transition: background-color .14s ease, color .14s ease; }
-  .wb-chip:active { transform: scale(.97); }
-  .wb-chip.on { background: var(--card); color: var(--text); box-shadow: var(--card-shadow); }
+  .wb-chip { position: relative; flex: none; display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 13px 0 11px; border-radius: 12px;
+    color: var(--muted); font-size: 13px; white-space: nowrap;
+    transition: background-color .16s ease, color .16s ease, box-shadow .2s ease, transform .16s cubic-bezier(.3, .7, .4, 1); }
+  .wb-chip:active { transform: scale(.96); }
+  .wb-chip:not(.on):active { background: var(--hover); }
+  /* 选中：浮起的一枚——发丝描边定边缘，近处一层实影贴地、远处一层软影托起；
+     不借全站 --card-shadow（16px 的糊影塞不进这条里，裁出来就是一块灰方框） */
+  .wb-chip.on { background: var(--wb-chip-on, var(--card)); color: var(--text); font-weight: 540;
+    box-shadow: 0 0 0 .5px rgba(0, 0, 0, .1), 0 1px 1.5px rgba(0, 0, 0, .06), 0 3px 8px -2px rgba(0, 0, 0, .1); }
+  :global(html:not([data-theme="light"])) .wb-chip.on {
+    box-shadow: 0 0 0 .5px rgba(255, 255, 255, .1), inset 0 .5px 0 rgba(255, 255, 255, .06), 0 1px 2px rgba(0, 0, 0, .3), 0 3px 8px -2px rgba(0, 0, 0, .35); }
   .wb-chip-ic { width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; flex: none; font-size: 16px; line-height: 1; }
   .wb-chip-ic :global(svg) { width: 100%; height: 100%; }
+  .wb-chip:not(.on) .wb-chip-ic { opacity: .85; }
   .wb-chipfold { margin-left: 2px; width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center; color: var(--muted); flex: none; }
   .wb-chipfold svg { width: 17px; height: 17px; }
   .wb-chipfold:active { background: var(--hover); }

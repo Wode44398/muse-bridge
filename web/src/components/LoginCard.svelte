@@ -30,6 +30,7 @@
   import { activeProfile, listProfiles, canSwitchServers } from '../lib/serverProfiles.js';
   import { openSettings as openSettingsAt } from '../lib/settingsNav.svelte.js';
   import { t, tc, tr } from '../lib/i18n.js';
+  import { warmSettings } from '../lib/settings/warm.js';
   import glassL from '../visuals/ios27/alert-light.png';
   import glassD from '../visuals/ios27/alert-dark.png';
 
@@ -178,6 +179,8 @@
       api.status().then((s) => { status.limits = s.limits || null; status.context = s.context || null; status.updatedAt = Date.now(); }).catch(() => {});
     }
   });
+  // 卡上「设置」是最常走的下一步：卡一展开就把设置根页要的数据拉上（lib/settings/warm），点进去时多半已经回来了
+  $effect(() => { if (open && me.kind !== 'none') untrack(warmSettings); });
   $effect(() => { if (open && me.kind === 'user') fetchMyUsage().then((r) => { mine = r; }).catch(() => {}); });
   const lim = $derived(status.limits || {});
   const pctOf = (b) => (b && typeof b.pct === 'number' ? Math.max(0, Math.min(100, Math.round(b.pct))) : null);

@@ -140,7 +140,7 @@ export function registerAgyRoutes(router, { identify }) {
     const cliVersion = await getAgyCliVersion(client);
     const localAccount = readAgyAccountInfo(host ? client : getAcpClient());
     const activeAcct = getActiveAccount();
-    const hostAccount = hasNonLocalAccounts() && activeAcct?.source === 'oauth'
+    const hostAccount = hasNonLocalAccounts() && activeAcct && activeAcct.source !== 'local'
       ? {
         ...localAccount,
         authed: true,
@@ -198,7 +198,7 @@ export function registerAgyRoutes(router, { identify }) {
       ? { id: acct.id, label: acct.label, email: acct.email, plan: effectivePlan(acct), source: acct.source }
       : null;
 
-    if (acct && acct.refreshToken) {
+    if (acct && (acct.refreshToken || acct.source === 'slot')) {
       const q = await fetchAccountQuota(acct.id, { force });
       sendJson(res, 200, {
         buckets: q?.buckets || [],
@@ -422,6 +422,7 @@ export function registerAgyRoutes(router, { identify }) {
     try {
       const detail = await loadAgySessionDetail(ctx, id, {
         cwd: url.searchParams.get('cwd') || '',
+        fp: url.searchParams.get('fp') || '',
       });
       sendJson(res, 200, detail);
     } catch (err) {

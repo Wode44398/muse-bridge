@@ -64,7 +64,8 @@ export function agentMark(id, dark) {
     case 'gemini': return BASE + 'assets/icons/gemini.svg';
     // Media Studio（2026-11-04 起接替 Gemini 的位置）：画框里四个种类色节点由一条细线串起（标由 studio-frontend 画）
     case 'studio': return `${BASE}assets/icons/studio-${dark ? 'light' : 'dark'}.svg`;
-    case 'codex': return `${BASE}assets/icons/chatgpt-${dark ? 'light' : 'dark'}.svg`;
+    // Codex：桌面版首页那枚单色线稿云朵（和主页入口、分页首页同一枚）
+    case 'codex': return `${BASE}assets/icons/codex-${dark ? 'light' : 'dark'}.svg`;
     case 'agy': return BASE + 'assets/icons/antigravity.svg';
     case 'dimensio': return `${BASE}assets/icons/dimensio-${dark ? 'light' : 'dark'}.svg`;
     default: return '';

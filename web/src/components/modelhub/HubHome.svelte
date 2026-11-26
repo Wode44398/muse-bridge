@@ -12,10 +12,12 @@
   import BrandLogo from './BrandLogo.svelte';
   import AgentStack from './AgentStack.svelte';
   import { KIND_ICON } from './kindIcons.js';
+  import { isCg, accountsText, accountTags } from './chatgptKit.js';
   import DSwitch from '../../desktop/kit/DSwitch.svelte';
   import Toggle from '../ios27/Toggle.svelte';
   import Sym from '../ios27/Sym.svelte';
   import { hub, loadHub, hubPost, openHubSheet, hubLegacy, kindTally, adoptReach, KINDS, coolingCount, setHubPrefs } from '../../lib/modelHub.svelte.js';
+  import { loadBalance, balanceBrief } from '../../lib/modelHubBalance.svelte.js';
   import { cp, loadProviders, updateProvider, canUseCustomApi } from '../../lib/claudeProviders.svelte.js';
   import { ds, loadDimensio, dimReady, keyVendors, canSetKey, openInDimensio, customSummary } from '../../lib/dimensioSettings.svelte.js';
   import { adoptDimensioService } from '../../lib/modelHubAdopt.js';
@@ -60,6 +62,10 @@
     : cp.ok ? 'member'
     : settled ? 'none' : 'wait');
   const loadErr = $derived(hub.err || cp.err);
+
+  // 余额：能查的、启用着的服务各查一次（服务端 60 秒内走缓存，重开总览不会一直打上游）
+  const balIds = $derived(hub.ok ? hub.services.filter((s) => s.balance && s.enabled).map((s) => s.id).join(',') : '');
+  $effect(() => { if (balIds) untrack(() => { for (const id of balIds.split(',')) loadBalance(id); }); });
 
   $effect(() => {
     if (mode !== 'admin' && mode !== 'member') return;
@@ -117,19 +123,25 @@
       const lines = s.lines || [];
       const models = s.models || [];
       const name = s.name || t('未命名服务');
+      // ChatGPT 订阅：线路是登录的账号（没有 Key），副行写账号邮箱而不是主机名，要重新登录的账号单独提醒
+      const cg = isCg(s);
       const tags = [];
       if (!s.enabled) tags.push(tag(t('已停用')));
       else {
-        if (lines.length && !lines.some((l) => l.enabled)) tags.push(tag(t('线路已全部停用'), 'warn'));
+        if (lines.length && !lines.some((l) => l.enabled)) tags.push(tag(cg ? t('账号已全部停用') : t('线路已全部停用'), 'warn'));
+        else if (cg) tags.push(...accountTags(s));
         else if (s.authStyle !== 'none' && !lines.some((l) => l.enabled && l.hasKey)) tags.push(tag(t('缺 Key'), 'warn'));
         const cool = coolingCount(s, now);
-        if (cool) tags.push(tag(t('{n} 条线路冷却中', { n: cool }), 'warn'));
+        if (cool) tags.push(tag(cg ? t('{n} 个账号冷却中', { n: cool }) : t('{n} 条线路冷却中', { n: cool }), 'warn'));
         if (!models.length) tags.push(tag(t('未添加模型')));
         else if (!(s.agents || []).length) tags.push(tag(t('没给任何 agent')));
       }
+      const bb = s.balance && s.enabled ? balanceBrief(s.id) : null;
+      if (bb?.low) tags.push(tag(t('余额用完'), 'warn'));
       return {
         key: 'svc:' + s.id, from: 'service', id: s.id, name,
-        logo: s.brand?.logo || logoByUrl(s.baseUrl), host: s.host || hostOf(s.baseUrl),
+        logo: s.brand?.logo || (cg ? 'openai' : logoByUrl(s.baseUrl)), host: cg ? accountsText(s) : s.host || hostOf(s.baseUrl),
+        meta: bb ? [bb.text] : [],
         // 老服务端的服务不带 counts，模型也不带 kind：kindTally 把它们按文本数
         counts: s.counts || kindTally(models), agents: s.agents || [], tags,
         toggle: { on: !!s.enabled, label: t('启用 {name}', { name }), fn: (v) => hubPost('update', { id: s.id, patch: { enabled: v } }) },
@@ -483,9 +495,12 @@
   // —— 动效 ——
   const STD = bezier(0.2, 0, 0, 1);
   const DECEL = bezier(0.05, 0.7, 0.1, 1);
-  // 首屏：自下而上 6px 淡入，按行错峰（stagger 把总时长封在 220ms 内）
+  // 数据晚到时的首屏：自下而上 6px 淡入，按行错峰（stagger 把总时长封在 220ms 内）。
+  // 跟着页面一起挂出来的行（总览早就在手里：上次的快照、或这次会话里拉过）不再单独进场——
+  // 页面推进来的同时每行再淡一遍，看着就是「每次进来列表都闪一下」
+  const born = performance.now();
   function enter(node, i) {
-    if (armed || reduced()) return;
+    if (armed || reduced() || performance.now() - born < 120) return;
     animate(node, [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }],
       { d: DUR.base, e: EASE.decel, delay: stagger(i, untrack(() => totalN), 220, 30), fill: 'backwards' });
   }

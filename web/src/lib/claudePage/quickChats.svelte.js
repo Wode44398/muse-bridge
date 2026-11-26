@@ -9,6 +9,7 @@ import { t, tr } from '../i18n.js';
 import { pushBackLayer } from '../nav.js';
 import { cs as claudeCs } from '../claudeSettings.svelte.js';
 import { daysLeft, expiryWarn, quickPolicy, landingFor } from '../quickChat.js';
+import { recall, remember } from '../lastKnown.js';
 
 /** @param {any} pc 页面上下文：各区段经它互相取用（getter / setter，见 ClaudePage.svelte） */
 export function createQuickChats(pc) {
@@ -21,7 +22,9 @@ export function createQuickChats(pc) {
   const quickProj = $derived(pc.projects.find((p) => p.quick && p.current) || pc.projects.find((p) => p.quick) || null);
   const realProjects = $derived(applyProjectOrder(pc.projects.filter((p) => !p.quick), pc.projOrder));
   let quickExp = $state({});                    // 桶 id → 到期时刻（ms）
-  let quickPol = $state(quickPolicy(null));     // { ttlDays, warnDays, trashDays }
+  // 回收规矩从上次服务端给的那份起步（lib/lastKnown）：落地页输入框上方那句「只留最近 20 条」第一帧就是对的，
+  // 不先按默认写「30 天没动会自动清理」、会话列表一回来再改写
+  let quickPol = $state(quickPolicy(recall('claude.quickPolicy') || null));     // { ttlDays, warnDays, trashDays }
   let quickBin = $state(0);                     // 回收站里有几只
   // 首页只带最近 20 条临时对话（服务端 QUICK_HEAD）：总数、翻页截断点；更早的「显示更多」时向服务端要
   let quickCount = $state(0);
@@ -38,7 +41,7 @@ export function createQuickChats(pc) {
       const orph = Array.isArray(d.quickOrphans) ? quickOrph.filter((o) => Number.isFinite(o.expiresAt)).map((o) => [o.id, o.expiresAt]) : [];
       quickExp = { ...quickExp, ...d.quickExpires, ...Object.fromEntries(orph) };
     }
-    if (d.quickPolicy) quickPol = quickPolicy(d.quickPolicy);
+    if (d.quickPolicy) { quickPol = quickPolicy(d.quickPolicy); remember('claude.quickPolicy', d.quickPolicy); }
     if (Number.isFinite(d.quickRecycled)) quickBin = d.quickRecycled;
     if (Number.isFinite(d.quickCount)) { quickCount = d.quickCount; quickCut = d.quickMore ? Number(d.quickCursor) || 0 : 0; }
   }

@@ -1037,6 +1037,11 @@
   .tm-screen { flex: 1; min-height: 0; position: relative; border-radius: 10px; overflow: hidden; background: var(--bg); contain: strict; }
   /* 内边距用 inset 给：全站 border-box 下 FitAddon 量的是父元素的 border-box 高度，padding 会让最后一行被裁掉半截 */
   .tm-body { position: absolute; inset: 6px 2px 2px 8px; }
+  /* 鼠标设备：终端屏向右伸到卡片内沿、视口贴右边，滚动条就贴着卡片边，不再隔着 .tm 的 6px 内边距 + 2px 内缩 */
+  @media (pointer: fine) {
+    .tm-screen { margin-right: -6px; border-radius: 10px 0 0 10px; }
+    .tm-body { right: 0; }
+  }
   .tm-body :global(.xterm) { height: 100%; }
   .tm-body :global(.xterm-viewport) { background: transparent !important; }
   .tm-touch { position: absolute; inset: 0; z-index: 2; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }

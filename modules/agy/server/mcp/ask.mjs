@@ -10,6 +10,7 @@
 import { randomBytes } from 'node:crypto';
 import { genEmit } from '@bridge/core/runtime/gen.mjs';
 import { noticeAgyPending, publishAgyRun } from '../presence.mjs';
+import { memberToolName } from './catalog.mjs';
 
 export const ASK_MAX_MS = 120_000;
 export const ALLOW = 'allow';
@@ -39,10 +40,12 @@ export function takeManualApproval(gen, tool, args = {}) {
     const id = String(ev.requestId || '');
     if (!id || used.has(id)) continue;
     const tc = ev.toolCall || {};
-    if (String(tc.name || '') !== 'mcp_bridge_' + tool) continue;
+    const a = tc.args && typeof tc.args === 'object' ? tc.args : (tc.rawInput && typeof tc.rawInput === 'object' ? tc.rawInput : {});
+    // 审批卡上可能是合并工具（mcp_bridge_pr + action:"set_monitor"），按 action 换回原工具名再比
+    const m = /^mcp_bridge_([a-z0-9_]+)$/.exec(String(tc.name || ''));
+    if (!m || memberToolName(m[1], a) !== tool) continue;
     const r = resolved.get(id);
     if (!r || r.auto || r.outcome !== 'selected' || /^(?:deny|reject)/i.test(String(r.optionId || ''))) continue;
-    const a = tc.args && typeof tc.args === 'object' ? tc.args : (tc.rawInput && typeof tc.rawInput === 'object' ? tc.rawInput : {});
     if (!sameArgs(args, a)) continue;
     used.add(id);
     return true;

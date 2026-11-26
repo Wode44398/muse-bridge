@@ -1,6 +1,7 @@
 // 模型中心的「测试线路」「拉模型列表」与「探测能力」：钉在一条线路上直接打上游（不过网关、不动线路状态）。
 import { lineFetch, scrubKey, netText, isBadHeader, BAD_HEADER_MSG } from './pool.mjs';
 import { vendorText, parseLimit, parseEffortList, looksNotChat, RED_PNG } from '../../model-knowledge/diagnose.mjs';
+import { handleChatgpt } from './chatgpt/upstream.mjs';
 
 // 上游报错 / 连不上的原因：一律先抹 Key 再截断（上游可能回显 Key；请求头不合法时 undici 的原文里就是整段 Key）
 const errText = async (r, key) => {
@@ -12,6 +13,7 @@ const netErr = (e, key) => (e?.name === 'TimeoutError' ? '超时' : isBadHeader(
 
 /** 拉这条线路上的模型列表 → [id]。 */
 export async function fetchLineModels(service, line, key) {
+  if (service.kind === 'chatgpt') throw Object.assign(new Error('ChatGPT 订阅服务的模型列表用「重新识别」拉'), { status: 400 });
   const rest = service.kind === 'anthropic' ? '/v1/models' : '/models';
   let r;
   try { r = await lineFetch(service, line, key, rest, { search: service.kind === 'gemini' ? '?pageSize=1000' : '' }); }
@@ -26,6 +28,7 @@ export async function fetchLineModels(service, line, key) {
 
 /** 用这条线路真打一次最小请求 → { ok, status, ms, error }。 */
 export async function testLine(service, line, key, model) {
+  if (service.kind === 'chatgpt') return testPlanLine(service, line, model);
   const t0 = Date.now();
   const say = { role: 'user', content: 'hi' };
   let rest, body;
@@ -37,6 +40,19 @@ export async function testLine(service, line, key, model) {
   catch (e) { return { ok: false, status: 0, ms: Date.now() - t0, error: netErr(e, key) }; }
   if (r.ok) { await r.body?.cancel?.().catch(() => {}); return { ok: true, status: r.status, ms: Date.now() - t0, error: '' }; }
   return { ok: false, status: r.status, ms: Date.now() - t0, error: await errText(r, key) };
+}
+
+// ChatGPT 订阅：钉在这一个账号上经它自己的上游处理器真发一句（令牌刷新、错误人话都和真请求同一条路）
+async function testPlanLine(service, line, model) {
+  const t0 = Date.now();
+  const one = { ...service, strategy: 'failover', lines: [{ ...line, enabled: true }] };
+  const body = Buffer.from(JSON.stringify({ model, stream: false, reasoning_effort: 'low', messages: [{ role: 'user', content: 'hi' }] }));
+  let r;
+  try { r = await handleChatgpt({ service: one, proto: 'openai', rest: '/chat/completions', method: 'POST', body }); }
+  catch (e) { return { ok: false, status: 0, ms: Date.now() - t0, error: String(e?.message || e).slice(0, 200) }; }
+  const status = r?.status || 0;
+  if (status === 200) return { ok: true, status, ms: Date.now() - t0, error: '' };
+  return { ok: false, status, ms: Date.now() - t0, error: String(r?.json?.error?.message || `HTTP ${status}`).slice(0, 300) };
 }
 
 // —— 探测一个文本模型的能力（2026-11-17）：型号表不认识的模型（上游 /models 列不出、手动添加的新型号）真打几次一两句话的请求 ——

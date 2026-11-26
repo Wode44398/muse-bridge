@@ -142,12 +142,14 @@ try {
     await sleep(3500);
     const media = await pg.eval(`(() => [...document.querySelectorAll('.studio-root img, .studio-root video, .studio-root audio')].filter((m) => { const r = m.getBoundingClientRect(); return r.width > 0 && r.height > 0 || m.tagName === 'AUDIO'; }).map((m) => {
       const src = m.currentSrc || m.src || ''; let host = ''; try { const u = new URL(src); host = u.protocol + '//' + u.host; } catch {}
+      // 没给地址的 <audio>（音频墙的播放器还没播过）不算
+      if (m.tagName === 'AUDIO' && !src) return null;
       const ok = m.tagName === 'IMG' ? m.complete && m.naturalWidth > 0 : m.readyState >= 1 && !m.error;
       // 视口外、还没轮到加载的懒加载图不算坏（作品流滚到下面才加载）
       const r = m.getBoundingClientRect();
       const lazyIdle = m.tagName === 'IMG' && m.loading === 'lazy' && !m.complete && (r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth || m.closest('[inert],[aria-hidden="true"]'));
-      return { tag: m.tagName.toLowerCase(), cls: (m.parentElement?.className || '').toString().split(' ')[0], host, ok, lazyIdle, state: m.dataset.media || '', err: m.error ? m.error.code : null };
-    }).filter((m) => !m.lazyIdle))()`);
+      return { tag: m.tagName.toLowerCase(), cls: ((m.closest('.sd-tile, .sw-tile, .sf-media, .sf-vt, .sw-arow, .cp-att') || m.parentElement)?.className || '').toString().split(' ')[0], host, ok, lazyIdle, state: m.dataset.media || '', err: m.error ? m.error.code : null };
+    }).filter((m) => m && !m.lazyIdle))()`);
     const r = await pg.send('Page.captureScreenshot', { format: 'jpeg', quality: 72 });
     writeFileSync(path.join(OUT, `${TAG}-${name}.jpg`), Buffer.from(r.data, 'base64'));
     // 还挂着没完成的媒体请求（发出超过 3 秒）：按类型计数——HTTP/1.1 每主机 6 条连接被占满时，后来的图就一直排队
@@ -156,13 +158,16 @@ try {
     result.pages[name] = { pending, total: media.length, ok: media.filter((m) => m.ok).length, broken: media.filter((m) => !m.ok).length, byHost: media.reduce((o, m) => { const k = m.host + (m.ok ? ' ok' : ' 坏'); o[k] = (o[k] || 0) + 1; return o; }, {}), media };
     process.stdout.write(`  ${TAG} ${name.padEnd(14)} 媒体 ${media.length}，好 ${result.pages[name].ok}，坏 ${result.pages[name].broken}  ${JSON.stringify(result.pages[name].byHost)}${pend.length ? '  挂着的请求 ' + JSON.stringify(pending) : ''}\n`);
   };
-  const tab = (i) => pg.eval(`(async () => { document.querySelectorAll('.studio-root .sd-cbar .seg button, .studio-root .sd-tabs-row .seg button')[${i}].click(); await new Promise((r) => setTimeout(r, 500)); return 1; })()`);
+  const tab = (i) => pg.eval(`(async () => { document.querySelectorAll('.studio-root .st-tabs:not(.st-measure) .st-tab')[${i}].click(); await new Promise((r) => setTimeout(r, 700)); return 1; })()`);
+  // v4：墙上点一格打开焦点（图像 / 视频）
+  const openTile = () => pg.eval(`(async () => { document.querySelector('.studio-root .sd-page.on .sw-tile')?.click(); for (let i = 0; i < 40 && !document.querySelector('.studio-root .sd-page.on .sf .sf-media'); i++) await new Promise((r) => setTimeout(r, 100)); await new Promise((r) => setTimeout(r, 1200)); return 1; })()`);
+  const closeFocus = async () => { for (const type of ['keyDown', 'keyUp']) await pg.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }); await sleep(900); };
   if (args.settings) {
     // —— 设置 › Media Studio 的体量：条目数、说明小字总字数、手机主页面高度（几屏）；服务编辑器各区说明字数 ——
     // 「说明小字」= 行下面的副文（.r-sub / .r-dsub / .ts）、分组脚注（.gfoot / .dgfoot）、导入卡里的说明（.iwhat / .why / .ivc p）、
     // 头图副标题（.hero-sub）、段落（p）；值（.r-d、行尾状态）不算。修前修后同一口径。
     const shot = async (n) => { const r = await pg.send('Page.captureScreenshot', { format: 'jpeg', quality: 72 }); writeFileSync(path.join(OUT, `${TAG}-${n}.jpg`), Buffer.from(r.data, 'base64')); };
-    await pg.eval(`(async () => { const bs = document.querySelectorAll('.studio-root .sd-top-r .sd-ib, .studio-root .sd-cbar-r .sd-ib'); bs[bs.length - 1].click(); for (let i = 0; i < 80; i++) { const s = document.querySelector('.pg.top .sst'); if (s && s.querySelectorAll('button').length > 3) return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()`, { timeout: 15000 });
+    await pg.eval(`(async () => { const bs = document.querySelectorAll('.studio-root .sd-cbar-r .sd-ib'); bs[bs.length - 1].click(); for (let i = 0; i < 80; i++) { const s = document.querySelector('.pg.top .sst'); if (s && s.querySelectorAll('button').length > 3) return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()`, { timeout: 15000 });
     await sleep(1500);
     const EXPL = '.r-sub, .r-dsub, .gfoot, .iwhat, .why, .hero-sub, .ivc p, .ts, p';
     const measure = (rootSel) => pg.eval(`(() => {
@@ -205,13 +210,13 @@ try {
     await edge.close(); srv.close(); fwd?.close();
     process.exit(0);
   }
-  await inspect('image');
-  // 打开最近一张图 → 画布
-  await pg.eval(`(async () => { document.querySelector('.studio-root .cv-thumb')?.click(); return 1; })()`);
-  await inspect('image-canvas');
-  await tab(1); await pg.eval(`(async () => { document.querySelector('.studio-root .cv-thumb')?.click(); return 1; })()`); await inspect('video');
-  // 点画布上的视频 → 全屏播放器：<video> 能不能读到元数据（播放器挂在 .studio-root 外面，单独查）
-  await pg.eval(`(async () => { document.querySelector('.studio-root .fc-media')?.click(); return 1; })()`);
+  // 作品墙（图像）→ 打开一张（焦点：大图 + 版本条）
+  await inspect('image-wall');
+  await openTile(); await inspect('image-focus'); await closeFocus();
+  // 视频墙 → 打开一件（焦点里就地播放的 <video>）→ 全屏走核心查看器（播放器挂在 .studio-root 外面，单独查）
+  await tab(1); await inspect('video-wall');
+  await openTile(); await inspect('video-focus');
+  await pg.eval(`(async () => { const bs = document.querySelectorAll('.studio-root .sd-page.on .sf-vc .sf-vb'); bs[bs.length - 1]?.click(); return 1; })()`);
   await sleep(4000);
   {
     const vids = await pg.eval(`(() => [...document.querySelectorAll('video')].filter((v) => !v.closest('.studio-root')).map((v) => { let host = ''; try { const u = new URL(v.currentSrc || v.src); host = u.protocol + '//' + u.host; } catch {} return { tag: 'video', host, ok: v.readyState >= 1 && !v.error, err: v.error ? v.error.code : null, state: v.dataset.media || '' }; }))()`);
@@ -222,11 +227,17 @@ try {
     for (const type of ['keyDown', 'keyUp']) await pg.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await sleep(800);
   }
-  await tab(2); await inspect('voice');
-  await tab(3); await inspect('music');
+  await closeFocus();
+  // 配音 / 音乐：全页一个 <audio>，点第一行的播放键才有地址；波形是 /api/studio/assets/<id>/peaks（走 API，不是媒体）
+  const playFirst = () => pg.eval(`(async () => { document.querySelector('.studio-root .sd-page.on .sw-aplay:not([disabled])')?.click(); await new Promise((r) => setTimeout(r, 2500)); return 1; })()`);
+  await tab(2); await playFirst(); await inspect('voice');
+  await tab(3); await playFirst(); await inspect('music');
   await tab(0);
-  await pg.eval(`(async () => { document.querySelector('.studio-root .sd-rail-btn')?.click(); return 1; })()`);
-  await inspect('drawer');
+  // 素材架：手机抽屉是左缘右滑拉出来的（真手势）
+  await pg.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 6, y: 420, id: 5 }] });
+  for (let i = 1; i <= 12; i++) { await pg.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 6 + i * 22, y: 421, id: 5 }] }); await sleep(16); }
+  await pg.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await inspect('shelf');
 } finally {
   await edge.close();
   srv.close();

@@ -336,8 +336,12 @@
   /* 改备注名：和删除同一套（悬停整行才显），悬停变正文色 */
   .ren { flex: none; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent;
     color: var(--st-muted); cursor: pointer; opacity: 0; transition: opacity var(--mo-micro) var(--ea-fade), background-color var(--mo-micro) var(--ea-fade), color var(--mo-micro) var(--ea-fade); }
-  .ren :global(svg) { width: 13px; height: 13px; }
+  .ren :global(svg) { width: 14px; height: 14px; }
   .row:hover .ren, .row.fo .ren { opacity: 1; }
+  /* 已添加的行常驻显示（调淡），不用先悬停才找得到 */
+  .row.ad .ren { opacity: .55; }
+  .row.ad:hover .ren, .row.ad.fo .ren { opacity: 1; }
+  .row.ad .ren.hide, .row.ad:hover .ren.hide { opacity: 0; pointer-events: none; }
   .ren.hide, .row:hover .ren.hide { opacity: 0; pointer-events: none; }
   @media (hover: hover) { .ren:hover { background: var(--st-hover); color: var(--text); } }
   @media (hover: none) { .ren { opacity: .7; } }

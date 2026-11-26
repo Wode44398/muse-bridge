@@ -6,12 +6,16 @@
   // Esc / 系统返回逐层后退：连接面板 → 勾选 → 关闭（新建了没保存、连接改了没存时先问一句）。
   // 几条纪律：识别与保存互斥（目录前后端要一致）；已有服务的「重新识别」一律先存连接改动（HsConn.redetect）；
   // 保存连接动了地址就自动重新识别、只换 Key 则提示；点亮的去向里加不进去的行保存时跳过、操作条写明。
+  // ChatGPT 订阅（kind 'chatgpt'）：第一步换成登录面板（HsChatgptLogin），登录成功后目录用 login.models，第一次保存调 chatgpt/create；
+  // 之后按已有服务走，连接面板换成账号列表（HsChatgptConn）。草稿不能手动加模型、没有高级设置、不出 Media Studio（只有文本模型）。
   // 这段脚本有单测：HubService.logic.test.js（把 <script> 抠出来跑），改 import / $props 的写法时同步那边。
   import { untrack, tick } from 'svelte';
   import { fly, fade } from 'svelte/transition';
   import { SvelteSet, MediaQuery } from 'svelte/reactivity';
   import BrandLogo from './BrandLogo.svelte';
   import HsConn from './HsConn.svelte';
+  import HsChatgptLogin from './HsChatgptLogin.svelte';
+  import HsChatgptConn from './HsChatgptConn.svelte';
   import HsKinds from './HsKinds.svelte';
   import HsTools from './HsTools.svelte';
   import HsList from './HsList.svelte';
@@ -20,6 +24,7 @@
   import HsServiceAdv from './HsServiceAdv.svelte';
   import HsMediaAdv from './HsMediaAdv.svelte';
   import { mediaCustom } from './mediaAdv.js';
+  import { isCg, accountsText } from './chatgptKit.js';
   import DpMenu from '../claude/dispatch/DpMenu.svelte';
   import { G, svg, AGENT_ORDER, ordAgents, claudeBlock, planAssign, pinFirst, normUrl, urlOk, hostOf, isLocal, keyTail, tailText, fmtCtx, fmtCacheMin, CACHE_STEPS } from './HsKit.js';
   import { hub, hubPost, hubAsk, hubGet, loadHub, KINDS, KIND_NAME, AGENT_NAME, PROTO_NAME, mediaConfigList } from '../../lib/modelHub.svelte.js';
@@ -86,6 +91,8 @@
   let searchEl = $state(null);
   let anchorEl = $state();
   let connBtn = $state();
+  let via = $state('');            // 新建：第一步走哪条路——'' 地址 + Key | 'chatgpt' 登录 ChatGPT
+  let cg = $state.raw(null);       // 新建 ChatGPT 订阅：登录成功的 LoginView（保存时拿它的 id 调 chatgpt/create）
   // 关掉后把焦点还给打开它的那个按钮（设置里的服务卡片 / 添加按钮）
   const returnTo = typeof document !== 'undefined' ? document.activeElement : null;
   let asking = false, deleting = false, exitTimer = 0, downOnScrim = false;
@@ -97,6 +104,9 @@
     if (fresh && fresh.base === hub.services) return fresh.svc;
     return hub.services.find((s) => s.id === sid) || (hub.ok ? null : fresh?.svc || null);
   });
+  // ChatGPT 订阅：已有的看服务种类，新建的看第一步选了哪条路
+  const cgSvc = $derived(sid ? isCg(svc) : via === 'chatgpt');
+  const cgDraft = $derived(!sid && !!cg);
   const prov = $derived(d.url.trim() ? providerOf(normUrl(d.url)) : null);
   const pk = $derived(prov?.key || '');
   const proto = $derived(svc ? svc.kind : d.proto);
@@ -399,19 +409,25 @@
   // 能手动添加模型 ID 的种类：文本总能加；媒体类要 Media Studio 接得了这个服务的这一类。
   // 这几栏就算识别出 0 个也能点进去（识别漏了视频之类，得有地方手动补）
   const manualKinds = $derived(KINDS.filter((k) => k === 'text' || (!!media && studioOn && (media.kinds || []).includes(k))));
-  const manualOk = $derived(manualKinds.includes(kind));
+  // ChatGPT 订阅的草稿不能手动加：chatgpt/create 不收目录，服务端只认登录时拉到的那份
+  const manualOk = $derived(manualKinds.includes(kind) && !cgDraft);
   // 媒体栏点不进去（没识别到、也不能手动加）的原因：和行上「暂不支持」同一套说法
   const kindWhy = $derived(Object.fromEntries(KINDS.filter((k) => k !== 'text').map((k) => [k,
     !studioOn ? t('这台服务器没装 Media Studio') : t('Media Studio 接不了这个服务的{kind}模型', { kind: tr(KIND_NAME[k]) })])));
   const canConn = $derived(phase === 'models' && !(sid && !svc));
-  const logo = $derived(svc?.brand?.logo || (!sid ? prov?.logo || '' : ''));
-  const logoName = $derived(svc?.brand?.name || prov?.name || '');
+  // 连接面板（齿轮、顶栏摘要）：ChatGPT 订阅的草稿没有——账号就是刚登录的那个，名字等建成服务后在账号面板里改
+  const connPanel = $derived(canConn && !cgDraft);
+  const logo = $derived(svc?.brand?.logo || (cgSvc ? 'openai' : !sid ? prov?.logo || '' : ''));
+  const logoName = $derived(svc?.brand?.name || (cgSvc ? 'ChatGPT' : prov?.name || ''));
   const markKey = $derived(logo || (d.url.trim() || sid ? 'globe' : 'link'));
   const title = $derived(svc ? svc.name || t('未命名服务')
     : sid ? ''
-    : d.name.trim() || (prov ? tr(prov.name) : '') || (phase === 'models' ? hostOf(d.url) : '') || t('添加模型服务'));
+    : d.name.trim() || (cgSvc ? t('ChatGPT 订阅') : '') || (prov ? tr(prov.name) : '') || (phase === 'models' ? hostOf(d.url) : '') || t('添加模型服务'));
   // 顶栏名字下面那行：「host · 接口类型 · Key 尾号」
   const summary = $derived.by(() => {
+    // ChatGPT 订阅：没有地址与 Key，写账号
+    if (svc && cgSvc) return [accountsText(svc), t('ChatGPT 订阅')].join(' · ');
+    if (cgDraft) return [cg.account?.email || '', t('ChatGPT 订阅')].filter(Boolean).join(' · ');
     if (svc) {
       const ls = svc.lines || [];
       const one = ls.find((l) => l.enabled && l.hasKey) || ls[0];
@@ -441,6 +457,7 @@
     picked.clear();
     saving = false; saveErr = '';
     connOpen = false; connDirty = false; connErr = ''; connMoved = false;
+    via = ''; cg = null;
     pinIds = new Set();
     asking = false; deleting = false;
     if (sid) openExisting(sid);
@@ -478,6 +495,24 @@
     } finally {
       if (g === gen) catLoading = false;
     }
+  }
+
+  // —— ChatGPT 订阅 ——
+  function pickChatgpt() { if (!sid && phase === 'first') { via = 'chatgpt'; detErr = ''; keepFocus(); } }
+  // 登录成功、看过「你正在使用 ChatGPT 套餐额度」：目录换成这个账号能用的模型，进模型勾选（同识别成功）。
+  // det 记下眼前草稿的连接（都是空的）：stale 恒假，关闭前照样问一句「放弃这个服务？」
+  function useChatgpt(login) {
+    if (sid || !login || login.status !== 'done') return;
+    cg = login;
+    cat = Array.isArray(login.models) ? login.models : [];
+    det = { conn: { kind: 'chatgpt' }, media: null, native: '', url: normUrl(d.url), key: d.key.trim(), proto: d.proto };
+    catAt = Date.now(); catReady = true;
+    notes = cat.length ? [] : [t('这个账号没有能用的模型')];
+    prune();
+    kindSet = false;
+    if (bodyEl) bodyEl.scrollTop = 0;
+    phase = 'models';
+    keepFocus();
   }
 
   // —— 识别 ——
@@ -643,6 +678,9 @@
       let r;
       if (sid) {
         r = await hubPost('assign', { id: sid, changes: list });
+      } else if (cg) {
+        // ChatGPT 订阅：目录与账号都在服务端那次登录里，只带去向
+        r = await hubPost('chatgpt/create', { loginId: cg.id, ...(d.name.trim() ? { name: d.name.trim() } : {}), assign: list });
       } else {
         // 草稿第一次保存：按识别时的连接建服务，目录与这次的去向一起带上（服务端一次落库）
         const c = det?.conn || {};
@@ -663,7 +701,7 @@
       if (r.service) {
         fresh = { svc: r.service, base: hub.services };
         // 就地变成已有服务：sid 一设，连接面板换成服务版、顶栏换成服务名，列表不动
-        if (!sid) { sid = r.service.id; checked = true; }
+        if (!sid) { sid = r.service.id; checked = true; cg = null; }
       }
       // 清掉勾选：操作条收下，行尾的 agent 图标落位（AgentStack 的弹簧）
       picked.clear();
@@ -755,7 +793,7 @@
     }
   }
   function toggleConn() {
-    if (!canConn) return;
+    if (!connPanel) return;
     if (connOpen) { closeConn(); return; }
     connOpen = true;
     connErr = '';
@@ -765,14 +803,18 @@
   // Esc / 系统返回：一次退一层
   function back() {
     if (closing || asking) return;
-    if (connOpen && canConn) { closeConn(); return; }
+    if (connOpen && connPanel) { closeConn(); return; }
     if (picked.size) { picked.clear(); saveErr = ''; return; }
+    // 第一步选了 ChatGPT 订阅：先退回快捷选择（登录面板卸载时会取消还没完成的登录）
+    if (!sid && phase === 'first' && via) { via = ''; keepFocus(); return; }
     guardedClose();
   }
   function leave() {
     if (closing) return;
     closing = true; gen++; detSeq++;
     clearTimeout(exitTimer);
+    // ChatGPT 订阅登录好了却没建成服务：令牌别留在服务端没人用
+    if (!sid && cg) hubAsk('chatgpt/login/cancel', { loginId: cg.id }).catch(() => {});
     // 出场（.closing 的过渡）播完再卸载；减弱动效时没有出场，立刻关
     exitTimer = setTimeout(() => {
       onClose?.();
@@ -912,15 +954,15 @@
     {#if narrow}
       <header class="top">
         <button type="button" class="hbtn" aria-label={t('返回')} title={t('返回')} onclick={() => guardedClose()}>{@html svg(G.back, 1.8)}</button>
-        <button type="button" class="mid" disabled={!canConn} aria-expanded={canConn ? connOpen : undefined}
-          aria-controls={canConn ? 'hs-conn' : undefined} onclick={toggleConn}>
+        <button type="button" class="mid" disabled={!connPanel} aria-expanded={connPanel ? connOpen : undefined}
+          aria-controls={connPanel ? 'hs-conn' : undefined} onclick={toggleConn}>
           <span class="r1">
             {#if logo}<BrandLogo size={22} {logo} name={logoName || title} />{/if}
             <span class="t1">{title}</span>
           </span>
           {#if summary}<span class="t2">{summary}</span>{/if}
         </button>
-        {#if canConn}
+        {#if connPanel}
           <button type="button" class="hbtn" class:on={connOpen} bind:this={connBtn} aria-label={t('连接设置')} title={t('连接设置')}
             aria-expanded={connOpen} aria-controls="hs-conn" onclick={toggleConn}>{@html svg(G.gear)}</button>
         {:else}
@@ -938,14 +980,16 @@
         </span>
         <div class="tcol">
           <h2 class="t1" title={title}>{title}</h2>
-          {#if canConn && summary}
+          {#if connPanel && summary}
             <button type="button" class="sum" title={summary} aria-expanded={connOpen} aria-controls="hs-conn" onclick={toggleConn}>
               <span class="st">{summary}</span>
               <span class="chev" class:up={connOpen} aria-hidden="true">{@html svg(G.chev)}</span>
             </button>
+          {:else if canConn && summary}
+            <span class="sum still" title={summary}><span class="st">{summary}</span></span>
           {/if}
         </div>
-        {#if canConn}
+        {#if connPanel}
           <button type="button" class="hbtn" class:on={connOpen} bind:this={connBtn} aria-label={t('连接设置')} title={t('连接设置')}
             aria-expanded={connOpen} aria-controls="hs-conn" onclick={toggleConn}>{@html svg(G.gear)}</button>
         {/if}
@@ -969,19 +1013,30 @@
       {:else if phase === 'first'}
         <div class="firstwrap" out:collapse>
           <div class="firstin">
-            <HsConn mode="first" bind:d {narrow} {detecting} {detErr} ondetect={detect} />
+            {#if via === 'chatgpt'}
+              <HsChatgptLogin mode="new" {narrow} ondone={useChatgpt} onback={() => { via = ''; keepFocus(); }} />
+            {:else}
+              <HsConn mode="first" bind:d {narrow} {detecting} {detErr} ondetect={detect} onchatgpt={pickChatgpt} />
+            {/if}
           </div>
         </div>
       {:else}
-        <div class="connwrap" id="hs-conn" class:open={connOpen} inert={!connOpen}>
-          <div class="connin">
-            <div class="connpad">
-              <HsConn bind:this={connRef} mode={sid ? 'service' : 'draft'} bind:d {svc} {narrow} {detecting} {detErr} {stale} catAt={lastAt} {now}
-                ondetect={detect} onsaved={onConnSaved} ondelete={del} {testModel} bind:dirty={connDirty} {connErr} locked={saving}
-                onadvanced={sid ? () => { svcAdvOpen = true; } : undefined} />
+        {#if connPanel}
+          <div class="connwrap" id="hs-conn" class:open={connOpen} inert={!connOpen}>
+            <div class="connin">
+              <div class="connpad">
+                {#if sid && cgSvc}
+                  <HsChatgptConn bind:this={connRef} {svc} {narrow} {detecting} {detErr} catAt={lastAt} {now}
+                    ondetect={detect} onsaved={onConnSaved} ondelete={del} bind:dirty={connDirty} {connErr} locked={saving} />
+                {:else}
+                  <HsConn bind:this={connRef} mode={sid ? 'service' : 'draft'} bind:d {svc} {narrow} {detecting} {detErr} {stale} catAt={lastAt} {now}
+                    ondetect={detect} onsaved={onConnSaved} ondelete={del} {testModel} bind:dirty={connDirty} {connErr} locked={saving}
+                    onadvanced={sid ? () => { svcAdvOpen = true; } : undefined} />
+                {/if}
+              </div>
             </div>
           </div>
-        </div>
+        {/if}
         <div class="models" in:fly={{ y: reduced() ? 0 : 12, duration: reduced() ? DUR.micro : DUR.base, delay: reduced() ? 0 : 40, easing: decel }}>
           {#if notes.length || connMoved}
             <div class="notes" role="status">
@@ -1077,6 +1132,7 @@
   @media (hover: hover) { .sum:hover { color: var(--text); } }
   .sum:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--text); }
   .st { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sum.still { cursor: default; }
   .chev { flex: none; display: grid; place-items: center; width: 14px; height: 14px; transition: transform var(--mo-quick) var(--ea-std); }
   .chev :global(svg) { width: 14px; height: 14px; }
   .chev.up { transform: rotate(180deg); }

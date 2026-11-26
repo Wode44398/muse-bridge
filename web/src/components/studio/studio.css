@@ -52,8 +52,8 @@
   /* 动效（弹簧曲线由 modules/studio/motion.js 写进 style：--sd-spring* / --sd-t-spring*）*/
   --sd-ease: cubic-bezier(.2, .8, .2, 1); --sd-ease-out: cubic-bezier(.16, 1, .3, 1); --sd-ease-in: cubic-bezier(.5, 0, .75, 0);
   --sd-t-fast: 140ms; --sd-t-med: 240ms; --sd-t-slow: 420ms;
-  /* 版式：44 顶栏带（三栏的栏头同一条中线）；安全区在根上拍一份真值（侧栏为了子树归零写了 --sat:0） */
-  --sd-band: 44px;
+  /* 版式：54 顶栏带（素材架、中栏、参数坞的栏头同一条中线）；安全区在根上拍一份真值（侧栏为了子树归零写了 --sat:0） */
+  --sd-band: 54px;
   --sd-sat: var(--sat, 0px); --sd-sab: var(--sab, 0px);
   position: absolute; inset: 0;
   display: flex; flex-direction: column;
@@ -91,7 +91,6 @@
 .studio-root .ic, .studio-root .ic svg { display: block; }
 .studio-root svg { flex: none; }
 .studio-root .mono { font-family: var(--sd-font-mono); font-variant-numeric: tabular-nums; }
-.studio-root.resizing { cursor: col-resize; user-select: none; }
 
 /* 一粒朱点：正在发生（标签上有任务在跑、进行中的作品、新发现的模型）。live 版带一圈慢呼吸的光晕 */
 .studio-root .sd-dot { flex: none; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--sd-live); }
@@ -114,7 +113,7 @@
 .studio-root .sd-ib[aria-pressed="true"] { background: var(--sd-surface2); color: var(--sd-text); }
 .studio-root .sd-ib .sd-dot { position: absolute; top: 7px; right: 7px; box-shadow: 0 0 0 2px var(--sd-bg); }
 
-/* ——— 外壳：作品栏 ｜ 画布（44 栏头带 + 创作页）｜ 参数坞 ——— */
+/* ——— 外壳：素材架 ｜ 中栏（一行顶栏 + 创作页）｜ 参数坞 ——— */
 .studio-root .sd-body { flex: 1; min-height: 0; position: relative; display: flex; }
 .studio-root .sd-band {
   flex: none; position: relative; z-index: 2;
@@ -122,83 +121,160 @@
   display: flex; align-items: center; gap: 4px;
 }
 
-/* 作品栏：深半档的纸 + 右缘一根细线；桌面可拖宽、可收起（收展裁切滑出，不逐帧重排内层） */
-.studio-root .sd-rail {
-  position: relative; z-index: 4; flex: none; width: var(--sd-rail-w, 272px); min-height: 0;
+/* 素材架：深半档的纸 + 右缘一根细线。宽屏收 64 / 展开 300（宽度直接到位，格子各自 FLIP，见 Shelf.svelte）；手机是左缘抽屉 */
+.studio-root .sd-shelf {
+  position: relative; z-index: 4; flex: none; width: 64px; min-height: 0;
   background: var(--sd-rail); box-shadow: inset -1px 0 0 var(--sd-border);
   display: none; --sat: 0px;
 }
-.studio-root.rail-col .sd-rail { display: flex; }
-.studio-root.medium .sd-rail { width: 272px; }
-.studio-root .sd-rail-in { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.studio-root .sd-rail-hd { padding: var(--sd-sat) 6px 0 6px; }
-.studio-root .sd-brand { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding-left: 2px; color: var(--sd-text); }
-.studio-root .sd-mark { flex: none; width: 22px; height: 22px; display: grid; place-items: center; color: var(--sd-text); }
-.studio-root .sd-mark svg { width: 22px; height: 22px; }
-.studio-root .sd-word { font-family: var(--sd-font-serif); font-weight: 600; font-size: 17px; line-height: 1.5; letter-spacing: -.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.studio-root .sd-fx { margin-left: 2px; padding: 2px 6px; border-radius: var(--sd-r-xs); font-size: var(--sd-fs-xs); color: var(--sd-text3); background: var(--sd-hover); white-space: nowrap; }
-.studio-root .sd-resize { position: absolute; top: 0; bottom: 0; right: -3px; width: 6px; cursor: col-resize; z-index: 3; touch-action: none; }
-.studio-root .sd-resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2.5px; width: 1px; background: transparent; transition: background-color var(--sd-t-fast) var(--sd-ease); }
-@media (hover: hover) { .studio-root .sd-resize:hover::after { background: var(--sd-border2); } }
-.studio-root .sd-resize:focus-visible::after, .studio-root.resizing .sd-resize::after { background: var(--sd-accent); }
+.studio-root.medium .sd-shelf, .studio-root.expanded .sd-shelf { display: flex; }
+.studio-root.shelf-open:not(.compact) .sd-shelf { width: 300px; }
+.studio-root .sd-shelf-in { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.studio-root .sd-shelf-hd { padding: var(--sd-sat) 8px 0 15px; }
+.studio-root .sd-shelf-seg { flex: none; position: relative; display: grid; grid-template-columns: 1fr 1fr; margin-left: 4px; padding: 2px; border-radius: 10px; background: var(--sd-hover); isolation: isolate; }
+.studio-root .sd-shelf-seg > button { position: relative; height: 28px; padding: 0 12px; border-radius: 8px; font-size: var(--sd-fs-md); font-weight: 500; color: var(--sd-text3); white-space: nowrap; transition: color var(--sd-t-fast) var(--sd-ease); }
+.studio-root .sd-shelf-seg > button.on { color: var(--sd-text); }
+@media (pointer: coarse) { .studio-root .sd-shelf-seg > button::after { content: ''; position: absolute; inset: -4px 0; } }
+@media (hover: hover) { .studio-root .sd-shelf-seg > button:not(.on):hover { color: var(--sd-text2); } }
+.studio-root .sd-ss-puck { position: absolute; z-index: -1; top: 2px; bottom: 2px; left: 2px; width: calc(50% - 2px); border-radius: 8px; background: var(--sd-surface); box-shadow: var(--sd-lift-1);
+  transition: transform var(--sd-t-spring-snap, 260ms) var(--sd-spring-snap, var(--sd-ease-out)); }
+.studio-root .sd-ss-puck.right { transform: translateX(100%); }
+.studio-root.dark .sd-ss-puck { background: var(--sd-surface3); }
+.studio-root.sd-noanim .sd-ss-puck { transition: none; }
+.studio-root .sd-shelf-gap { flex: 1; }
+.studio-root .sd-shelf-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.studio-root .sd-shelf-pane[hidden] { display: none; }
+.studio-root .sd-shelf-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; touch-action: pan-y; scrollbar-width: none; padding: 2px 10px calc(14px + var(--sd-sab)); }
+.studio-root .sd-shelf-body::-webkit-scrollbar { display: none; }
+.studio-root .sd-sgrid { display: grid; grid-template-columns: repeat(1, 44px); gap: 8px; justify-content: center; }
+.studio-root .sd-shelf-in.wide .sd-sgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; justify-content: stretch; }
+.studio-root .sd-day { grid-column: 1 / -1; display: none; padding: 10px 2px 2px; font-size: var(--sd-fs-xs); font-weight: 600; color: var(--sd-text3); }
+.studio-root .sd-shelf-in.wide .sd-day { display: block; }
+.studio-root .sd-day:first-child { padding-top: 2px; }
+.studio-root .sd-tile {
+  position: relative; aspect-ratio: 1; border-radius: 9px; overflow: hidden; background: var(--sd-surface2); cursor: pointer;
+  -webkit-touch-callout: none; user-select: none; -webkit-user-select: none;
+  transition: opacity 220ms var(--sd-ease), transform 200ms var(--sd-ease-out), box-shadow 200ms var(--sd-ease);
+}
+@media (pointer: fine) { .studio-root .sd-tile { cursor: grab; } }
+.studio-root .sd-tile img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.studio-root .sd-tile-pl { position: absolute; left: 4px; bottom: 4px; width: 14px; height: 14px; border-radius: 4px; display: grid; place-items: center; color: #fff; background: rgba(18, 16, 14, .4); }
+.studio-root .sd-tile-pl svg { width: 8px; height: 8px; }
+.studio-root .sd-tile-wv, .studio-root .sd-tile-ic { position: absolute; inset: 0; display: grid; place-items: center; color: var(--sd-text2); }
+.studio-root .sd-tile-wv svg { width: 70%; height: 46%; }
+.studio-root .sd-tile-wv rect { fill: currentColor; }
+.studio-root .sd-tile-ic { color: var(--sd-text3); }
+.studio-root .sd-tile-ic svg { width: 20px; height: 20px; }
+@media (hover: hover) and (pointer: fine) { .studio-root .sd-tile:hover { transform: scale(1.04); box-shadow: var(--sd-shadow-1); } }
+.studio-root .sd-tile:active { transform: scale(.96); }
+/* 打开着的那一件：一圈墨（纸色隔一道缝），和墙上的焦点对上 */
+.studio-root .sd-tile.on { box-shadow: 0 0 0 2px var(--sd-rail), 0 0 0 3.5px var(--sd-accent); }
+.studio-root .sd-tile.flash { animation: sdTileFlash 1.2s var(--sd-ease); }
+@keyframes sdTileFlash { 0%, 35% { box-shadow: 0 0 0 2px var(--sd-rail), 0 0 0 3.5px var(--sd-accent); } 100% { box-shadow: 0 0 0 2px transparent, 0 0 0 3.5px transparent; } }
+/* 挑选态：只有能当这个角色的变实，其余变淡、点不了 */
+.studio-root .sd-tile.dim { opacity: .22; pointer-events: none; }
+.studio-root .sd-tile.ok { box-shadow: 0 0 0 1px var(--sd-border2); }
+.studio-root .sd-pickbar {
+  flex: none; display: flex; align-items: center; gap: 8px; margin: 0 10px 8px; padding: 0 4px 0 12px; height: 40px; border-radius: 12px;
+  background: var(--sd-accent); color: var(--sd-on-accent); font-size: var(--sd-fs-md); font-weight: 500;
+}
+.studio-root .sd-pickbar > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-root .sd-pickbar .sd-ib { width: 30px; height: 30px; border-radius: 9px; color: var(--sd-on-accent); }
+@media (hover: hover) { .studio-root .sd-pickbar .sd-ib:hover { background: color-mix(in srgb, var(--sd-on-accent) 14%, transparent); color: var(--sd-on-accent); } }
+.studio-root .sd-shelf-q { flex: none; display: flex; align-items: center; gap: 8px; height: 34px; margin: 0 10px 6px; padding: 0 2px 0 10px; border-radius: 10px; background: var(--sd-hover); color: var(--sd-text3);
+  transition: background-color var(--sd-t-fast) var(--sd-ease), box-shadow var(--sd-t-fast) var(--sd-ease); }
+.studio-root .sd-shelf-q:focus-within { background: var(--sd-surface); box-shadow: 0 0 0 1px var(--sd-border2); }
+.studio-root .sd-shelf-q > svg { width: 16px; height: 16px; }
+.studio-root .sd-shelf-q input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; font-size: var(--sd-fs-md); color: var(--sd-text); }
+.studio-root .sd-shelf-q input::placeholder { color: var(--sd-text3); }
+.studio-root .sd-shelf-q .sd-ib { width: 28px; height: 28px; border-radius: 8px; }
+.studio-root .sd-shelf-q .sd-ib svg { width: 15px; height: 15px; }
+.studio-root .sd-shelf-empty { padding: 36px 14px; text-align: center; color: var(--sd-text3); font-size: var(--sd-fs-md); line-height: 1.55; display: grid; justify-items: center; gap: 12px; }
+.studio-root .sd-shelf-in:not(.wide) .sd-shelf-empty { padding: 18px 0; }
+.studio-root .sd-shelf-empty p { margin: 0; }
+.studio-root .sd-shelf-retry { height: 30px; padding: 0 14px; border-radius: 999px; background: var(--sd-surface2); color: var(--sd-text); font-size: var(--sd-fs-sm); font-weight: 500; }
+.studio-root .sd-shelf-load { display: grid; place-items: center; padding: 16px; }
+.studio-root .sd-shelf-ft { flex: none; display: flex; justify-content: center; padding: 8px 0 calc(12px + var(--sd-sab)); }
+.studio-root .sd-shelf-files { position: relative; }
+.studio-root .sd-embed { position: absolute; inset: 0; transform: translateZ(0); overflow: hidden; }
 
 /* 中栏 + 参数坞 */
 .studio-root .sd-work { flex: 1; min-width: 0; display: flex; }
 .studio-root .sd-center { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+/* 顶栏一行：左（返回 · 宽屏的错拍标 + 字标）和右（设置）各占一半余量，四个种类夹在正中 */
 .studio-root .sd-cbar { padding: var(--sd-sat) 8px 0 8px; }
-.studio-root .sd-cbar-l, .studio-root .sd-cbar-r { position: relative; z-index: 1; display: flex; align-items: center; gap: 2px; min-width: 0; }
-.studio-root .sd-cbar-r { margin-left: auto; }
-.studio-root .sd-cbar .sd-brand { flex: none; padding-left: 4px; }
-/* 四个创作页的分段：桌面居中在中栏栏头；手机贴顶单独一行 */
-.studio-root .sd-tabs { position: absolute; left: 50%; bottom: 5px; transform: translateX(-50%); z-index: 1; }
-/* 中栏窄、左右按钮多时居中会压到按钮（StudioPage 量出来挂 .tight）：改排在两组之间 */
-.studio-root .sd-cbar.tight .sd-tabs { position: relative; left: auto; bottom: auto; transform: none; flex: none; margin: 0 auto; }
-.studio-root .sd-cbar.tight .sd-cbar-r { margin-left: 0; }
-.studio-root .sd-tabs .seg-tx { display: inline-flex; align-items: center; gap: 6px; }
-.studio-root .sd-segrow { flex: none; padding: 0 12px 8px; }
+.studio-root .sd-cbar-l, .studio-root .sd-cbar-r { flex: 1 1 0; min-width: 0; display: flex; align-items: center; }
+.studio-root .sd-cbar-r { justify-content: flex-end; }
+.studio-root .sd-cbar-in { flex: none; display: flex; align-items: center; gap: 2px; }
+.studio-root .sd-brand { display: flex; align-items: center; gap: 8px; padding: 0 8px 0 6px; min-width: 0; color: var(--sd-text); }
+.studio-root .sd-brand b { font-size: var(--sd-fs-base); font-weight: 600; letter-spacing: -.005em; white-space: nowrap; }
+.studio-root .sd-fx { margin-left: 2px; padding: 2px 6px; border-radius: var(--sd-r-xs); font-size: var(--sd-fs-xs); color: var(--sd-text3); background: var(--sd-hover); white-space: nowrap; }
 .studio-root .sd-stage { flex: 1; min-height: 0; position: relative; overflow: hidden; }
 .studio-root .sd-page { position: absolute; inset: 0; display: flex; flex-direction: column; }
 .studio-root .sd-page.dormant { content-visibility: hidden; visibility: hidden; }
 
-/* 任务钮：没任务 = 托盘线稿；有任务 = 朱点 + mono 计数；做完没看 = 右上一粒墨点 */
-.studio-root .sd-cap.live { width: auto; padding: 0 9px 0 8px; gap: 5px; display: inline-flex; align-items: center; color: var(--sd-text); }
-.studio-root .sd-cap.live b { font-family: var(--sd-font-mono); font-size: var(--sd-fs-sm); font-weight: 500; font-variant-numeric: tabular-nums; }
-.studio-root .sd-cap.seen::after { content: ''; position: absolute; top: 7px; right: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--sd-accent); box-shadow: 0 0 0 2px var(--sd-bg); }
+/* 四个种类（StudioTabs）：线稿字形 + 文字；一块纸面滑块跟着选中项走；放不下（tight）没选中的只留字形 */
+.studio-root .st-tabs { flex: none; position: relative; display: flex; gap: 2px; padding: 3px; outline: none; }
+.studio-root .st-tab {
+  position: relative; z-index: 1; height: 36px; padding: 0 13px; border-radius: 12px; display: flex; align-items: center; gap: 7px;
+  color: var(--sd-text3); font-size: var(--sd-fs-base); font-weight: 500; white-space: nowrap;
+  transition: color 200ms var(--sd-ease), background-color var(--sd-t-fast) var(--sd-ease);
+}
+.studio-root .st-tab .tg { position: relative; flex: none; width: 19px; height: 19px; transition: transform 120ms var(--sd-ease); }
+.studio-root .st-tab .tg svg { position: absolute; inset: 0; width: 19px; height: 19px; }
+.studio-root .st-lb { display: inline-block; overflow: hidden; }
+.studio-root .st-tab.on { color: var(--sd-text); }
+@media (hover: hover) { .studio-root .st-tab:not(.on):hover { color: var(--sd-text2); } }
+.studio-root .st-tab:active .tg { transform: scale(.9); }
+.studio-root .st-tab.dnd-on { color: var(--sd-text); background: var(--sd-accent-soft); }
+.studio-root .st-tabs.tight .st-tab:not(.on) { padding: 0 11px; }
+.studio-root .st-tabs.tight .st-tab:not(.on) .st-lb { width: 0; }
+.studio-root .st-puck { position: absolute; z-index: 0; top: 3px; left: 0; height: 36px; border-radius: 12px; background: var(--sd-surface); box-shadow: var(--sd-lift-1); pointer-events: none; }
+.studio-root.dark .st-puck { background: var(--sd-surface3); }
+.studio-root .st-measure { position: absolute; left: 0; top: 0; visibility: hidden; pointer-events: none; }
+/* 有任务在跑：同一个线稿上一小段墨沿笔画走（StudioTabs 逐帧写 dashoffset），底稿淡一档 */
+.studio-root .tg-trace { opacity: 0; }
+.studio-root .st-tab.st-busy .tg-base { opacity: .42; }
+.studio-root .st-tab.st-busy .tg-trace { opacity: 1; }
 
-/* 参数坞：宽屏才有，可开关（像 dimensio 的工作区坞：同一张纸、左缘一根细线、44 栏头） */
-.studio-root .sd-dock { flex: none; width: 312px; min-height: 0; display: none; flex-direction: column; background: var(--sd-rail); box-shadow: inset 1px 0 0 var(--sd-border); }
-.studio-root .sd-dock.on { display: flex; }
+/* 参数坞：宽屏才有；开合是推开（宽度过渡），里层贴右、宽度固定，内容不跟着重排 */
+.studio-root .sd-dock { flex: none; position: relative; width: 0; min-height: 0; display: none; overflow: hidden; background: var(--sd-rail); box-shadow: inset 1px 0 0 var(--sd-border);
+  transition: width 380ms var(--sd-ease-out); }
+.studio-root.expanded .sd-dock { display: block; }
+.studio-root .sd-dock.on { width: 312px; }
+.studio-root .sd-dock-in { position: absolute; top: 0; bottom: 0; right: 0; width: 312px; display: flex; flex-direction: column; }
 .studio-root .sd-dock-hd { padding: var(--sd-sat) 8px 0 18px; }
-.studio-root .sd-dock-t { flex: 1; min-width: 0; font-size: var(--sd-fs-md); font-weight: 500; color: var(--sd-text2); }
+.studio-root .sd-dock-t { flex: 1; min-width: 0; font-size: var(--sd-fs-base); font-weight: 600; color: var(--sd-text); }
 .studio-root .sd-dock-body { flex: 1; min-height: 0; position: relative; }
 .studio-root .sd-dock-pane { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 16px 28px 18px; display: none;
   scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--sd-border2) transparent; }
 .studio-root .sd-dock-pane.on { display: block; }
+@media (pointer: coarse) { .studio-root .sd-dock-pane, .studio-root .pv-scroll, .studio-root .sh-body { scrollbar-width: none; } }
 
-/* 手机：作品栏是左缘抽屉；栏头一行 + 分段一行 */
+/* 手机：素材架是左缘抽屉（一直是展开的样子） */
 .studio-root.compact .sd-cbar { padding: var(--sd-sat) 6px 0 4px; }
-.studio-root.compact .sd-cbar .sd-word { font-size: var(--sd-fs-lg); }
-.studio-root.compact .sd-rail {
+.studio-root.compact .sd-shelf {
   display: flex; position: fixed; top: 0; bottom: 0; left: 0; z-index: 40;
   width: min(86vw, 340px);
   transform: translateX(-100%); transition: transform 380ms var(--sd-spring-soft, var(--sd-ease-out));
   box-shadow: none;
 }
-.studio-root.compact .sd-rail.open, .studio-root.compact .sd-rail.dragging { transform: none; box-shadow: var(--sd-shadow-3); }
-.studio-root.compact .sd-rail.dragging { transition: none; }
-.studio-root.compact .sd-rail-hd { height: calc(var(--sd-band) + var(--sd-sat)); padding-top: var(--sd-sat); }
+.studio-root.compact .sd-shelf.open, .studio-root.compact .sd-shelf.dragging { transform: none; box-shadow: var(--sd-shadow-3); }
+.studio-root.compact .sd-shelf.dragging { transition: none; }
+.studio-root.compact .sd-shelf-hd { padding: var(--sd-sat) 6px 0 6px; }
+.studio-root.compact .sd-shelf-seg { margin-left: 6px; }
 .studio-root .sd-scrim { position: fixed; inset: 0; z-index: 39; background: var(--sd-scrim); opacity: 0; pointer-events: none; transition: opacity 260ms var(--sd-ease); }
 .studio-root .sd-scrim.open { opacity: 1; pointer-events: auto; }
-.studio-root.sd-noanim .sd-rail, .studio-root.sd-noanim .sd-scrim { transition: none; }
+.studio-root.sd-noanim .sd-shelf, .studio-root.sd-noanim .sd-scrim, .studio-root.sd-noanim .sd-dock { transition: none; }
 
-/* ——— 切创作页：旧页 120ms 退隐，新页从 6px 外浮起落定 ——— */
+/* ——— 切创作页：旧页加速退（朝滑块反方向让 26px），新页从滑块那一侧 44px 外弹进来 ——— */
 @media (prefers-reduced-motion: no-preference) {
-  .studio-root .sd-page.leaving { z-index: 1; pointer-events: none; animation: sdPageOut 120ms var(--sd-ease-in) forwards; }
-  .studio-root .sd-page.st-in { animation: sdPageIn var(--sd-t-spring-soft, 420ms) var(--sd-spring-soft, var(--sd-ease-out)) backwards; }
+  .studio-root .sd-page.leaving { z-index: 1; pointer-events: none; animation: sdPageOut 140ms var(--sd-ease-in) forwards; }
+  .studio-root .sd-page.st-in { animation: sdPageIn var(--sd-t-spring-soft, 420ms) var(--sd-spring-soft, var(--sd-ease-out)) 50ms backwards; }
 }
 .studio-root.sd-noanim .sd-page.leaving, .studio-root.sd-noanim .sd-page.st-in { animation: none !important; }
-@keyframes sdPageOut { to { opacity: 0; } }
-@keyframes sdPageIn { from { opacity: 0; transform: translateX(calc(var(--sd-dir, 1) * 8px)); } }
+@keyframes sdPageOut { to { opacity: 0; transform: translateX(calc(var(--sd-dir, 1) * -26px)); } }
+@keyframes sdPageIn { from { opacity: 0; transform: translateX(calc(var(--sd-dir, 1) * 44px)); } }
 @keyframes sdSpin { to { transform: rotate(360deg); } }
 /* 「在做」的微光（dimensio .hx-shimmer）：进行中的文字 */
 .studio-root .sd-shimmer {
@@ -285,107 +361,6 @@
 .studio-root .chip:disabled { opacity: .4; }
 @media (pointer: coarse) { .studio-root .chip { min-width: 32px; } .studio-root .chip::after { content: ''; position: absolute; inset: -5px 0; } }
 
-/* ═══ 作品栏内部 ═══ */
-.studio-root .sb { flex: 1; display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 0; }
-.studio-root .sb-top { flex: none; display: flex; align-items: center; gap: 6px; padding: 4px 8px 6px 10px; }
-.studio-root .sb-top .seg { flex: none; }
-.studio-root .sb-gap { flex: 1; }
-.studio-root .sb-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.studio-root .sb-pane[hidden] { display: none; }
-.studio-root .sb-filter { flex: none; display: flex; align-items: center; gap: 2px; padding: 0 6px 4px 10px; }
-.studio-root .sb-chips { flex: 1; min-width: 0; display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
-.studio-root .sb-chips::-webkit-scrollbar { display: none; }
-.studio-root .sb-chips .chip { height: 28px; padding: 0 8px; font-size: var(--sd-fs-md); }
-.studio-root .sb-chips .chip[aria-checked="true"] { background: var(--sd-surface); color: var(--sd-text); box-shadow: 0 0 0 1px var(--sd-border); }
-/* 搜索框：dimensio 侧栏搜索同款（墨 4.5% 底，聚焦变白纸 + 强细线）*/
-.studio-root .sb-q { flex: 1; display: flex; align-items: center; gap: 8px; height: 34px; margin: 0 2px; padding: 0 4px 0 10px; border-radius: 10px; background: var(--sd-hover); color: var(--sd-text3);
-  transition: background-color var(--sd-t-fast) var(--sd-ease), box-shadow var(--sd-t-fast) var(--sd-ease); }
-.studio-root .sb-q:focus-within { background: var(--sd-surface); box-shadow: 0 0 0 1px var(--sd-border2); }
-.studio-root .sb-q > svg { width: 16px; height: 16px; }
-.studio-root .sb-q input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; font-size: var(--sd-fs-md); color: var(--sd-text); }
-.studio-root .sb-q input::placeholder { color: var(--sd-text3); }
-.studio-root .sb-q .sd-ib { width: 28px; height: 28px; border-radius: 8px; }
-.studio-root .sb-q .sd-ib svg { width: 15px; height: 15px; }
-.studio-root .sb-files { position: relative; }
-.studio-root .sd-embed { position: absolute; inset: 0; transform: translateZ(0); overflow: hidden; }
-
-/* 作品流：行与 dimensio 侧栏会话行同族（圆角 10、悬停墨 4.5%、选中 = 白纸 + 细线）；左侧血缘「点 + 竖线」 */
-.studio-root .ws { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 2px 8px calc(20px + var(--sd-sab)) 8px;
-  scrollbar-width: thin; scrollbar-color: var(--sd-border2) transparent; }
-@media (pointer: coarse) { .studio-root .ws, .studio-root .sd-dock-pane, .studio-root .pv-scroll, .studio-root .sh-body { scrollbar-width: none; } }
-.studio-root .ws-empty { padding: 40px 18px; text-align: center; color: var(--sd-text3); font-size: var(--sd-fs-md); line-height: 1.55; display: grid; justify-items: center; gap: 12px; }
-.studio-root .ws-retry { height: 30px; padding: 0 14px; border-radius: 999px; background: var(--sd-surface2); color: var(--sd-text); font-size: var(--sd-fs-sm); font-weight: 500; }
-.studio-root .ws-load { display: grid; place-items: center; padding: 18px; }
-.studio-root .wr-h { position: relative; height: 34px; display: flex; align-items: flex-end; padding: 0 0 7px 34px; font-size: var(--sd-fs-sm); font-weight: 500; color: var(--sd-text3); }
-.studio-root .wr {
-  position: relative; display: flex; align-items: flex-start; gap: 10px;
-  min-height: 56px; padding: 8px 8px 8px 34px; border-radius: 10px;
-  cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
-  transition: background-color var(--sd-t-fast) var(--sd-ease), opacity 120ms var(--sd-ease);
-}
-@media (hover: hover) { .studio-root .wr:hover { background: var(--sd-hover); } }
-.studio-root .wr:active { background: var(--sd-press); }
-.studio-root .wr.cur { background: var(--sd-surface); box-shadow: 0 0 0 1px var(--sd-border); }
-.studio-root .wr.dim { opacity: .45; }
-.studio-root .wr.flash { animation: sdFlash 1.1s var(--sd-ease); }
-@keyframes sdFlash { 0%, 30% { background: var(--sd-surface); box-shadow: 0 0 0 1px var(--sd-border2); } 100% { background: transparent; box-shadow: 0 0 0 1px transparent; } }
-/* 血缘槽：灰点 + 1px 线（dimensio 对话流左侧的时间线母题）；在跑的那一件是朱点 */
-.studio-root .wr-g { position: absolute; left: 4px; top: 0; width: 28px; height: 100%; overflow: visible; pointer-events: none; }
-.studio-root .wr-g line, .studio-root .wr-g path { stroke: var(--sd-border2); stroke-width: 1; fill: none; stroke-linecap: round; transition: stroke 120ms var(--sd-ease); }
-.studio-root .wr-g .lit { stroke: var(--sd-text2); }
-.studio-root .wr-g .stub { stroke-dasharray: 1.5 2.5; }
-.studio-root .wr-node { fill: color-mix(in srgb, var(--sd-text3) 70%, var(--sd-rail)); transition: fill 120ms var(--sd-ease); }
-.studio-root .wr-node.lit { fill: var(--sd-text); }
-.studio-root .wr-node.live { fill: var(--sd-live); }
-.studio-root .wr-halo { fill: var(--sd-live-soft); animation: sdHalo 2.2s var(--sd-ease) infinite; transform-box: fill-box; transform-origin: center; }
-.studio-root.sd-noanim .wr-halo { animation: none; }
-.studio-root .wr-thumb {
-  position: relative; flex: none; width: 40px; height: 40px; border-radius: var(--sd-r-sm); overflow: hidden;
-  background: var(--sd-surface2); display: grid; place-items: center; color: var(--sd-text3); box-shadow: inset 0 0 0 1px var(--sd-border);
-}
-.studio-root .wr-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.studio-root .wr-thumb > svg { width: 19px; height: 19px; }
-.studio-root .wr-play { position: absolute; left: 3px; bottom: 3px; width: 15px; height: 15px; border-radius: 50%; background: rgba(0, 0, 0, .5); color: #fff; display: grid; place-items: center; }
-.studio-root .wr-play svg { width: 8px; height: 8px; margin-left: 1px; }
-/* 进行中：缩略图位一块纸 + 一道慢慢掠过的高光 */
-.studio-root .wr-busy { position: absolute; inset: 0; display: grid; place-items: center; background: var(--sd-surface); overflow: hidden; }
-.studio-root .wr-busy::after, .studio-root .busy-sheen::after {
-  content: ''; position: absolute; inset: 0; transform: translateX(-100%);
-  background: linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--sd-text) 6%, transparent) 50%, transparent 80%);
-  animation: sdSweep 2.6s var(--sd-ease-in) infinite;
-}
-.studio-root.dark .wr-busy::after, .studio-root.dark .busy-sheen::after { background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, .05) 50%, transparent 80%); }
-@keyframes sdSweep { 0% { transform: translateX(-100%); } 70%, 100% { transform: translateX(100%); } }
-.studio-root.sd-noanim .wr-busy::after, .studio-root.sd-noanim .busy-sheen::after { animation: none; opacity: 0; }
-.studio-root .wr-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; padding-top: 1px; }
-.studio-root .wr-p { font-size: var(--sd-fs-md); line-height: 1.38; color: var(--sd-text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
-.studio-root .wr-m {
-  /* 作品：型号（放不下才省略）；在跑：计时。一行高用 em（系统字号放大时一起变大） */
-  display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; min-width: 0;
-  height: calc(15em / 11); overflow: hidden; font-size: var(--sd-fs-xs); line-height: calc(15em / 11); color: var(--sd-text3); white-space: nowrap;
-}
-.studio-root .wr-m > span { flex: none; }
-.studio-root .wr-m > .mono { font-size: calc(var(--sd-fs-xs) - .5px); }
-.studio-root .wr-m > span:first-child { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.studio-root .wr-m > span + span::before { content: '·'; margin-right: 6px; opacity: .7; }
-/* 在跑的计时：朱只做点和线、不做小字（DESIGN.md §2），字用墨的次一档 */
-.studio-root .wr-m .live-t { color: var(--sd-text2); }
-.studio-root .wr-more { flex: none; align-self: center; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--sd-text2); opacity: 0; transition: opacity var(--sd-t-fast) var(--sd-ease); }
-@media (hover: hover) and (pointer: fine) {
-  .studio-root .wr { --wr-bg: color-mix(in srgb, var(--sd-text) 4.5%, var(--sd-rail)); }
-  .studio-root .wr.cur { --wr-bg: var(--sd-surface); }
-  .studio-root .wr-more { position: absolute; right: 6px; top: 50%; margin-top: -14px; background: var(--wr-bg); }
-  .studio-root .wr-more::before { content: ''; position: absolute; top: 0; bottom: 0; right: 100%; width: 22px; background: linear-gradient(90deg, transparent, var(--wr-bg)); pointer-events: none; }
-}
-.studio-root .wr-more svg { width: 17px; height: 17px; }
-.studio-root .wr:hover .wr-more, .studio-root .wr:focus-within .wr-more, .studio-root .wr-more:focus-visible { opacity: 1; }
-@media (hover: hover) { .studio-root .wr-more:hover { color: var(--sd-text); box-shadow: inset 0 0 0 20px var(--sd-press); } }
-@media (pointer: coarse) { .studio-root .wr-more { opacity: 1; width: 32px; height: 32px; } }
-.studio-root .ws.flat .wr, .studio-root .ws.flat .wr-h { padding-left: 10px; }
-.studio-root .ws.flat .wr-g { display: none; }
-.studio-root .wr .ms { position: absolute; left: 31px; right: 5px; bottom: -2px; }
-.studio-root .ws.flat .wr .ms { left: 7px; }
-
 /* ═══ 浮层 ═══ */
 /* Popover（ui/Popover.svelte；dimensio 同款：白纸、圆角 14、细线 + 悬浮投影；从锚点方向弹出）*/
 .studio-root .pv {
@@ -415,7 +390,8 @@
 .studio-root .pv-h b { flex: 1; min-width: 0; font-size: var(--sd-fs-md); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .studio-root .pv-h small { font-size: var(--sd-fs-xs); color: var(--sd-text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 50%; }
 
-/* Sheet（ui/Sheet.svelte；手机 = 底部抽屉：把手、圆角 22、左对齐 17/600 标题、×；宽屏 = 居中对话框）*/
+/* Sheet（ui/Sheet.svelte；手机 = 底部抽屉：把手、圆角 22、左对齐 17/600 标题、×；宽于手机（medium / expanded）一律居中卡，宽 ≤ 460，
+   铺满宽屏的表单会把每一行选项拉成一长条）。正文滚进标题下面时化开（edgeFade），不切 */
 .studio-root .sh { position: fixed; inset: 0; z-index: 90; display: flex; flex-direction: column; justify-content: flex-end; }
 .studio-root .sh.wide { justify-content: center; align-items: center; padding: 40px 24px; }
 .studio-root .sh-scrim { position: absolute; inset: 0; background: var(--sd-scrim); cursor: default; }
@@ -424,10 +400,9 @@
   max-height: calc(100dvh - 40px - var(--sd-sat)); background: var(--sd-surface); color: var(--sd-text);
   border-radius: 22px 22px 0 0; box-shadow: inset 0 1px 0 var(--sd-sheen), var(--sd-shadow-3); touch-action: pan-y;
 }
-.studio-root .sh.wide .sh-panel { width: min(var(--sh-w, 440px), 100%); max-height: min(720px, 100%); border-radius: 20px; box-shadow: 0 0 0 1px var(--sd-border), inset 0 1px 0 var(--sd-sheen), var(--sd-shadow-3); touch-action: auto; }
+.studio-root .sh.wide .sh-panel { width: min(var(--sh-w, 440px), 460px, 100%); max-height: min(720px, 100%); border-radius: 20px; box-shadow: 0 0 0 1px var(--sd-border), inset 0 1px 0 var(--sd-sheen), var(--sd-shadow-3); touch-action: auto; }
 .studio-root .sh-panel:focus-visible { outline: none; }
 .studio-root .sh-head { position: relative; flex: none; display: flex; align-items: center; gap: 8px; padding: 20px 10px 8px 22px; touch-action: none; }
-.studio-root .sh-panel.scrolled > :has(+ .sh-body) { box-shadow: 0 1px 0 var(--sd-border); position: relative; z-index: 1; }
 .studio-root .sh.tall:not(.wide) .sh-panel { height: calc(100dvh - 40px - var(--sd-sat)); }
 .studio-root .sh.wide .sh-head { padding: 16px 12px 8px 24px; touch-action: auto; }
 .studio-root .sh-grip { position: absolute; top: 7px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--sd-border2); }
@@ -438,7 +413,7 @@
 .studio-root .sh-extra .mp-q { padding: 0 0 4px; }
 .studio-root .sh-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 16px calc(20px + var(--sd-sab)); }
 .studio-root .sh.wide .sh-body { padding: 4px 16px 20px; scrollbar-gutter: stable; }
-/* 触屏上的 Sheet = ios27 表单页（四周内缩 6、圆角 38、烘焙玻璃 --sd-glass-sheet、60×4 抓手；正文底边跟着圆角裁、还能滚时底部渐隐）；
+/* 触屏上的 Sheet = ios27 表单页（四周内缩 6、圆角 38、烘焙玻璃 --sd-glass-sheet、60×4 抓手；正文底边跟着圆角裁，上下边缘的化开归 edgeFade）；
    宽屏弹窗用菜单那张玻璃（圆角 34）。标题行、副标题、搜索栏、按住下拉关仍是 Studio 自己的 */
 @media (pointer: coarse) {
   .studio-root .sh-panel { width: auto; margin: 0 6px 6px; max-height: calc(100dvh - 18px - var(--sd-sat)); background: none; border-radius: 38px; isolation: isolate;
@@ -446,13 +421,12 @@
   .studio-root.dark .sh-panel { box-shadow: 0 8px 40.6px rgba(0, 0, 0, .45); }
   .studio-root .sh-panel::before { content: ''; position: absolute; z-index: -1; inset: 0; pointer-events: none;
     border: 0 solid transparent; border-image: var(--sd-glass-sheet) 240 fill / 80px / 16px stretch; }
-  .studio-root .sh.wide .sh-panel { margin: 0; width: min(var(--sh-w, 440px), 100%); max-height: min(720px, 100%); border-radius: 34px; box-shadow: 0 8px 40.6px rgba(0, 0, 0, .25); }
+  .studio-root .sh.wide .sh-panel { margin: 0; width: min(var(--sh-w, 440px), 460px, 100%); max-height: min(720px, 100%); border-radius: 34px; box-shadow: 0 8px 40.6px rgba(0, 0, 0, .25); }
   .studio-root .sh.wide .sh-panel::before { border-image: var(--sd-glass-pop) 228 fill / 76px / 16px stretch; }
   .studio-root .sh.tall:not(.wide) .sh-panel { height: calc(100dvh - 18px - var(--sd-sat)); }
   .studio-root .sh-grip { top: 6px; width: 60px; margin-left: -30px; background: #b5b5b6; }
   .studio-root.dark .sh-grip { background: #4d4d4d; }
-  .studio-root .sh-body { padding-bottom: max(20px, calc(var(--sd-sab) + 12px)); border-radius: 0 0 32px 32px;
-    -webkit-mask-image: linear-gradient(#000 calc(100% - 24px), transparent); mask-image: linear-gradient(#000 calc(100% - 24px), transparent); }
+  .studio-root .sh-body { padding-bottom: max(20px, calc(var(--sd-sab) + 12px)); border-radius: 0 0 32px 32px; }
   .studio-root .sh.wide .sh-body { padding-bottom: 20px; border-radius: 0 0 28px 28px; }
 }
 
@@ -516,43 +490,19 @@
      行间一根细线；小节标题（服务名、厂商、「接着做」「进行中」）留在玻璃上。背后的内容就不会透到字底下 */
   .studio-root .sh { --sd-card: var(--sd-surface); }
   .studio-root.dark .sh { --sd-card: var(--sd-surface3); }   /* 暗色：卡片比玻璃亮一档（同 iOS 暗色 Sheet 里的单元格），不然看不出卡片 */
-  .studio-root .sh :is(.op, .wm-i, .tt-r) { border-radius: 0; background-color: var(--sd-card); padding-left: 16px; padding-right: 16px; }
-  .studio-root .sh :is(.op, .wm-i, .tt-r):not(:is(.op, .wm-i, .tt-r) + *) { border-top-left-radius: 14px; border-top-right-radius: 14px; }
-  .studio-root .sh :is(.op, .wm-i, .tt-r):not(:has(+ :is(.op, .wm-i, .tt-r))) { border-bottom-left-radius: 14px; border-bottom-right-radius: 14px; }
-  .studio-root .sh :is(.op, .wm-i, .tt-r) + :is(.op, .wm-i, .tt-r) {
+  .studio-root .sh :is(.op, .wm-i) { border-radius: 0; background-color: var(--sd-card); padding-left: 16px; padding-right: 16px; }
+  .studio-root .sh :is(.op, .wm-i):not(:is(.op, .wm-i) + *) { border-top-left-radius: 14px; border-top-right-radius: 14px; }
+  .studio-root .sh :is(.op, .wm-i):not(:has(+ :is(.op, .wm-i))) { border-bottom-left-radius: 14px; border-bottom-right-radius: 14px; }
+  .studio-root .sh :is(.op, .wm-i) + :is(.op, .wm-i) {
     background-image: linear-gradient(var(--sd-border), var(--sd-border)); background-repeat: no-repeat; background-size: calc(100% - 16px) 1px; background-position: 16px 0; }
-  @media (hover: hover) { .studio-root .sh :is(.op, .wm-i, .tt-r):hover:not(:disabled) { background-color: color-mix(in srgb, var(--sd-text) 4.5%, var(--sd-card)); } }
-  .studio-root .sh :is(.op, .wm-i, .tt-r):active:not(:disabled) { background-color: color-mix(in srgb, var(--sd-text) 8%, var(--sd-card)); }
+  @media (hover: hover) { .studio-root .sh :is(.op, .wm-i):hover:not(:disabled) { background-color: color-mix(in srgb, var(--sd-text) 4.5%, var(--sd-card)); } }
+  .studio-root .sh :is(.op, .wm-i):active:not(:disabled) { background-color: color-mix(in srgb, var(--sd-text) 8%, var(--sd-card)); }
   .studio-root .sh .wm-sep { height: 0; margin: 4px 0; background: none; }
   .studio-root .sh .mp.grouped .op, .studio-root .sh .mp.grouped .mp-sec.sub .op { padding-left: 16px; }
   .studio-root .sh .op-sub { padding-left: 16px; }
   .studio-root .sh .mp-sec + .mp-sec { margin-top: 2px; }
   .studio-root .sh .pl.flat .pl-panel, .studio-root .sh .pl .pl-panel { background: var(--sd-card); border-radius: 14px; padding: 2px 14px 6px; }
 }
-
-/* ——— 任务托盘 ——— */
-.studio-root .tt-sec { padding: 8px 10px 4px; font-size: var(--sd-fs-sm); font-weight: 500; color: var(--sd-text3); }
-.studio-root .tt-empty { padding: 24px 16px 26px; font-size: var(--sd-fs-md); color: var(--sd-text3); text-align: center; }
-.studio-root .tt-r { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: var(--sd-r-sm); text-align: left; }
-@media (hover: hover) { .studio-root .tt-r[role=button]:hover { background: var(--sd-hover); } }
-.studio-root .tt-th { flex: none; position: relative; width: 32px; height: 32px; border-radius: var(--sd-r-xs); overflow: hidden; background: var(--sd-surface2); display: grid; place-items: center; color: var(--sd-text3); box-shadow: inset 0 0 0 1px var(--sd-border); }
-.studio-root .tt-th > img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.studio-root .tt-th svg { width: 17px; height: 17px; }
-.studio-root .tt-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.studio-root .tt-p { font-size: var(--sd-fs-md); line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.studio-root .tt-m { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; min-width: 0; font-size: var(--sd-fs-xs); color: var(--sd-text3); white-space: nowrap; }
-.studio-root .tt-m > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.studio-root .tt-m > span + span::before { content: '·'; margin-right: 8px; opacity: .7; }
-.studio-root .tt-m .mono { font-family: var(--sd-font-mono); }
-.studio-root .tt-m .live-t { color: var(--sd-text2); }
-.studio-root .tt-r.err .tt-m { color: var(--sd-err); white-space: normal; }
-.studio-root .tt-r .ms { margin-top: 3px; }
-.studio-root .tt-x { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--sd-text3); }
-.studio-root .tt-x svg { width: 15px; height: 15px; }
-@media (hover: hover) { .studio-root .tt-x:hover { background: var(--sd-press); color: var(--sd-text); } }
-.studio-root .tt-ok { flex: none; width: 15px; height: 15px; color: var(--sd-text3); }
-.studio-root .tt-retry { flex: none; height: 28px; padding: 0 12px; border-radius: 999px; background: var(--sd-surface2); font-size: var(--sd-fs-sm); font-weight: 500; }
-@media (hover: hover) { .studio-root .tt-retry:hover { background: var(--sd-surface3); } }
 
 /* ——— 作品菜单（dimensio MenuItem / MenuLabel / MenuSep）——— */
 .studio-root .wm-head { display: flex; align-items: center; gap: 10px; padding: 6px 8px 8px; }
@@ -568,12 +518,17 @@
 .studio-root .wm-i.danger, .studio-root .wm-i.danger svg { color: var(--sd-err); }
 .studio-root .wm-sep { height: 1px; margin: 5px 10px; background: var(--sd-border); }
 
-/* 作品飞进作品栏的幽灵（挂在 body 上） */
+/* 挑中的作品飞进输入栏的幽灵（挂在 body 上） */
 .sd-fly { position: fixed; z-index: 200; object-fit: cover; pointer-events: none; transform-origin: 0 0; border-radius: 8px; }
 
 /* ——— 触屏点按区（视觉不变，命中区扩到 32 以上）——— */
 @media (pointer: coarse) {
-  .studio-root .sb-chips .chip { height: 32px; min-width: 32px; }
-  .studio-root .tt-x, .studio-root .tt-retry, .studio-root .op-back, .studio-root .wp-crumb button { position: relative; }
-  .studio-root .tt-x::after, .studio-root .tt-retry::after, .studio-root .op-back::after, .studio-root .wp-crumb button::after { content: ''; position: absolute; inset: -4px -3px; }
+  .studio-root .op-back, .studio-root .wp-crumb button { position: relative; }
+  .studio-root .op-back::after, .studio-root .wp-crumb button::after { content: ''; position: absolute; inset: -4px -3px; }
+}
+
+/* 滚动边缘（modules/studio/edge.js 的 edgeFade 写 --fe-t / --fe-b）：内容滚进标题 / 顶栏下面时化开，不被一刀切掉 */
+.studio-root .fe, .studio-slide .fe {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fe-t, 0px), #000 calc(100% - var(--fe-b, 0px)), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fe-t, 0px), #000 calc(100% - var(--fe-b, 0px)), transparent 100%);
 }

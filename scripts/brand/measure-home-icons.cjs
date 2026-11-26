@@ -13,6 +13,7 @@ const FILES = {
   'claude 站立': MASCOT + 'claude-小人-正面站立.svg',
   'claude 举旗': MASCOT + 'claude-小人-举旗.svg',
   chatgpt: ICONS + 'chatgpt-dark.svg',
+  codex: ICONS + 'codex-dark.svg',
   agy: ICONS + 'antigravity.svg',
   dimensio: ICONS + 'dimensio-dark.svg',
   studio: ICONS + 'studio-dark.svg',

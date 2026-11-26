@@ -67,6 +67,7 @@
   // Google OAuth 交互流状态
   let oauthFlowId = $state('');
   let oauthUrl = $state('');
+  let oauthMode = $state('oauth'); // 'oauth' | 'cli'
   let oauthStatus = $state(''); // '' | 'pending' | 'done' | 'error' | 'expired'
   let oauthInput = $state('');
   let pollTimer = null;
@@ -85,6 +86,7 @@
     }
     oauthFlowId = '';
     oauthUrl = '';
+    oauthMode = agyPool.authMode || 'oauth';
     oauthStatus = '';
     oauthInput = '';
     copiedUrl = false;
@@ -159,24 +161,27 @@
     }
     oauthFlowId = res.flowId;
     oauthUrl = res.url;
+    oauthMode = res.mode || agyPool.authMode || 'oauth';
     oauthStatus = 'pending';
     try { window.open(res.url, '_blank', 'noopener'); } catch {}
 
     stopOAuthPoll();
-    pollTimer = setInterval(async () => {
-      if (!oauthFlowId) { stopOAuthPoll(); return; }
-      const st = await pollAgyOAuth(oauthFlowId);
-      if (st?.status === 'done') {
-        stopOAuthPoll();
-        oauthStatus = 'done';
-        refreshAgyRuntimeStatus({ ensure: false, probe: false });
-        closeModal();
-      } else if (st?.status === 'error' || st?.status === 'expired') {
-        stopOAuthPoll();
-        oauthStatus = st.status;
-        formErr = tr(st.error) || t('授权未完成，请重试');
-      }
-    }, 1500);
+    if (oauthMode !== 'cli') {
+      pollTimer = setInterval(async () => {
+        if (!oauthFlowId) { stopOAuthPoll(); return; }
+        const st = await pollAgyOAuth(oauthFlowId);
+        if (st?.status === 'done') {
+          stopOAuthPoll();
+          oauthStatus = 'done';
+          refreshAgyRuntimeStatus({ ensure: false, probe: false });
+          closeModal();
+        } else if (st?.status === 'error' || st?.status === 'expired') {
+          stopOAuthPoll();
+          oauthStatus = st.status;
+          formErr = tr(st.error) || t('授权未完成，请重试');
+        }
+      }, 1500);
+    }
   }
 
   async function copyOAuthUrl() {
@@ -322,7 +327,7 @@
           {/if}
           <div class="mini agy-mini">
             {#if !u}
-              <span class="mna">{agyPool.usageBusy ? t('读取用量…') : (acc.hasToken ? '…' + (acc.tokenTail || '') : t('沿用本机 agy 登录态'))}</span>
+              <span class="mna">{agyPool.usageBusy ? t('读取用量…') : (acc.source === 'slot' ? t('本机 agy 托管登录') : acc.hasToken ? '…' + (acc.tokenTail || '') : t('沿用本机 agy 登录态'))}</span>
             {:else if u.error && !hasAnyBucket}
               <span class="mna" class:bad={acc.source !== 'local'}>{tr(u.error)}</span>
             {:else}
@@ -433,7 +438,9 @@
       <h3>{modal.mode === 'add' ? t('添加 Google 账号') : t('编辑账号')}</h3>
       <p>
         {modal.mode === 'add'
-          ? t('授权后仅把刷新令牌保存在 Bridge 本地号池中，不覆盖本机 Antigravity 客户端登录。')
+          ? (agyPool.authMode === 'cli'
+            ? t('通过本机 agy 在独立目录完成 Google 授权，不覆盖系统钥匙串里的默认登录。')
+            : t('授权后仅把刷新令牌保存在 Bridge 本地号池中，不覆盖本机 Antigravity 客户端登录。'))
           : (modal.acc.email || (modal.acc.source === 'local' ? t('本机默认账号，沿用当前电脑上 agy 的登录态。') : t('更新备注名、套餐标识或重新授权 Google 账号。')))}
       </p>
 
@@ -450,8 +457,8 @@
         </div>
       </div>
 
-      <!-- 主路径：Google OAuth 一键授权 -->
-      {#if modal.mode === 'add' || modal.acc.source === 'oauth'}
+      <!-- 主路径：Google OAuth 一键授权（公开版自动走本机 agy 托管槽位） -->
+      {#if modal.mode === 'add' || modal.acc.source !== 'local'}
         <div class="oauth-box">
           {#if oauthStatus !== 'pending'}
             <DButton variant="primary" disabled={formBusy} onclick={beginGoogleOAuth}>
@@ -460,23 +467,27 @@
           {:else}
             <div class="oauth-wait">
               <span class="spin"></span>
-              <span>{t('等待浏览器完成 Google 授权…')}</span>
+              <span>{oauthMode === 'cli' ? t('等待粘贴 Google 授权码…') : t('等待浏览器完成 Google 授权…')}</span>
             </div>
             <div class="oauth-links">
               <DButton size="sm" onclick={() => window.open(oauthUrl, '_blank', 'noopener')}>{t('重新打开授权页')}</DButton>
               <DButton size="sm" onclick={copyOAuthUrl}>{copiedUrl ? t('已复制') : t('复制授权链接')}</DButton>
             </div>
             <form class="oauth-paste" onsubmit={submitOAuthFinish}>
-              <p class="hint">{t('如果是在手机或另一台电脑完成授权，请把跳转后地址栏里的完整链接或授权码贴到这里：')}</p>
+              <p class="hint">
+                {oauthMode === 'cli'
+                  ? t('请在浏览器中完成授权（添加其他号可在页面切号或用无痕窗口打开），复制页面给出的授权码或链接贴到这里：')
+                  : t('如果是在手机或另一台电脑完成授权，请把跳转后地址栏里的完整链接或授权码贴到这里：')}
+              </p>
               <div class="oauth-paste-row">
                 <DField
                   value={oauthInput}
-                  placeholder={t('粘贴 http://localhost:…/oauth-callback?code=…')}
+                  placeholder={oauthMode === 'cli' ? t('粘贴授权码或回调链接') : t('粘贴 http://localhost:…/oauth-callback?code=…')}
                   onchange={(v) => { oauthInput = v; }}
                   oninput={(v) => { oauthInput = v; }}
                 />
                 <DButton size="sm" variant="primary" type="submit" disabled={!oauthInput.trim() || formBusy}>
-                  {t('完成')}
+                  {formBusy ? t('验证中…') : t('完成')}
                 </DButton>
               </div>
             </form>
@@ -484,23 +495,25 @@
         </div>
       {/if}
 
-      <!-- 备用路径：手动填写 Refresh Token -->
-      <details class="manual-wrap" bind:open={showManual}>
-        <summary>{modal.mode === 'add' ? t('或手动填写 Refresh Token') : t('更换 Refresh Token（可选）')}</summary>
-        <form class="manual-form" onsubmit={submitManualOrEdit}>
-          <DField
-            value={formToken}
-            placeholder={t('粘贴 Google OAuth Refresh Token（1//…）')}
-            onchange={(v) => { formToken = v; }}
-            oninput={(v) => { formToken = v; }}
-          />
-          {#if modal.mode === 'add'}
-            <DButton size="sm" variant="primary" type="submit" disabled={!formToken.trim() || formBusy}>
-              {formBusy ? t('验证中…') : t('验证并添加')}
-            </DButton>
-          {/if}
-        </form>
-      </details>
+      <!-- 备用路径：手动填写 Refresh Token（仅配置直连 OAuth 客户端时可用） -->
+      {#if agyPool.manualTokenSupported}
+        <details class="manual-wrap" bind:open={showManual}>
+          <summary>{modal.mode === 'add' ? t('或手动填写 Refresh Token') : t('更换 Refresh Token（可选）')}</summary>
+          <form class="manual-form" onsubmit={submitManualOrEdit}>
+            <DField
+              value={formToken}
+              placeholder={t('粘贴 Google OAuth Refresh Token（1//…）')}
+              onchange={(v) => { formToken = v; }}
+              oninput={(v) => { formToken = v; }}
+            />
+            {#if modal.mode === 'add'}
+              <DButton size="sm" variant="primary" type="submit" disabled={!formToken.trim() || formBusy}>
+                {formBusy ? t('验证中…') : t('验证并添加')}
+              </DButton>
+            {/if}
+          </form>
+        </details>
+      {/if}
 
       {#if formErr}<p class="err">{formErr}</p>{/if}
 

@@ -3,6 +3,7 @@
   // 徽标由液态引擎直接提供同源哑光桌面漫反射（glow="hero"）与悬停/按压微交互；点击即可丝滑切换明暗主题，
   // 发出第一条消息时整颗经 hero.js 接力飞入底部状态栏。
   import { t } from '../../lib/i18n.js';
+  import { ui } from '../../lib/state.svelte.js';
   import { toggleAgyTheme, agyIsDark } from '../../lib/agy/theme-toggle.js';
   import AgyStateBanner from './AgyStateBanner.svelte';
   import AgyWorkingMark from './AgyWorkingMark.svelte';
@@ -33,7 +34,7 @@
     style:--agy-mark-size="{compact ? 64 : 52}px"
   >
     <AgyWorkingMark
-      mark="ambient"
+      mark={ui.screen === 'agy' ? 'ambient' : 'static'}
       size={compact ? 64 : 52}
       hero="welcome"
       intro="entrance"

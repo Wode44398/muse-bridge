@@ -43,7 +43,7 @@
 
   const AGENT_ITEMS = $derived([
     { kind: 'agent', key: 'claude', label: t('打开 Claude'), keys: 'claude cc' },
-    { kind: 'agent', key: 'chatgpt', label: t('打开 ChatGPT'), keys: 'codex openai gpt' },
+    { kind: 'agent', key: 'chatgpt', label: t('打开 Codex'), keys: 'codex chatgpt openai gpt' },
     { kind: 'agent', key: 'agy', label: t('打开 Antigravity'), keys: 'agy antigravity google gemini' },
     { kind: 'agent', key: 'harness', label: t('打开 dimensio'), keys: 'dimensio harness hx' },
     { kind: 'agent', key: 'studio', label: t('打开 Media Studio'), keys: t('图像 视频 配音 音乐 生图 gemini vertex') },

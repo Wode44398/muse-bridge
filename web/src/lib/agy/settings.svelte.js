@@ -4,6 +4,7 @@ import { caps, me } from '../state.svelte.js';
 import { showToast } from '../toast.svelte.js';
 import { t } from '../i18n.js';
 import { agyApi } from './api.js';
+import { recall, remember } from '../lastKnown.js';
 import {
   groupModels,
   extractThoughtOptions,
@@ -14,7 +15,40 @@ import {
   createAgySettingsController,
 } from './settings-logic.js';
 
-export const agyPrefs = $state(createInitialAgyPrefsState());
+// 上次看到的设置与运行状态（lib/lastKnown）：冷开设置推进 Antigravity 页时第一帧就是完整的各组，不先出「读取中…」。
+// 只放进 snap 标记、不动 loaded：loaded 仍表示「这次真拉到过」，ensureAgySettingsLoaded 与各处补拉据它判断
+function seedFromSnap(st) {
+  const o = recall('agyPrefs');
+  if (!o || typeof o !== 'object' || !o.settings) return st;
+  Object.assign(st.settings, o.settings);
+  if (o.defaults) Object.assign(st.defaults, o.defaults);
+  if (o.status) st.status = o.status;
+  if (Array.isArray(o.projects)) st.projects = o.projects;
+  if (typeof o.hiddenCount === 'number') st.hiddenCount = o.hiddenCount;
+  if (typeof o.phonePluginOn === 'boolean') st.phonePluginOn = o.phonePluginOn;
+  if (Array.isArray(o.mcp)) st.mcp.items = o.mcp;
+  if (Array.isArray(o.plugins)) st.plugins.items = o.plugins;
+  st.snap = true;
+  return st;
+}
+export const agyPrefs = $state(seedFromSnap({ ...createInitialAgyPrefsState(), snap: false }));
+
+// 控制器（settings-logic，纯逻辑、要能单测）在很多处写状态：这里统一盯着，真拉到过之后有变化就记一份（remember 自带去抖与去重）
+$effect.root(() => {
+  $effect(() => {
+    if (!agyPrefs.loaded) return;
+    remember('agyPrefs', {
+      settings: $state.snapshot(agyPrefs.settings),
+      defaults: $state.snapshot(agyPrefs.defaults),
+      status: $state.snapshot(agyPrefs.status),
+      projects: $state.snapshot(agyPrefs.projects),
+      hiddenCount: agyPrefs.hiddenCount,
+      phonePluginOn: agyPrefs.phonePluginOn,
+      mcp: $state.snapshot(agyPrefs.mcp.items),
+      plugins: $state.snapshot(agyPrefs.plugins.items),
+    });
+  });
+});
 
 let syncChatDefaultsHook = null;
 export function registerAgyChatDefaultsHook(fn) {

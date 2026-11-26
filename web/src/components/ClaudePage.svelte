@@ -620,7 +620,7 @@
 {/if}
 {#if pinned}
   <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
-  <div class="sb-handle" class:drag={sbDrag} style:left={(sbW - 1) + 'px'} role="separator"
+  <div class="sb-handle" class:drag={sbDrag} style:left={(sbW - 6) + 'px'} role="separator"
     aria-orientation="vertical" aria-label={t('调整侧栏宽度')} aria-valuenow={sbW} aria-valuemin={SB_MIN} aria-valuemax={SB_MAX}
     tabindex="0" onpointerdown={sbDown} onkeydown={sbKey}><span class="sb-pill"></span></div>
 {/if}
@@ -656,8 +656,8 @@
 {#if !IS_CSNAP}<AgyPeek />{/if}
 
 <!-- 工作台归这一格：分屏且这一格不够宽时盖在正文上（不挤），够宽照旧挤开正文。
-     多张卡同时开只给不分屏的整页（medium 档只塞得下一根侧列、分屏两格都窄，一次一张）。 -->
-<ClaudeDock wide={sideMode} overlay={pc.splitOn && dockOverlayFor(pc.mainPaneW)} multi={layout.expanded && !pc.splitOn} toolsClose={pc.splitOn ? pc.closeMain : null} />
+     多张卡同时开：不分屏的整页都给（折叠屏展开也是，卡片在一列里上下叠；与另外三家同一条规则），分屏两格都窄、一次一张。 -->
+<ClaudeDock wide={sideMode} overlay={pc.splitOn && dockOverlayFor(pc.mainPaneW)} multi={!pc.splitOn} toolsClose={pc.splitOn ? pc.closeMain : null} />
 </div>
 
 {#if pc.splitOn}
@@ -795,13 +795,13 @@
   .sb-wrap.open { transition: width var(--mo-page) var(--ea-std); }
   .sb-wrap.drag { transition: none; }
   /* 侧栏拉动把手：全高 col-resize 隐形条，3×48 指示条悬停 200ms 延迟浮现、拖拽中常显、键盘聚焦转珊瑚色。
-     命中区只往【正文那一侧】长（left = 宽-1，从侧栏 1px 右边框起向右 8px）：侧栏自己是滚动容器，
-     10px 滚动条槽紧贴右边框内侧，官方那种 12px 骑缝会吃掉拇指右半、点上去变成拖宽度（11-08 维护者报）。
-     指示条仍居中压在接缝线上，pointer-events:none 免得它伸进侧栏的那半像素抢点击。 */
-  .sb-handle { position: absolute; top: 0; bottom: 0; width: 8px; z-index: 45; cursor: col-resize; outline: none;
+     照官方 12px 骑缝（left = 宽-6，接缝两侧各 6px）。骑进侧栏那半会盖住侧栏滚动条的槽——鼠标正落在拇指上时
+     lib/scrollbars.js 让把手临时不吃指针（拇指优先），只让拇指本体那一块，别处照常能拖。
+     指示条居中压在接缝线上，pointer-events:none。 */
+  .sb-handle { position: absolute; top: 0; bottom: 0; width: 12px; z-index: 45; cursor: col-resize; outline: none;
     transition: left var(--mo-page) var(--ea-std); }   /* 键盘方向键调宽时随 .sb-wrap 一起过渡；拖拽跟手 */
   .sb-handle.drag { transition: none; }
-  .sb-pill { position: absolute; left: 1px; top: 50%; transform: translate(-50%, -50%); width: 3px; height: 48px;
+  .sb-pill { position: absolute; left: 6px; top: 50%; transform: translate(-50%, -50%); width: 3px; height: 48px;
     border-radius: 999px; background: var(--muted); opacity: 0; pointer-events: none;
     transition: opacity .2s ease .2s, background-color .2s ease; }
   .sb-handle:hover .sb-pill, .sb-handle.drag .sb-pill { opacity: 1; }

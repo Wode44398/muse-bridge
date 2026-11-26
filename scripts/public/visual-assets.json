@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "commit": "9fb4d7143eb6924a30665809aa2b5166cb50c59b",
+  "commit": "f8c1c35f4a977823a1fbb0e3b03989fec2f7d46c",
   "files": {
     "web/src/visuals/assets/icons/workspace.png": "8c5b79e540afa594dee7e089d7649ff95f3d33e88f5eb2422c1c5a03056dab1c",
     "web/src/visuals/assets/mascot/claude-小人-举旗.svg": "08235c2cff5779633adbe2d23ca6fa5817de8989afd0431abdfd2b8247518e63",
@@ -115,33 +115,6 @@
     "web/src/visuals/modules/sf-symbols.js": "6a4cbced085809cf33c9671ae906112f3eae52b1a518882ab652e938f757fd23",
     "web/src/visuals/modules/sprite-mark.js": "444f583712633e09acf79932c19295f38fee8a01bfc263868740385ce3d01381",
     "web/src/visuals/wallpapers/depth/dolomites.png": "83c88963a09c2e985652d14bd893b4dee19327cec1aafbea730d943f45ae1945",
-    "web/src/visuals/wallpapers/dolomites.jpg": "f53c4457b2fafb1415b0b440f7d9e25371d6ee7d6c7157305a87f51a004b0064",
-    "web/public/chatgpt/app.js": "cb4b3aaa7cc5c7fa50680f99ecd2d6222564ffe732fb5e0bed5f1f93d3dbd4c0",
-    "web/public/chatgpt/assets/code-block-dop2czwo.css": "a156be6253a24a697e52d8cf0256d568dc0a1ce10624f9b9d64e0afd68ab75d5",
-    "web/public/chatgpt/assets/conversation-small-mnbvrkag.css": "bf2f8b93b91e951754b69049a20ceacdec9f3f44af45556fa1c498559a625d46",
-    "web/public/chatgpt/assets/cot-message-mbvpc7rn.css": "36494ac21abd83af9510c6bde6f4a18a20d6f827185d6493234e2ca31fb4cd14",
-    "web/public/chatgpt/assets/favicon-l4nq08hd.svg": "8f2de046d22cfecfe3917cf87ff1ce49a48d79956f6b18be3b37db29148a0aeb",
-    "web/public/chatgpt/assets/fonts/OpenAISans-Bold.woff2": "950a34c04a54b0129c6b11a0ed17d6fe0efbba8c5caacad3c543e4f870471fc9",
-    "web/public/chatgpt/assets/fonts/OpenAISans-BoldItalic.woff2": "47fe7380c45d34fcd77f6d139cebba306efcfdccef5d924d58d7fb0dd6b99474",
-    "web/public/chatgpt/assets/fonts/OpenAISans-Medium.woff2": "eedca9d3e2e3ba3742b74aa828d5ac3000675157d8eb1902241b4be554e82907",
-    "web/public/chatgpt/assets/fonts/OpenAISans-MediumItalic.woff2": "a98b5206ab324997c001930ed4fcbe7deb194a70bdcc23e9784f6e666a5f4632",
-    "web/public/chatgpt/assets/fonts/OpenAISans-Regular.woff2": "5759128226d9323238d7ea0c94c4c1c4f16391cb05cdbd4eecadc1d80a9aed0a",
-    "web/public/chatgpt/assets/fonts/OpenAISans-RegularItalic.woff2": "a948747e9ff21ac9b158e67b97976d4f03e39178eab3879e403cc31ee33eb072",
-    "web/public/chatgpt/assets/fonts/OpenAISans-Semibold.woff2": "fee91812b2492934c7cb3cdebb97e0be557f1498e1a62df61e583b3baa57fa01",
-    "web/public/chatgpt/assets/fonts/OpenAISans-SemiboldItalic.woff2": "86931c99681090cc4e67ff3ca5ba3333c23786c17f235e02f8f3b29a2799eb1f",
-    "web/public/chatgpt/assets/global-modals-o8x39h1g.css": "30270adfb138cb1b49406706c9fd72cce85bccf275f6e84d3867d2dc1449f1e2",
-    "web/public/chatgpt/assets/official-2607.css": "c0ba9892741c4c82f0163e01c8701058088c86beb512917f128562135f89486c",
-    "web/public/chatgpt/assets/openai_platform_icon.png": "776310bcb0f0f191c616f31a13fcb8de8cc94d920c77625c271b3a034199ac43",
-    "web/public/chatgpt/assets/root-dicdhlwn.css": "30f0f690b5e9f2cbbdfc5f845a75cdf449190089ccf6df8ab25cb81af0b6432e",
-    "web/public/chatgpt/assets/sprites-core-39f59a01.svg": "39f59a01635834696d5296ff2fb7340f93cec1d796129473ccd7c9595621ca7e",
-    "web/public/chatgpt/assets/sprites-core-9a8a5f2a.svg": "9a8a5f2a71240b31b7cdd319986d6bad930fe826fe7c7a62557b06c3d10095b4",
-    "web/public/chatgpt/assets/sprites-external-a2895b13.svg": "a2895b13420509735428fd32720da242bbdea161eaae7affdeb2528d6192fb5a",
-    "web/public/chatgpt/assets/sprites-interaction-4e54fd96.svg": "4e54fd96bb588f1648351f13d56fe3c0b29ef78d84e77b9b5972f0c0578e253a",
-    "web/public/chatgpt/assets/sprites-shell-f705d3e2.svg": "f705d3e24224c20c76ef935dec1006dab7570bc50274935760f1d89a034cf8ec",
-    "web/public/chatgpt/clone.css": "20dcb6fb51ec0017fd6091efd64d064dfbe8422f2c63996709416568c3f1b389",
-    "web/public/chatgpt/index.html": "839b768a3b1de3a7bf5399d3b76b01db50400a9dd8728faaf2ce5134e3267ca6",
-    "web/public/chatgpt/work-picker.official.css": "279b3f88fb6a1030f4fe8329c93c66764006400b2cae55335c8db16867c1ac78",
-    "web/public/chatgpt/work-picker.runtime.js": "2ba49b9332a9ce94bb6d6047f5aa070e290c3b57bb8b4e60b1da19a4312778ec",
-    "web/public/chatgpt/work-slider.official.css": "9abdd3fa28a61ff1e58dc47688ded86d41bd4f93aed4c79963c833b0064ad266"
+    "web/src/visuals/wallpapers/dolomites.jpg": "f53c4457b2fafb1415b0b440f7d9e25371d6ee7d6c7157305a87f51a004b0064"
   }
 }

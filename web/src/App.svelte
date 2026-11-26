@@ -159,7 +159,10 @@
     const t3 = setTimeout(() => {
       if (!untrack(() => Array.isArray(me.agents))) return;
       if (screenOn('harness')) loadPage.harness().catch(() => {});
-      if (screenOn('agy')) loadPage.agy().catch(() => {});
+      if (screenOn('agy')) {
+        // agy 预热完脚本分块后一并预挂载进 .keep.dormant（与 Claude / Studio 同样休眠零消耗），首次进分页 ~1ms 翻开
+        loadPage.agy().then(() => { if (screenOn('agy')) mountAgy = true; }).catch(() => {});
+      }
       if (screenOn('chatgpt')) loadPage.chatgpt().catch(() => {});
     }, 2400);
     warmThemeWallpapers();   // 另一套主题的壁纸空闲时先解码：第一次点 THE BRIDGE 也不用等图

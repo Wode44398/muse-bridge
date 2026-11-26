@@ -281,6 +281,7 @@ export default {
 
   // —— 已添加模型的备注名（HsList）——
   '改备注名': 'Rename',
+  '模型菜单里显示的名字（备注名）；留空显示识别到的原名，没有原名就显示 ID': 'The name shown in model menus. Leave empty to use the detected name, or the ID if there is none.',
   '备注名（留空只显示 ID）': 'Display name (leave empty to show the ID)',
   '{model} 的备注名': 'Display name for {model}',
 
@@ -386,4 +387,24 @@ export default {
   'OpenAI 式视频：multipart 提交 → 轮询 → 下载内容': 'OpenAI-style video: multipart submit → poll → download content',
   '同步出图：结果在响应里（base64）': 'Synchronous image: result in the response (base64)',
   '配音：响应本身就是音频文件': 'Speech: the response itself is the audio file',
+  // —— 余额 / 限额（HsConn 的 Key 列表、总览副行；lib/modelHubBalance.svelte.js；服务端 runtime/model-hub/balance.mjs 的报错）——
+  '刷新余额': 'Refresh balance',
+  '查询中…': 'Checking…',
+  '查询余额…': 'Checking balance…',
+  '余额用完': 'Out of credit',
+  '余额 {v}': 'Balance {v}',
+  'Key 限额剩 {v} / {total}': 'Key limit left {v} / {total}',
+  'Key 限额剩 {v}': 'Key limit left {v}',
+  '{v} 积分': '{v} points',
+  '充值 {v}': 'Top-up {v}',
+  '赠送 {v}': 'Granted {v}',
+  '现金 {v}': 'Cash {v}',
+  '代金券 {v}': 'Voucher {v}',
+  '累计充值 {v}': 'Total credits {v}',
+  '已用 {v}': 'Used {v}',
+  '这家服务商没有能用 API Key 查余额的接口': 'This provider has no balance endpoint that accepts an API key',
+  '这把 Key 是空的': 'This key is empty',
+  '账户不可用': 'Account unavailable',
+  '上游没给出余额': 'The provider returned no balance',
+  '返回的不是 JSON': 'The response is not JSON',
 };

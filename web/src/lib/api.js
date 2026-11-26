@@ -15,6 +15,7 @@ import { hasNativeWorkspace, nativeWorkspaceList } from './nativeDesktop.js';
 import { status as statusStore } from './state.svelte.js';
 
 let token = storeGet('bridge-token');
+const UPLOAD_CHUNK = 32 * 1024 * 1024;   // uploadBlob 分段大小，远低于 Cloudflare 隧道 100MB 单请求上限
 const wsQuery = (ws) => ws ? '&ws=' + encodeURIComponent(ws) : '';
 const wsBody = (body, ws) => ws ? { ...body, ws } : body;
 
@@ -108,22 +109,35 @@ export const api = {
   // 铸一个「挂载文件夹」的根目录，返回 {dirName, path, name}；随后每个文件带 fdir/frel 传进去。
   uploadFolderInit: (name) => req('POST', '/api/upload/folder', { name }),
   // fdir/frel：把文件落进 uploads/<fdir>/<frel>，保住原目录结构（Claude 才能按原样 Glob/Read）。
-  uploadBlob: (name, blob, { onProgress, timeout = 120000, fdir = '', frel = '' } = {}) => new Promise((resolve, reject) => {
+  // 大于 UPLOAD_CHUNK 的按段顺序发（同一 id，服务端追加写，最后一段 last=1 才落成正式文件）：
+  // Cloudflare 隧道单请求体封顶 100MB，整块单发的大视频会被它直接拒掉。每段超时至少按 50KB/s 给足。
+  uploadBlob: async (name, blob, { onProgress, timeout = 120000, fdir = '', frel = '' } = {}) => {
     const id = 'fb' + Math.random().toString(36).slice(2, 12);
-    const xhr = new XMLHttpRequest();
     const folder = fdir && frel ? `&fdir=${encodeURIComponent(fdir)}&frel=${encodeURIComponent(frel)}` : '';
-    xhr.open('POST', apiUrl(`/api/upload-chunk?id=${id}&last=1&name=${encodeURIComponent(name)}${folder}`));
-    const h = authHeaders(); for (const k in h) xhr.setRequestHeader(k, h[k]);
-    xhr.timeout = timeout;
-    if (xhr.upload) xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded / Math.max(1, e.total)); };
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) { try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error('bad response')); } }
-      else { noteNetFail(); reject(new Error('HTTP ' + xhr.status)); }
-    };
-    xhr.onerror = () => { noteNetFail(); reject(new Error('network error')); };
-    xhr.ontimeout = () => reject(new Error('timeout'));
-    xhr.send(blob);
-  }),
+    const total = Math.max(1, blob.size);
+    let sent = 0, result = null;
+    do {
+      const piece = blob.size > UPLOAD_CHUNK ? blob.slice(sent, sent + UPLOAD_CHUNK) : blob;
+      const last = sent + piece.size >= blob.size;
+      const base = sent;
+      result = await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', apiUrl(`/api/upload-chunk?id=${id}&last=${last ? 1 : 0}&name=${encodeURIComponent(name)}${folder}`));
+        const h = authHeaders(); for (const k in h) xhr.setRequestHeader(k, h[k]);
+        xhr.timeout = Math.max(timeout, 120000 + Math.ceil(piece.size / 50));
+        if (xhr.upload) xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress((base + e.loaded) / total); };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) { try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error('bad response')); } }
+          else { noteNetFail(); reject(new Error('HTTP ' + xhr.status)); }
+        };
+        xhr.onerror = () => { noteNetFail(); reject(new Error('network error')); };
+        xhr.ontimeout = () => reject(new Error('timeout'));
+        xhr.send(piece);
+      });
+      sent += piece.size;
+    } while (sent < blob.size);
+    return result;
+  },
 
   // conversations
   // keep：侧栏组内翻页拿回来的老会话 id——服务端回 gone（其中已不在活跃列表里的），前端据此摘掉幽灵行

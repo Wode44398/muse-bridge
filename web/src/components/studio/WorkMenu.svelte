@@ -1,6 +1,6 @@
 <script>
   // 作品菜单（v3）：dimensio Popover + MenuItem / MenuLabel / MenuSep——「接着做」一组（平铺不嵌套，按目录里有没有模型
-  // 接得了来显隐）→ 在画布中打开 / 存进工作空间 或 在文件中显示 / 下载 / 删除。鼠标、触屏同一种菜单（触屏行高 44）；
+  // 接得了来显隐）→ 打开 / 复用参数 / 存进工作空间 或 在文件中显示 / 下载 / 删除。鼠标、触屏同一种菜单（触屏行高 44）；
   // 「…」点出来的贴着整行上下沿开（不盖住这一行），右键点出来的锚在鼠标位置。
   // only='continue'：画布上作品下面的「接着做」钮，只出接着做那一组。
   import { t } from '../../lib/i18n.js';
@@ -25,8 +25,10 @@
     const p = String(a.wsPath || '');
     const i = p.lastIndexOf('/');
     studio.filesTarget = { dir: i > 0 ? p.slice(0, i) : '', open: p, seq: Date.now() };
-    studio.side.tab = 'files'; saveSide();
-    if (!layout.expanded) studio.drawer = true; else studio.side.pinned = true;
+    // 素材架切到「文件」：宽屏展开侧列，平板 / 手机拉出侧列 / 抽屉
+    studio.side.tab = 'files';
+    if (layout.expanded) studio.side.pinned = true; else studio.drawer = true;
+    saveSide();
   });
   const doSave = act(async (a) => {
     const r = await saveAsset(a.id, studio.saveDir);
@@ -60,7 +62,7 @@
     {#if !only}<div class="wm-sep"></div>{/if}
   {/if}
   {#if !only}
-    <button class="wm-i" role="menuitem" onclick={doOpen}>{@html icon('open')}{t('在画布中打开')}</button>
+    <button class="wm-i" role="menuitem" onclick={doOpen}>{@html icon('open')}{t('打开')}</button>
     <button class="wm-i" role="menuitem" onclick={doReuse}>{@html icon('reuse')}{t('复用参数')}</button>
     {#if asset.wsPath}
       <button class="wm-i" role="menuitem" onclick={doReveal}>{@html icon('reveal')}{t('在文件中显示')}</button>

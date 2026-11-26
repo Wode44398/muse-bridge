@@ -11,6 +11,7 @@
 
 import { getOp } from '@bridge/core/agent-api/registry.mjs';
 import { isDynamicReadOnly } from './auto-allow.mjs';
+import { memberToolName } from './catalog.mjs';
 
 // 操作表由服务端（agent-api/http.mjs）登记；这里不 import ops/index.mjs——它会挂常驻句柄，ACP 客户端的单测进程就退不出了。
 // 操作表还没登记时查不到 → 一律按「要审批」处理（偏保守）。
@@ -43,7 +44,8 @@ const PHONE_READ = new Set(['devices', 'screen', 'clipboard_get', 'recall', 'lea
 
 /** 这次调用要不要替用户直接允许。args = agy 带来的工具参数（rawInput）。 */
 export function bridgeToolAutoAllow(toolCall = {}) {
-  const tool = bridgeToolOf(toolCall);
+  // 合并工具（pr / project_memory / phone_files）按 action 换回原工具名再判，口径与合并前一样；action 不认识就按合并名判（要审批）
+  const tool = memberToolName(bridgeToolOf(toolCall), toolCall?.args);
   if (!tool) return false;
   if (ALWAYS.has(tool)) return true;
   if (tool === 'call') {

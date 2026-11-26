@@ -24,7 +24,7 @@ import { normalizeWithOver } from './model-config/overlay.mjs';
 import { adapterForCard, withTrace } from './adapters/index.mjs';
 import { NO_BASEURL, KINDS } from './presets.mjs';
 import { assetKindOf, autoSave, publicAsset } from './assets.mjs';
-import { imageDims } from './adapters/openrouter-image.mjs';
+import { outputDims, svgDims, wavPeaks, ensurePeaks, ensureVideoMeta } from './media-probe.mjs';
 import { logCall } from './log.mjs';
 import { markUsed, noteRejected, clearRejected } from './discovery/store.mjs';
 import { detectRejected, rejectedLine } from './cards/rejected.mjs';
@@ -218,47 +218,19 @@ function normalizeOutput(o, kind) {
   if (!ext) ext = { image: 'png', video: 'mp4', speech: 'mp3', music: 'mp3' }[kind];
   return { bytes, mime, ext };
 }
-// 作品宽高：PNG / JPEG / WebP 读文件头；GIF 读逻辑屏幕宽高（字节 6–9 小端）；SVG 读根元素的 width / height，没有就用 viewBox（读不到不记）
-export function outputDims(bytes, ext) {
-  if (!bytes || !bytes.length) return null;
-  if (ext === 'gif' || bytes.toString('ascii', 0, 6) === 'GIF89a' || bytes.toString('ascii', 0, 6) === 'GIF87a') {
-    if (bytes.length >= 10 && bytes.toString('ascii', 0, 3) === 'GIF') {
-      const w = bytes.readUInt16LE(6), h = bytes.readUInt16LE(8);
-      return w > 0 && h > 0 ? [w, h] : null;
-    }
-    return null;
-  }
-  if (ext === 'svg') return svgDims(bytes);
-  return imageDims(bytes);
-}
-const SVG_LEN = /^\s*(\d+(?:\.\d+)?)\s*(px)?\s*$/i;   // 只认无单位 / px（%、em 这类没法换成像素）
-export function svgDims(bytes) {
-  try {
-    const head = bytes.subarray(0, 65536).toString('utf8');
-    const m = /<svg\b[^>]*>/i.exec(head);
-    if (!m) return null;
-    const attr = (name) => { const a = new RegExp(`\\s${name}\\s*=\\s*(["'])(.*?)\\1`, 'i').exec(m[0]); return a ? a[2] : null; };
-    const num = (s) => { const x = s != null ? SVG_LEN.exec(s) : null; return x ? Number(x[1]) : null; };
-    let w = num(attr('width')), h = num(attr('height'));
-    if (!(w > 0 && h > 0)) {
-      const vb = String(attr('viewBox') || '').trim().split(/[\s,]+/).map(Number);
-      if (vb.length === 4 && vb[2] > 0 && vb[3] > 0) {
-        // 只给了一边：按 viewBox 的比例补另一边
-        if (w > 0) h = w * vb[3] / vb[2];
-        else if (h > 0) w = h * vb[2] / vb[3];
-        else { w = vb[2]; h = vb[3]; }
-      }
-    }
-    if (!(w > 0 && h > 0)) return null;
-    const W = Math.round(w), H = Math.round(h);
-    return W > 0 && H > 0 && W <= 100000 && H <= 100000 ? [W, H] : null;
-  } catch { return null; }
-}
+// 作品宽高、WAV 波形的解析在 media-probe.mjs（列表补侧车也用）；这里转出口给老调用方
+export { outputDims, svgDims };
 
-// WAV 时长（秒）：读头里的字节率
-function wavSeconds(buf) {
-  try { if (buf.toString('ascii', 0, 4) === 'RIFF') { const rate = buf.readUInt32LE(28); return rate ? Math.round(((buf.length - 44) / rate) * 10) / 10 : 0; } } catch {}
-  return 0;
+// 视频的宽高时长、非 WAV 音频的波形要子进程，不挡任务完成：存完后台补，补上了推 studio.asset.updated 让开着的页面就地补上
+function backfill(owner, dir, rec) {
+  const kind = rec.kind || 'video';
+  let p = null;
+  if (kind === 'video' && !(rec.width > 0 && rec.duration > 0)) p = ensureVideoMeta(dir, rec.id);
+  else if ((kind === 'audio' || kind === 'music') && !(Array.isArray(rec.peaks) && rec.peaks.length)) p = ensurePeaks(dir, rec.id);
+  if (!p) return;
+  p.then((patch) => {
+    if (patch && Object.keys(patch).length) busPublish(owner, { type: 'studio.asset.updated', id: rec.id, patch });
+  }).catch(() => {});
 }
 
 // 共享服务出错时别把管理员的地址漏给成员（日志里照记原话）
@@ -459,12 +431,14 @@ async function execute(job, ctx, { provider, entry, card, inputs, opts }) {
         ...(job.kind === 'image' && job.thread ? { sessionId: job.thread } : {}),
         ...(batchId ? { batchId, batchIndex: i } : {}),
         ...(dims ? { width: dims[0], height: dims[1] } : {}),
-        ...(o.ext === 'wav' ? { duration: wavSeconds(o.bytes) } : {}),
+        // WAV 的波形和时长纯 JS 现算（几毫秒），跟着结果一起出去；别的格式要 ffmpeg，存完再后台补
+        ...(o.ext === 'wav' ? (wavPeaks(o.bytes) || {}) : {}),
         ...(a.meta || {}), ...(opts.extraMeta || {}),
       };
       let rec = media.save(id, o.bytes, o.ext, meta, ctx.media);
       if (wantSave) { const ws = autoSave(ctx, rec, settings); if (ws) rec = { ...rec, wsPath: ws }; }
       saved.push(publicAsset(rec));
+      backfill(job.owner, ctx.media, rec);
     });
     job.result = saved;
     job.state = 'done'; job.progress = 1; job.finishedAt = Date.now(); job.elapsed = Math.round((job.finishedAt - t0) / 1000); job.eta = 0;

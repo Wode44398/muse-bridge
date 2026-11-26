@@ -41,6 +41,7 @@ mod('web/src/lib/modelHub.svelte.js', readFileSync(join(WEB, 'src', 'lib', 'mode
 comp(MH + 'AgentStack.svelte', '<script>let { agents = [], size = 16, quiet = false } = $props();</script><i class="stack" data-agents={agents.join(",")} data-size={size} data-quiet={quiet}></i>');
 comp('web/src/components/settings/SToggle.svelte', '<script>let { checked = false, label = "" } = $props();</script><i class="stg" data-on={checked} data-label={label}></i>');
 put('web/src/lib/toast.svelte.js', 'export const showToast = () => {};');
+put('web/src/lib/lastKnown.js', 'export const recall = () => undefined; export const remember = () => {}; export const forget = () => {};');
 put('web/src/lib/api.js', 'export const api = { get: async () => ({}), post: async () => ({}) };');
 put('web/src/lib/state.svelte.js', 'export const me = { kind: "admin" };');
 put('web/src/lib/claudeProviders.svelte.js', 'export const cp = { ok: true, canShare: false }; export const loadProviders = () => {}; export const canUseCustomApi = () => true; export const cpSummaryText = () => "";');

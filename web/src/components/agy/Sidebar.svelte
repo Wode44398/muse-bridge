@@ -818,8 +818,17 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    scrollbar-gutter: stable;
     padding: 0 8px 12px;
-    scrollbar-width: thin;
+  }
+  @supports not (selector(::-webkit-scrollbar)) {
+    .sb-list {
+      scrollbar-width: thin;
+      scrollbar-color: transparent transparent;
+    }
+    .sb-list:hover {
+      scrollbar-color: var(--ag-sb-thumb) transparent;
+    }
   }
 
   .sb-projs {

@@ -14,8 +14,16 @@ import { ui, me } from './state.svelte.js';
 import { goto } from './pageMorph.js';
 import { openPreview } from './preview.svelte.js';
 import { t, tc, tr, isEn } from './i18n.js';
+import { recall, remember, forget } from './lastKnown.js';
 
 const H = '/api/harness/api';
+
+// 上次读到的那份（lib/lastKnown）：模块一求值就灌进 ds、phase 直接是 ready，冷开推进 dimensio 页的第一帧就是整页结构，
+// 后台 loadDimensio({ quiet }) 回来原地换。没有它，整页先是一行「读取中…」，一秒后各组一起冒出来。
+// 键与字段表要在 ds 之前声明（模块求值时就用）。本机模型状态（local）每次现查，不进快照。
+const LK = 'dimensio.settings';
+const SNAP_KEYS = ['config', 'info', 'prefs', 'mem', 'mcp', 'skills', 'sessions'];
+const snap0 = (() => { const v = recall(LK); return v && typeof v === 'object' && v.config && v.info ? v : null; })();
 
 export const ds = $state({
   phase: 'idle',      // 'idle' 没拉过 | 'loading' | 'ready' | 'down'
@@ -35,6 +43,13 @@ export const ds = $state({
   rev: 0,
   intent: null,       // 'vendors' | 'vendor:<自定义服务 id>' | 'memory' | 'local:qwen' | 'local:strata'
 });
+if (snap0) { for (const k of SNAP_KEYS) if (k in snap0) ds[k] = snap0[k]; ds.phase = 'ready'; }
+// 存的时候才读 ds（remember 攒一会儿再序列化），所以这里给的是一组 getter，不是此刻的拷贝
+const snapView = Object.fromEntries(SNAP_KEYS.map((k) => [k, undefined]));
+for (const k of SNAP_KEYS) Object.defineProperty(snapView, k, { get: () => ds[k], enumerable: true });
+const keep = () => { if (ds.config && ds.info) remember(LK, snapView); };
+// 断网、超时、5xx 是一时的：手上（含快照）那份留着；服务端明说没有（4xx，例如老 harness 没这个接口）才清掉
+const transient = (e) => !e?.status || e.status >= 500;
 
 const caps = () => ds.info?.protocol?.capabilities || [];
 export const hasCap = (c) => caps().includes(c);
@@ -61,9 +76,11 @@ export async function loadDimensio({ quiet = false } = {}) {
     const [config, info] = await Promise.all([api.get(H + '/config'), api.get(H + '/info')]);
     if (my !== seq) return;
     ds.config = config; ds.info = info; ds.phase = 'ready'; ds.why = '';
+    keep();
   } catch (e) {
     if (my !== seq) return;
     ds.phase = 'down'; ds.why = downWhy(e);
+    if (e && [401, 403, 404].includes(e.status)) forget(LK);
     return;
   }
   // 其余各取各的：哪一样失败只是那一组不出
@@ -90,6 +107,7 @@ export async function setDimConfig(patch, tag = 'config') {
     // POST 回的配置不带 accessLocked（只在 GET 里），沿用读到的
     if (my === cfgSeq) ds.config = { ...r, accessLocked: ds.config?.accessLocked ?? r?.accessLocked };
     ds.rev++;
+    keep();
     return true;
   } catch (e) { fail(tag, e); return false; }
   finally { if (ds.busy === tag) ds.busy = ''; }
@@ -215,7 +233,8 @@ export const setWorkspace = (p) => setDimConfig({ workspace: String(p || '').tri
 
 // —— 偏好注册表（通用渲染）——
 export async function loadPrefs() {
-  try { ds.prefs = await api.get(H + '/prefs'); } catch { ds.prefs = null; }
+  try { ds.prefs = await api.get(H + '/prefs'); } catch (e) { if (!transient(e)) ds.prefs = null; }
+  keep();
 }
 const en = () => isEn();
 // 「子 agent 调用策略」（下面 dimDispatchLine 那一行进的子页，11-14）取代了这两项：harness 的注册表里可能还登记着，设置页不再渲染
@@ -266,6 +285,7 @@ export async function setPref(key, v) {
     const r = await api.post(H + '/prefs', { values: { [key]: v } });
     if (r?.items) ds.prefs = r;
     ds.rev++;
+    keep();
     return true;
   } catch (e) { item.value = prev; fail(tag, e); return false; }
   finally { if (ds.busy === tag) ds.busy = ''; }
@@ -301,7 +321,8 @@ export async function loadMemoryLine() {
     // 「分布在几处」只数真有生效记忆的地方（以前连空的、只有待处理的位置都算上，出过「26 条生效，分布在 28 处」）
     const places = (ov?.buckets || []).filter((b) => (b.items || []).some((m) => lane(m) === 'active')).length;
     ds.mem = { active, waiting, places };
-  } catch { ds.mem = null; }
+  } catch (e) { if (!transient(e)) ds.mem = null; }
+  keep();
 }
 export const memoryOk = () => hasCap('memory');
 export function memLine() {
@@ -319,6 +340,7 @@ export async function loadExtLine() {
   ]);
   ds.mcp = Array.isArray(mcp?.connectors) ? mcp.connectors : null;
   ds.skills = Array.isArray(cmds?.skills) ? cmds.skills.length : null;
+  keep();
 }
 export const extOk = () => ds.mcp !== null || ds.skills !== null;
 export function mcpLine() {
@@ -367,6 +389,7 @@ export async function loadSessions() {
     const list = await api.get(H + '/sessions?offset=0&limit=8');
     ds.sessions = (Array.isArray(list) ? list : []).map((s) => ({ id: s.id, title: s.title || '', updatedAt: s.updatedAt || '' }));
   } catch { ds.sessions = []; }
+  keep();
 }
 export const sessionTitle = (s) => s?.title || t('未命名对话');
 /** 导出某个对话的诊断包，生成后用文件查看器打开（能分享 / 另存）。 */
