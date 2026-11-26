@@ -36,12 +36,16 @@ Google 账号由**用户自己**在网页里登录，Muse 不替他登录，也�
 - 凭据存在服务账号的家目录 `/home/hatch/bridge-srv/home/.gemini/`，只在这台 VM 上。
 - 横幅上的 **「账号设置」**（Account settings）打开「设置 → Antigravity」。
 
-### 设置里的「订阅号池」（Muse 上默认不可用）
+### 设置里的「订阅号池」
 
 **「设置 → Antigravity」**（Settings → Antigravity）最上面有一组 **「订阅号池」**（Subscription Pool），只有管理员看得到。这是管理员管理这台服务器上 Antigravity 所用 Google 账号的地方：列着账号和用量，终端里登录的那个显示为「本机」。
 
-- 里面的 **「添加 Google 账号」**（Add Google account）**在 Muse 上默认不可用**：它要部署方自己准备一个 Google OAuth 客户端（Muse Bridge 不内置），没配时点了会提示「没有配置 Antigravity 号池用的 Google OAuth 客户端」。这是预期的，不是故障。
-- **登录一律用上面的网页终端里跑 `agy`**。终端登录的这个「本机」账号不受影响，照常可用、照常显示用量。
+- **「添加 Google 账号」**（Add Google account）：Muse Bridge 不内置 Google OAuth 客户端，所以这里走的是「本机 agy 托管」方式——由这台服务器上已装好的 `agy` 在一个单独的目录里完成登录，不碰终端里登录的那个「本机」账号。点了之后：
+  1. 弹窗里给出授权链接（**「复制授权链接」**（Copy authorization link），没打开就点 **「重新打开授权页」**（Reopen authorization page）），用户在**自己的浏览器**里打开、登录 Google 并同意。要加别的号，在登录页切换账号或用无痕窗口打开。
+  2. 页面上给出授权码，把它（或整段回调链接）贴进弹窗里写着「粘贴授权码或回调链接」的框，点「完成」。授权码同样只贴在这个弹窗里，别发进聊天。
+  3. 加好的账号在列表里写着 **「本机 agy 托管登录」**（Managed via local agy CLI），之后由 `agy` 自动续期。
+- 这个方式要先装好 `agy`（没选 Antigravity 的服务器没有这一页）；**在 Muse 上还没实测过**。点了没给出授权链接、贴完授权码报错、或者加进去的号一直读不到用量时，照实告诉用户，先跑 `known-issues`，必要时按 `../MUSE.md` 第 8 节报告。终端里登录的「本机」账号不受影响，照常可用。
+- 这种方式下没有「手动填写 Refresh Token」那一项（它只在部署方自己配了 Google OAuth 客户端时才出现）。
 - 一个人用几个 Google 账号、怎么切换使用，要遵守 Google 的使用条款；不要向用户推荐用多个账号来绕开额度。
 
 ## 页面布局
@@ -75,6 +79,7 @@ Google 账号由**用户自己**在网页里登录，Muse 不替他登录，也�
   - 「隐藏对话」可以找回：侧栏最底下的「已隐藏」里逐条 **「恢复」**（Restore）或 **「全部恢复」**（Restore all）。
   - 「删除」是**彻底删除、不能恢复**：点一下变成 **「确认删除」**（Confirm delete），再点才删；正在跑的会先停下。
 - 改名、隐藏、收藏在各设备间同步。
+- 打开历史对话不再现起进程：没挂着的旧对话直接读服务器上的本地记录，点开就能看全部内容，真正接着发消息时才启动 Antigravity；最近的对话会在后台预取并缓存在浏览器里，再点开几乎不用等。
 
 ## 发消息
 
@@ -163,6 +168,7 @@ Google 账号由**用户自己**在网页里登录，Muse 不替他登录，也�
 | **「活动」**（Activity） | 这个对话里每次工具调用的时间线，可以按读取、审批等分类看 |
 
 - **这台 VM 上没有工作台浏览器**：界面上的「浏览器」卡片在 Muse 上不出现（内置浏览器在 VM 上用不了，装好时已关掉），Antigravity 也用不了「打开网页、截图」这类浏览器工具。
+- 电脑上「文件」「终端」卡片能按住标题拖到窗口外面，变成独立窗口，点「放回工作台」回原处（同 02-claude-code.md「工作台」）；折叠屏、平板上也能同时开几张卡、上下叠放。
 - 对话还没选工作文件夹时，工作区里有「选择文件夹」的入口。
 
 ## Antigravity 能用的 bridge 工具
@@ -181,7 +187,7 @@ Google 账号由**用户自己**在网页里登录，Muse 不替他登录，也�
 | 分组 | 里面有什么 |
 |---|---|
 | 页头 | 「启用 Antigravity」开关——只有管理员能改；CLI 没装好时写着不可用 |
-| **「订阅号池」**（Subscription Pool）——只有管理员 | 每个 Google 账号一行，带 Gemini、Claude / GPT 的 5 小时和每周用量；**「添加 Google 账号」**（Add Google account）——Muse 上默认不可用，见上面「登录」。点进一个账号：用量、**「切到此号」**（Switch to this account）、**「编辑账号」**（Edit account）、顺序、删除账号或「退出本机登录」。下面的 **「撞上限额时」**（When you hit a usage limit）一组是号池里有两个以上账号时的切换方式，最后是 **「最近的分派」**（Recent dispatches）/ **「最近的自动切换」**（Recent automatic switches）记录 |
+| **「订阅号池」**（Subscription Pool）——只有管理员 | 每个 Google 账号一行，带 Gemini、Claude / GPT 的 5 小时和每周用量；**「添加 Google 账号」**（Add Google account）——由本机 `agy` 托管登录，Muse 上还没实测，见上面「设置里的「订阅号池」」。点进一个账号：用量、**「切到此号」**（Switch to this account）、**「编辑账号」**（Edit account）、顺序、删除账号或「退出本机登录」。下面的 **「撞上限额时」**（When you hit a usage limit）一组是号池里有两个以上账号时的切换方式，最后是 **「最近的分派」**（Recent dispatches）/ **「最近的自动切换」**（Recent automatic switches）记录 |
 | **「新对话默认」**（New chat defaults） | **「默认模型」**（Default model）、**「默认思考档位」**（Default thinking level）、**「默认运行模式」**（Default execution mode）、**「默认项目工作空间」**（Default project workspace）——默认「沿用上次」。只管新建的对话 |
 | **「权限与附加工作目录」**（Permissions & additional directories） | **「附加工作目录」**（Additional working directories）：主文件夹之外，允许它读取和交付文件的文件夹，新对话生效 |
 | **「系统提示追加」**（System prompt append） | **「追加提示词（Bridge 协作约定）」**（Appended instructions (Bridge conventions)）：每个新对话开头带上的说明，自带一份默认的，改过会标出来 |

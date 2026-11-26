@@ -77,6 +77,7 @@ Muse Bridge 会访问的网站和用途（`allow-sites` 不带参数时按当前
 | `registry.npmjs.org` | 安装和更新时下载 npm 依赖 |
 | `muse-bridge-feedback.huole8610.workers.dev` | Muse Bridge 项目自己的反馈中继（源码在仓库的 `feedback-worker/`），收问题报告并转成本项目的 GitHub Issue（第 8 节，用户同意了才发） |
 | 各家模型的接口网站（如 `api.deepseek.com`） | 模型中心里加了哪家的服务才有，以前写进 dimensio 的 key 对应的也算（4.5） |
+| `auth.openai.com`、`api.openai.com` | 模型中心里加了「ChatGPT 订阅」才有：登录与令牌续期、调 OpenAI 的模型（4.5） |
 | 自定义模型服务的地址 | 用户自己加的才有（第 6 节） |
 | `api.github.com` | 不在 `allow-sites` 的名单里：只有用户自己把写的插件「发布到社区」时才访问（登录 GitHub、提交拉取请求），用到时弹卡，批不批由用户在卡上自己定（2.0） |
 | Google 的接口（`oauth2.googleapis.com`、`aiplatform.googleapis.com` 等 4 个） | 打开了 Media Studio，或上传了 Google 云凭据才有（4.9） |
@@ -203,6 +204,8 @@ Claude 需要用户自己的 Claude 订阅（Pro 或 Max）。令牌**只能在�
 2. **请他自己在网页里加**：**「设置 → 模型中心」** → **「添加服务」**（Add provider），上面一排快捷选择能直接填好常见厂商的地址；填 key、点 **「识别模型」**（Detect models），勾上要用的模型，选给谁用，保存。key 加密存在服务器上、不回传浏览器，**不经过聊天**。详细步骤和报错对照在 `guide/10-model-hub.md`。
 3. 让他在 dimensio 页（或 Claude 页的「More models」）选这个模型发一句话试试。
 
+**有 ChatGPT 付费套餐（Plus / Pro 等）、不想买 API key 的**：模型中心「添加服务」最前面有 **「ChatGPT 订阅」**（ChatGPT plan），用 ChatGPT 账号登录就能把套餐额度给 Claude 和 dimensio 用（能不能这样用以 OpenAI 的条款和账号设置为准，由用户自己确认）。先告诉他会弹 `auth.openai.com` 和 `api.openai.com` 两张审核卡，他同意后跑 `allow-sites https://auth.openai.com https://api.openai.com`；然后请他自己在网页里登录。登录完他的浏览器会停在一个打不开的 `http://127.0.0.1:…` 页面，这是正常的：让他把地址栏整段复制回登录面板（**不要**贴进聊天），再勾模型、保存。登录面板上提到的 Codex 在 Muse Bridge 上没有，去向只有 Claude 和 dimensio。步骤和提示对照在 `guide/10-model-hub.md`「ChatGPT 订阅」。
+
 `set-api-key` 这条命令还在，但**模型中心接管之后（升级到这个版本、或新装后第一次启动就接管了），它写的 key 对管理员的 dimensio 不再生效**——命令会照实告诉你「这次写进 .env 的不会生效 / 不会替换」，然后照样把这家的接口网站访问一次、弹出审核卡。所以别再用它代填 key；用户把 key 发给你了，告诉他 key 要在网页模型中心里填，并提醒他删掉聊天里那条消息。它认的名字（`ANTHROPIC_API_KEY`、`DEEPSEEK_API_KEY`（存成 `OPENAI_API_KEY`）、`GEMINI_API_KEY`、`KIMI_API_KEY`、`ZHIPU_API_KEY`、`QWEN_API_KEY`、`MIMO_API_KEY`、`MIMO_SEARCH_API_KEY`）里，**只有 `MIMO_SEARCH_API_KEY`（小米联网搜索专用，见下面「联网搜索」）照旧要用它写**。
 
 ```bash
@@ -249,7 +252,7 @@ Antigravity 是 Google 的 agent，在 Muse Bridge 里是第三个对话页，�
 
 1. **先说明再装**：会以服务账号 `bridge` 的身份运行 Google 官方的安装脚本（`https://antigravity.google/cli/install.sh`），把约 270 MB 的 Antigravity CLI 装到 `/home/hatch/bridge-srv/home/.local/bin/agy`（在数据目录里，VM 重启后还在），CLI 之后会自己在后台更新；会弹 2.0 表里 Antigravity 那几个网站的审核卡（选项由他定）。还要知道：CPU 要支持 AES 指令，不支持时 CLI 起不来（安装输出会提示）；每个在用的人一个 Antigravity 进程，内存占用不小，8G 的 VM 上几个人同时用会吃紧。
 2. 他同意后：`set-agents <现在的名单>,agy`（比如现在是两个都装，就 `set-agents claude,dimensio,agy`；现在的名单看结果块的 agent 一行）。跟 `install` 一样自己转后台，没等完就 `wait`；完了等没人在聊时切换。装 CLI 失败不影响 Claude / dimensio，Antigravity 页会提示没找到 CLI，修好网络或批了网站后再跑一次同样的 `set-agents` 就会补装。
-3. **登录 Google 由用户自己在网页里做**，你别替他登录，也别让他把授权码、令牌贴进聊天：请管理员在网页里打开终端，输入 `~/.local/bin/agy` 回车；终端会给出一个授权网址，他在**自己的浏览器**里打开、登录 Google 并同意，页面上给出授权码，把授权码贴回终端（大约 30 秒内要贴，超时就重跑一次）。凭据存在服务账号的家目录里（`/home/hatch/bridge-srv/home/.gemini/`），只在这台 VM 上。这一步在 Muse 上也还没实测过，详细步骤和可能的现象见 `guide/11-antigravity.md`「登录」。「设置 → Antigravity」里号池的「添加 Google 账号」在 Muse 上默认不可用（要部署方自己配 Google OAuth 客户端，Muse Bridge 不内置），点了提示没有配置是预期的；登录一律用网页终端里的 `agy`。
+3. **登录 Google 由用户自己在网页里做**，你别替他登录，也别让他把授权码、令牌贴进聊天：请管理员在网页里打开终端，输入 `~/.local/bin/agy` 回车；终端会给出一个授权网址，他在**自己的浏览器**里打开、登录 Google 并同意，页面上给出授权码，把授权码贴回终端（大约 30 秒内要贴，超时就重跑一次）。凭据存在服务账号的家目录里（`/home/hatch/bridge-srv/home/.gemini/`），只在这台 VM 上。这一步在 Muse 上也还没实测过，详细步骤和可能的现象见 `guide/11-antigravity.md`「登录」。第一个账号用网页终端里的 `agy` 登录；要再加 Google 账号，用「设置 → Antigravity」号池里的「添加 Google 账号」——Muse Bridge 不内置 Google OAuth 客户端，这里由已装好的 `agy` 在单独的目录里托管登录（弹窗给授权链接，用户在自己的浏览器里登录，把授权码贴回那个弹窗），同样没在 Muse 上实测过，见 `guide/11-antigravity.md`「设置里的「订阅号池」」。加的应当是用户自己的账号，怎么用要遵守 Google 的使用条款，不要向用户推荐用多个账号来绕开额度。
 4. 成员：Antigravity 只能开给「完全信任」档的成员（它会执行工作目录里的钩子脚本，相当于命令行权限），管理员在服务端控制台按人勾选（`guide/06-users-admin.md`）。
 5. 不要了：`set-agents claude,dimensio`（或原来的名单去掉 `,agy`）。Antigravity 页和扩展中心里的入口随之消失；CLI 和登录凭据留在数据目录里不删，他想清掉，问过他再删 `/home/hatch/bridge-srv/home/.local/bin/agy` 和 `/home/hatch/bridge-srv/home/.gemini/`。
 

@@ -805,6 +805,11 @@ configured_sites() {
   # 模型中心（设置 → 模型中心）里启用着的服务：服务地址和各条线路单独填的地址（本机回环地址不用放行）
   [ -f "$hub" ] && jq -r '.services[]? | select(.enabled != false) | .baseUrl, (.lines[]?.baseUrl // empty) | select(. != null and . != "")' "$hub" 2>/dev/null \
     | while IFS= read -r u; do site_of "$u"; done | grep -vE '^(127\.|localhost$|\[?::1)' || true
+  # 模型中心的「ChatGPT 订阅」服务没有接口地址字段：登录换令牌、每小时续期走 auth.openai.com，调模型走 api.openai.com
+  if [ -f "$hub" ] && jq -e 'any(.services[]?; .kind == "chatgpt" and .enabled != false)' "$hub" >/dev/null 2>&1; then
+    echo auth.openai.com
+    echo api.openai.com
+  fi
   # 用到 Vertex 时（Media Studio 开着，或上传了 Google 云凭据）：换令牌、对话（global 或所选区域）、媒体（默认 us-central1）、Gemini API Key 各一个站点
   vertex_sites
   return 0

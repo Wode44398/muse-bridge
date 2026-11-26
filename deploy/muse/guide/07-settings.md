@@ -89,7 +89,7 @@
 ## Antigravity
 
 - **「设置 → Antigravity」**（Settings → Antigravity）——装了 Antigravity（可选、实验性，见 11-antigravity.md）才有，「Agent」分组里的 Antigravity 一行；Antigravity 页侧栏最底下的「设置」打开的也是这一页。页头有启用 Antigravity 的开关，只有管理员能改。
-- 里面按分组排：「订阅号池」（只有管理员：Google 账号、用量、「撞上限额时」；其中「添加 Google 账号」在 Muse 上默认不可用，登录用网页终端里的 agy）、新对话默认（默认模型、思考档位、运行模式、项目工作空间）、权限与附加工作目录、系统提示追加、扩展与工具（Bridge 工具协同；MCP 服务器和 CLI 插件只有管理员）、外观（界面主题、对话字号，只管 Antigravity 页）、运行状态与更新（只有管理员：常驻进程、CLI 版本、日志、重启、检查 CLI 更新）、会话管理（已隐藏的会话）、调试（只有管理员）。逐项见 11-antigravity.md「Antigravity 的设置」。
+- 里面按分组排：「订阅号池」（只有管理员：Google 账号、用量、「撞上限额时」；其中「添加 Google 账号」由本机 agy 在单独目录里托管登录，Muse 上还没实测）、新对话默认（默认模型、思考档位、运行模式、项目工作空间）、权限与附加工作目录、系统提示追加、扩展与工具（Bridge 工具协同；MCP 服务器和 CLI 插件只有管理员）、外观（界面主题、对话字号，只管 Antigravity 页）、运行状态与更新（只有管理员：常驻进程、CLI 版本、日志、重启、检查 CLI 更新）、会话管理（已隐藏的会话）、调试（只有管理员）。逐项见 11-antigravity.md「Antigravity 的设置」。
 - 这一页的设置存在服务端，按账号保存。成员（只有完全信任档能开 Antigravity）只看到他能改的几组。
 
 ## Media Studio

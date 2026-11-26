@@ -131,7 +131,7 @@ test('说明书里没有个人信息（本机路径、邮箱、私有网站）',
   const PUBLIC = ['github.com', 'githubusercontent.com', 'trycloudflare.com', 'cloudflare.com', 'example.com',
     'anthropic.com', 'claude.com', 'claude.ai', 'deepseek.com', 'aliyun.com', 'aliyuncs.com', 'bigmodel.cn', 'z.ai',
     'moonshot.cn', 'kimi.com', 'xiaomimimo.com', 'openrouter.ai', 'googleapis.com', 'google.com', 'duckduckgo.com',
-    'npmjs.org', 'ubuntu.com', 'cogentco.com', 'figma.com', 'antigravity.google'];
+    'npmjs.org', 'ubuntu.com', 'cogentco.com', 'figma.com', 'antigravity.google', 'openai.com'];
   // 只认泛指；具体的 workers.dev 子域只放行反馈中继自己。run.app 是 Google Cloud Run 的公共域名，只放行
   // Antigravity CLI 官方安装脚本里写死的那个自动更新主机（antigravity.google/cli/install.sh 的 DOWNLOAD_BASE_URL）
   const EXACT = ['workers.dev', 'antigravity-cli-auto-updater-974169037036.us-central1.run.app'];

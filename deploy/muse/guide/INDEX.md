@@ -29,7 +29,7 @@
 | [07-settings.md](07-settings.md) | 设置逐项说明：根页各分组、账户、Claude（订阅号池、子 agent 调用策略、项目对话、调试）、dimensio、Media Studio、模型中心（入口，详见 10）、Agent 接入、安卓 App、扩展 / 额度与注册 / 服务端控制台、通用（通知）、外观、主页（入口顺序与隐藏、新建应用）、页面权限（撤销插件页面的授权）、壁纸、设备（桌面客户端）、提交反馈、关于，以及桌面客户端里的设置 |
 | [08-faq.md](08-faq.md) | 常见问题与现象速查：一直转圈、审核卡、地址变了、费用、数据放在哪、安全、备份、限制 |
 | [09-media-studio.md](09-media-studio.md) | Media Studio（默认关着，接替了以前的 Gemini · Vertex 扩展，Gemini 对话已下线）：打开、接模型（Vertex 的 Google 云凭据，或 OpenAI / OpenRouter / fal 等地址 + Key）、放行网站、测试报错对照、图像 / 视频 / 配音 / 音乐四个创作页、参数怎么调（值芯片、参数面板、恢复默认、记在本机）、各模型的设置、中转服务拒收的选项、作品栏与拖放、任务托盘、让 Claude / dimensio / 外部 agent 生成与「主动生成」、能生成哪几种与视频分辨率上限、内容安全过滤、成员怎么用、从旧版升级、费用 |
-| [10-model-hub.md](10-model-hub.md) | 模型中心（设置 → 模型中心，配模型的唯一入口）：添加服务与识别模型、按模型给 Claude / dimensio / Media Studio、多把 Key 与冷却、测试、共享给成员、成员的「我的服务」、Vertex AI 对话模型与「检测」新型号、在 Muse 上先放行网站、从旧版的「自定义 API」/ dimensio 模型服务自动迁移 |
+| [10-model-hub.md](10-model-hub.md) | 模型中心（设置 → 模型中心，配模型的唯一入口）：添加服务与识别模型、按模型给 Claude / dimensio / Media Studio、多把 Key 与冷却、测试、共享给成员、成员的「我的服务」、Vertex AI 对话模型与「检测」新型号、ChatGPT 订阅（登录 ChatGPT 账号用套餐额度）、服务商余额、在 Muse 上先放行网站、从旧版的「自定义 API」/ dimensio 模型服务自动迁移 |
 | [11-antigravity.md](11-antigravity.md) | Antigravity 页（可选、实验性，默认不装，没在真 Muse 上验证过）：怎么加（`set-agents …,agy`，不能单独装）、Google 登录（网页终端里跑 `~/.local/bin/agy`、贴回授权码、「我已登录，刷新」；设置里的「订阅号池」）、新对话与工作文件夹、侧栏（收藏 / 隐藏 / 彻底删除、搜正文）、模型与思考深度、右下角仪表（上下文 / 额度 / 运行模式）、运行模式与完全放行、批准卡与提问卡、插话与「稍后发送」、附件、子代理 / 多代理卡片、右侧工作区（文件 / 审阅 / 终端 / 代理 / 活动，没有浏览器）、能用的 bridge 工具、设置逐项、给完全信任成员开、限制（Google 额度、AES、内存、网站审核卡） |
 
 ## 按问题找章节
@@ -82,9 +82,11 @@
 | 让 agent 打开网页、截图、操作浏览器（这台 VM 没有浏览器） | 08-faq.md |
 | 生成图片 / 视频 / 配音 / 音乐、Media Studio、Gemini 分页 / Gemini 对话去哪了、Vertex、Nano Banana、Veo、Google 云凭据、服务账号、「保存并测试」报错（找不到项目、测试模型调不通）、gcloud、fal / Replicate / ElevenLabs 等媒体服务 | 09-media-studio.md；Muse 要做的：`../MUSE.md` 4.9 |
 | 图片尺寸 / 分辨率 / 宽高怎么设、自定义尺寸、没有比例选项、尺寸标红发不出去、改图保持原图大小、视频时长选不了（1080P、参考图） | 09-media-studio.md「用起来」 |
-| Media Studio 参数在哪调、输入框下面的小标签、恢复默认、参数刷新后还在不在、一次出多张、GIF 动图、种子、配音语言 / 双人对白、发送键是灰的（要先给首帧）、「这个服务不收…」、选项上有删除线 | 09-media-studio.md「用起来」 |
+| Media Studio 新界面（作品墙、素材架、托盘、生成取景框、取消任务、失败重试、点开放大与接着改、版本条、以前的任务托盘 / 作品栏去哪了）、参数在哪调、恢复默认、参数刷新后还在不在、一次出多张、GIF 动图、种子、配音语言 / 双人对白、发送键是灰的（要先给首帧）、「这个服务不收…」、选项上有删除线 | 09-media-studio.md「用起来」 |
 | Vertex 有新 Gemini 型号怎么加、「检测」按钮、型号标「新」/「调不通」 | 10-model-hub.md「Vertex AI」 |
-| 模型改备注名、厂商筛选、媒体模型的「调用配置」（补取值、调用配方、预演、试跑）、中转站接口接不通、「允许 AI 配置媒体接口」、让 Claude 帮我接通媒体接口 | 10-model-hub.md「媒体模型的调用配置」；Media Studio 那头：09-media-studio.md |
+| ChatGPT Plus / Pro 的额度给 Claude、dimensio 用、不用 API Key、登录后停在 127.0.0.1 页面、「需要重新登录」「没授权套餐额度」、为什么没有 Codex 去向 | 10-model-hub.md「ChatGPT 订阅」 |
+| 查 DeepSeek / OpenRouter 等服务的余额、「刷新余额」「余额用完」 | 10-model-hub.md「改一个服务」 |
+| 模型改备注名（行尾铅笔、调用配置里的「显示名」）、厂商筛选、媒体模型的「调用配置」（补取值、调用配方、预演、试跑）、中转站接口接不通、「允许 AI 配置媒体接口」、让 Claude 帮我接通媒体接口 | 10-model-hub.md「媒体模型的调用配置」；Media Studio 那头：09-media-studio.md |
 | 提示缓存、缓存过期 / 缓存冷了、用量环上的小点、自动压缩、模型的调用配置（上下文窗口、输出上限、思考档位、temperature）、服务的高级设置（超时、重试、请求头）、删掉手动添加的模型 | 10-model-hub.md；Claude：02-claude-code.md「用量环」；dimensio：03-dimensio.md「上下文、压缩、用量」 |
 | Claude 老是自己配图 / 太费钱、不让 Claude 生成、让 dimensio 生成图片、关掉视频生成、限制视频分辨率、内容安全过滤、生成被「内容安全过滤」拦下 | 09-media-studio.md「谁能生成、能生成什么、内容安全过滤」 |
 | 装、更新、回滚、换域名、自动更新、卸载、服务挂了 | `../MUSE.md`（第 2、5、6、7 节） |
