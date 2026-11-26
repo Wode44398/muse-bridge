@@ -10,6 +10,7 @@
 // 用处：① 验收——核心里不该再出现扩展的源码（扩展源码混进核心 = 有核心文件还在静态 import 它，
 //   清单的 leaks 一栏列出来）；② 模块化 P4 打包——基础版排除扩展文件，各扩展的离线包按清单收。
 
+import fs from 'node:fs';
 import path from 'node:path';
 
 // 扩展的前端入口（相对 web/）。
@@ -43,6 +44,7 @@ const MODULE_SOURCES = {
 
 export function bridgeModuleChunks({ webRoot }) {
   const rel = (id) => path.relative(webRoot, String(id).split('?')[0]).split(path.sep).join('/');
+  let report = null;
   return {
     name: 'bridge-module-chunks',
     apply: 'build',
@@ -111,7 +113,7 @@ export function bridgeModuleChunks({ webRoot }) {
           }
         }
       }
-      const report = {
+      report = {
         generated: new Date().toISOString(),
         modules,
         leaks: Object.fromEntries(Object.entries(leaks).map(([k, v]) => [k, [...v].sort()])),
@@ -120,6 +122,20 @@ export function bridgeModuleChunks({ webRoot }) {
       const n = Object.values(report.leaks).reduce((a, v) => a + v.length, 0);
       const summary = Object.entries(modules).map(([id, m]) => id + ' ' + m.files.length).join(' / ');
       this.info?.('[bridge-module-chunks] 扩展文件：' + summary + (n ? '；⚠ 核心里混着 ' + n + ' 个扩展源码，见 bridge-modules.json leaks' : '；核心里无扩展源码'));
+    },
+    // 几个入口共用的纯 CSS 模块会先成一个只有空壳的 JS chunk，Vite 在别的 generateBundle 里才把这个壳删掉
+    // （CSS 已挂到引用方），算清单时它还在。写盘时按最终产物再筛一遍，免得 pack-modules 去拷不存在的文件。
+    writeBundle(opts, bundle) {
+      if (!report || !opts.dir) return;
+      let dropped = 0;
+      for (const m of Object.values(report.modules)) {
+        const keep = m.files.filter((f) => f in bundle);
+        dropped += m.files.length - keep.length;
+        m.files = keep;
+      }
+      if (!dropped) return;
+      fs.writeFileSync(path.join(opts.dir, 'bridge-modules.json'), JSON.stringify(report, null, 2));
+      this.info?.('[bridge-module-chunks] 去掉 ' + dropped + ' 个已被 Vite 删除的纯 CSS 空壳 chunk');
     },
   };
 }
